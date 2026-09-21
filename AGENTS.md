@@ -23,8 +23,11 @@ clarify the relevant requirement instead of inventing semantics.
 ## Engineering rules
 
 - Trace changes to the highest owning source and fix them there instead of patching symptoms.
-- Preserve Taskyon protocol and package ownership. Constellation consumes supported Taskyon packages
-  and must not copy their implementations or create competing protocol paths.
+- Preserve Taskyon protocol ownership. Constellation consumes supported Taskyon packages once they
+  are released, never imports sibling workspace source or build artifacts, and must not copy or
+  create a competing Taskyon wire protocol. While a generic package is unpublished, a thin local
+  application adapter is allowed when Constellation owns its domain semantics and remains
+  independently installable.
 - Keep protocols small, typed, versioned, capability-scoped, and independent of transport placement.
 - Prefer pure functions, explicit dependency passing, composition, immutable values, and visible
   side-effect boundaries. Keep runtime state out of module scope by default.
