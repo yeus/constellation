@@ -97,6 +97,11 @@ export const createBrowserLocationSource = (
     ((callback, delayMs) => window.setTimeout(callback, delayMs));
   const clearTimer =
     options.clearTimer ?? ((timerId) => window.clearTimeout(timerId));
+  const positionOptions = options.positionOptions ?? {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 15_000,
+  };
   const stateSubscriptions = createSubscriptions<BrowserLocationState>();
   const observationSubscriptions = createSubscriptions<LocationObservationV1>();
   let state: BrowserLocationState = options.geolocation
@@ -164,7 +169,7 @@ export const createBrowserLocationSource = (
       expiresAt: capturedAt + observationTtlMs,
       latitude: position.coords.latitude,
       longitude: position.coords.longitude,
-      accuracyMeters: position.coords.accuracy,
+      accuracyMeters: Math.max(1, position.coords.accuracy),
       ...(position.coords.altitude === null
         ? {}
         : { altitudeMeters: position.coords.altitude }),
@@ -198,7 +203,7 @@ export const createBrowserLocationSource = (
       watchId = options.geolocation.watchPosition(
         receivePosition,
         receiveError,
-        options.positionOptions,
+        positionOptions,
       );
     },
     stop: () => {

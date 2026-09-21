@@ -10,20 +10,34 @@
         <span>Constellation</span>
       </div>
       <div class="connection-state">
-        <span class="connection-state__dot" aria-hidden="true"></span>
-        Offline
+        <span class="connection-state__dot" :class="{ 'connection-state__dot--online': runtimeState.peerStatus === 'online' }" aria-hidden="true" />
+        {{ connectionLabel }}
       </div>
     </header>
 
-    <section class="status-card" aria-label="Sharing status">
-      <div>
-        <p class="eyebrow">Your location</p>
-        <strong>Not sharing</strong>
-      </div>
-      <span class="status-card__privacy">Private</span>
+    <section v-if="invitationPending" class="accept-card" aria-label="Location invitation">
+      <p class="eyebrow">Private location</p>
+      <strong>Someone shared their location with you</strong>
+      <p>The sender will see you as an active viewer. Nothing is accepted until you continue.</p>
+      <button class="primary-action" type="button" :disabled="accepting" @click="acceptInvitation">
+        {{ accepting ? "Connecting…" : "View location" }}
+      </button>
     </section>
 
-    <button class="share-button" type="button" @click="shareSheetOpen = true">
+    <section v-else class="status-card" aria-label="Sharing status">
+      <div>
+        <p class="eyebrow">Your location</p>
+        <strong>{{ sharingLabel }}</strong>
+      </div>
+      <div class="status-card__details">
+        <span v-if="activePrecision">{{ activePrecision }}</span>
+        <span v-if="viewerCount > 0">{{ viewerCount }} connected</span>
+        <span class="status-card__privacy">Private</span>
+        <button v-if="runtimeState.shares.length > 0" class="status-card__stop" type="button" @click="stopAllShares">Stop</button>
+      </div>
+    </section>
+
+    <button v-if="!invitationPending" class="share-button" type="button" @click="shareSheetOpen = true">
       <span aria-hidden="true">⌁</span>
       Share location
     </button>
@@ -31,27 +45,34 @@
     <ShareSheet
       v-if="shareSheetOpen"
       :draft="shareDraft"
-      :can-submit="canCreateShare(shareDraft)"
+      :can-submit="canCreateShare(shareDraft) && !creatingShare"
       @close="shareSheetOpen = false"
-      @submit="showRuntimeNotice"
+      @submit="createShare"
       @precision="updatePrecision"
       @duration="updateDuration"
       @viewers="updateViewerCapacity"
       @acknowledge="updateAcknowledgement"
     />
 
-    <p v-if="runtimeNotice" class="toast" role="status">
-      {{ runtimeNotice }}
-    </p>
+    <ShareReadySheet
+      v-if="readyShare"
+      :url="readyShare.url"
+      @close="readyShare = undefined"
+      @stop="stopReadyShare"
+    />
+
+    <p v-if="statusMessage" class="toast" role="status">{{ statusMessage }}</p>
   </main>
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 
 import LocationMap from "../components/LocationMap.vue";
+import ShareReadySheet from "../components/ShareReadySheet.vue";
 import ShareSheet from "../components/ShareSheet.vue";
-import type { MapLocation } from "../location/mapModel.ts";
+import { createBrowserLocationSource } from "../location/browser.ts";
+import { locationObservationToMapLocation } from "../location/mapModel.ts";
 import {
   acknowledgeUntilRevoked,
   canCreateShare,
@@ -63,30 +84,143 @@ import {
   type ShareDuration,
   type ViewerCapacity,
 } from "../shareDraft.ts";
+import { bytesToBase64Url } from "../sharing/encoding.ts";
+import { parseShareInvitation } from "../sharing/shareLink.ts";
+import {
+  createSharingRuntime,
+  type ShareSummary,
+  type SharingRuntimeState,
+} from "../sharing/sharingRuntime.ts";
 
+const locationSource = createBrowserLocationSource({
+  sourceId: bytesToBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+  geolocation: navigator.geolocation,
+});
+const runtime = createSharingRuntime(locationSource);
+const runtimeState = ref<SharingRuntimeState>({
+  peerStatus: "offline",
+  location: locationSource.getState(),
+  shares: [],
+  received: [],
+  message: "",
+});
 const shareSheetOpen = ref(false);
 const shareDraft = ref(createShareDraft());
-const runtimeNotice = ref("");
-const locations = ref<readonly MapLocation[]>([]);
+const creatingShare = ref(false);
+const accepting = ref(false);
+const readyShare = ref<ShareSummary>();
+const invitationPending = ref(false);
+const localError = ref("");
+
+try {
+  parseShareInvitation(window.location.href);
+  invitationPending.value = true;
+} catch {
+  invitationPending.value = false;
+}
+
+const unsubscribe = runtime.subscribe((next) => {
+  runtimeState.value = next;
+});
+
+const locations = computed(() => {
+  const own = runtimeState.value.location;
+  const ownLocations =
+    own.status === "live" || own.status === "delayed" || own.status === "stale"
+      ? [locationObservationToMapLocation(own.observation, own.status)]
+      : [];
+  return [
+    ...ownLocations,
+    ...runtimeState.value.received.map(({ observation, state }) =>
+      locationObservationToMapLocation(observation, state),
+    ),
+  ];
+});
+
+const viewerCount = computed(() =>
+  runtimeState.value.shares.reduce((sum, share) => sum + share.viewerCount, 0),
+);
+const activePrecision = computed(() => {
+  const choices = new Set(runtimeState.value.shares.map((share) => share.precision));
+  if (choices.size === 0) return "";
+  if (choices.size > 1) return "Mixed precision";
+  return choices.has("approximate") ? "Approximate" : "Exact";
+});
+const sharingLabel = computed(() => {
+  if (runtimeState.value.shares.length > 0) {
+    if (runtimeState.value.location.status === "acquiring") return "Acquiring location…";
+    if (runtimeState.value.location.status === "denied") return "Location permission denied";
+    if (runtimeState.value.location.status === "error") return "Location unavailable";
+    return `${runtimeState.value.shares.length} active ${runtimeState.value.shares.length === 1 ? "share" : "shares"}`;
+  }
+  if (runtimeState.value.received.length > 0) return "Viewing a shared location";
+  if (runtimeState.value.location.status === "denied") return "Location permission denied";
+  return "Not sharing";
+});
+const connectionLabel = computed(() => ({
+  offline: "Offline",
+  connecting: "Connecting",
+  online: "P2P online",
+  error: "Connection error",
+})[runtimeState.value.peerStatus]);
+const statusMessage = computed(() => localError.value || runtimeState.value.message);
 
 const updatePrecision = (precision: LocationPrecision) => {
   shareDraft.value = setPrecision(shareDraft.value, precision);
 };
-
 const updateDuration = (duration: ShareDuration) => {
   shareDraft.value = setDuration(shareDraft.value, duration);
 };
-
 const updateViewerCapacity = (viewerCapacity: ViewerCapacity) => {
   shareDraft.value = setViewerCapacity(shareDraft.value, viewerCapacity);
 };
-
 const updateAcknowledgement = (acknowledged: boolean) => {
   shareDraft.value = acknowledgeUntilRevoked(shareDraft.value, acknowledged);
 };
 
-const showRuntimeNotice = () => {
-  runtimeNotice.value = "The P2P sharing runtime is not connected yet.";
-  shareSheetOpen.value = false;
+const createShare = async (): Promise<void> => {
+  creatingShare.value = true;
+  localError.value = "";
+  try {
+    readyShare.value = await runtime.createShare(shareDraft.value);
+    shareSheetOpen.value = false;
+    shareDraft.value = createShareDraft();
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : "Could not create the share.";
+  } finally {
+    creatingShare.value = false;
+  }
 };
+
+const acceptInvitation = async (): Promise<void> => {
+  accepting.value = true;
+  localError.value = "";
+  try {
+    await runtime.acceptShare(window.location.href);
+    invitationPending.value = false;
+    window.history.replaceState({}, "", window.location.pathname);
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : "Could not open the share.";
+  } finally {
+    accepting.value = false;
+  }
+};
+
+const stopReadyShare = async (): Promise<void> => {
+  if (!readyShare.value) return;
+  await runtime.stopShare(readyShare.value.shareId);
+  readyShare.value = undefined;
+};
+
+const stopAllShares = async (): Promise<void> => {
+  await Promise.all(
+    runtimeState.value.shares.map((share) => runtime.stopShare(share.shareId)),
+  );
+  readyShare.value = undefined;
+};
+
+onBeforeUnmount(() => {
+  unsubscribe();
+  void runtime.stop();
+});
 </script>

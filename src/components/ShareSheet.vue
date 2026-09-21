@@ -105,9 +105,7 @@
       >
         Create private link
       </button>
-      <p class="runtime-note">
-        Network connection will be enabled by the Taskyon P2P adapter.
-      </p>
+      <p class="runtime-note">Sharing continues only while this page remains open.</p>
     </section>
   </div>
 </template>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  acceptNewerLocationObservation,
   LOCATION_PROFILE_V1,
   parseLocationObservationV1,
 } from "./locationObservation.ts";
@@ -53,5 +54,28 @@ test("rejects unknown profile versions", () => {
         profile: "dev.constellation.location/v2",
       }),
     /profile/i,
+  );
+});
+
+test("accepts only increasing observations from the same source", () => {
+  const current = parseLocationObservationV1({
+    ...validObservation,
+    sequence: 4,
+  });
+  assert.equal(
+    acceptNewerLocationObservation(current, { ...current, sequence: 5 }),
+    true,
+  );
+  assert.equal(
+    acceptNewerLocationObservation(current, { ...current, sequence: 4 }),
+    false,
+  );
+  assert.equal(
+    acceptNewerLocationObservation(current, {
+      ...current,
+      sourceId: "different-source",
+      sequence: 5,
+    }),
+    false,
   );
 });

@@ -11,13 +11,15 @@ const createFixture = () => {
   let failure: Parameters<BrowserGeolocation["watchPosition"]>[1];
   const cleared: number[] = [];
   const timers = new Map<number, () => void>();
+  let receivedOptions: PositionOptions | undefined;
   let nextTimer = 1;
   let now = 10_000;
 
   const geolocation: BrowserGeolocation = {
-    watchPosition: (onSuccess, onError) => {
+    watchPosition: (onSuccess, onError, options) => {
       success = onSuccess;
       failure = onError;
+      receivedOptions = options;
       return 42;
     },
     clearWatch: (id) => cleared.push(id),
@@ -43,13 +45,13 @@ const createFixture = () => {
     setNow: (value: number) => {
       now = value;
     },
-    succeed: () =>
+    succeed: (accuracy = 8) =>
       success?.({
         timestamp: 10_000,
         coords: {
           latitude: 40,
           longitude: -70,
-          accuracy: 8,
+          accuracy,
           altitude: null,
           heading: null,
           speed: null,
@@ -57,6 +59,7 @@ const createFixture = () => {
       }),
     deny: () => failure?.({ code: 1 }),
     runTimers: () => [...timers.values()].forEach((callback) => callback()),
+    getPositionOptions: () => receivedOptions,
   };
 };
 
@@ -70,10 +73,19 @@ test("owns geolocation start and stop with monotonic observations", () => {
   assert.equal(fixture.source.getState().status, "permission-required");
   fixture.source.start();
   assert.equal(fixture.source.getState().status, "acquiring");
+  assert.deepEqual(fixture.getPositionOptions(), {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 15_000,
+  });
   fixture.succeed();
   fixture.succeed();
   assert.deepEqual(observations, [1, 2]);
   assert.equal(fixture.source.getState().status, "live");
+
+  fixture.succeed(0);
+  assert.equal(fixture.source.getState().status, "live");
+  assert.deepEqual(observations, [1, 2, 3]);
 
   fixture.source.stop();
   assert.deepEqual(fixture.cleared, [42]);
@@ -81,7 +93,7 @@ test("owns geolocation start and stop with monotonic observations", () => {
 
   fixture.source.start();
   fixture.succeed();
-  assert.deepEqual(observations, [1, 2, 3]);
+  assert.deepEqual(observations, [1, 2, 3, 4]);
 });
 
 test("moves observations through live, delayed, and stale states", () => {

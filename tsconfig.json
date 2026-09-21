@@ -3,6 +3,7 @@
   "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"],
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
     "types": ["node", "vite/client"]

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+vendor/taskyon/*/dist/
 playwright-report/
 test-results/
 .yarn/install-state.gz

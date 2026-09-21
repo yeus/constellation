@@ -15,6 +15,13 @@ export interface LocationObservationV1 {
   readonly speedMps?: number;
 }
 
+export const acceptNewerLocationObservation = (
+  current: LocationObservationV1 | undefined,
+  next: LocationObservationV1,
+): boolean =>
+  current === undefined ||
+  (next.sourceId === current.sourceId && next.sequence > current.sequence);
+
 const requireFiniteNumber = (value: unknown, field: string): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError(`${field} must be a finite number.`);

@@ -2,29 +2,42 @@
   "name": "constellation",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "vendor/taskyon/*"
+  ],
   "type": "module",
   "packageManager": "yarn@4.16.0",
   "engines": {
     "node": ">=22.13 <23"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
-    "typecheck": "vue-tsc --noEmit",
-    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'",
-    "test:e2e": "playwright test",
+    "build:vendor": "yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build",
+    "dev": "yarn build:vendor && vite",
+    "build": "yarn build:vendor && vue-tsc --noEmit && vite build",
+    "typecheck": "yarn build:vendor && vue-tsc --noEmit",
+    "test:unit": "node --experimental-strip-types --test 'src/**/*.test.ts'",
+    "test:vendor": "yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test",
+    "test": "yarn build:vendor && yarn test:vendor && yarn test:unit",
+    "test:e2e": "yarn build:vendor && playwright test",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@libp2p/interface": "3.3.0",
+    "@multiformats/multiaddr": "13.0.3",
+    "@taskyon/p2p-core": "workspace:*",
+    "@taskyon/protocol": "workspace:*",
     "maplibre-gl": "5.23.0",
     "pmtiles": "4.4.1",
+    "qrcode": "1.5.4",
     "vue": "3.5.22",
-    "vue-router": "4.0.12"
+    "vue-router": "4.0.12",
+    "zod": "4.1.8"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@types/geojson": "7946.0.16",
     "@types/node": "22.13.0",
+    "@types/qrcode": "1.5.6",
     "@vitejs/plugin-vue": "6.0.3",
     "@vue/tsconfig": "0.8.1",
     "typescript": "5.9.2",

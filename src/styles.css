@@ -187,6 +187,47 @@ button {
   background: var(--offline-dot);
 }
 
+.connection-state__dot--online {
+  background: #36a269;
+}
+
+.status-card__details {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.status-card__stop {
+  min-height: 2rem;
+  padding: 0 0.65rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  cursor: pointer;
+}
+
+.accept-card {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  width: min(30rem, calc(100% - 2rem));
+  padding: 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface-strong);
+  box-shadow: 0 1rem 2.5rem var(--button-shadow);
+  transform: translateX(-50%);
+}
+
+.accept-card p:not(.eyebrow) {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .status-card {
   left: 50%;
   bottom: 6.7rem;
@@ -400,6 +441,42 @@ legend {
 .primary-action:disabled {
   opacity: 0.38;
   cursor: not-allowed;
+}
+
+.secondary-action {
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: var(--control-fill);
+  cursor: pointer;
+}
+
+.share-ready {
+  text-align: center;
+}
+
+.share-ready .sheet-header {
+  text-align: left;
+}
+
+.share-ready__qr {
+  width: min(17.5rem, 100%);
+  border-radius: 0.8rem;
+  background: #ffffff;
+}
+
+.share-ready__link {
+  width: 100%;
+  margin: 0 0 0.75rem;
+  padding: 0.7rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--control-fill);
+  color: var(--muted);
+  text-overflow: ellipsis;
 }
 
 .runtime-note {
