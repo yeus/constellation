@@ -10,7 +10,7 @@
         <span>Constellation</span>
       </div>
       <div class="connection-state">
-        <span class="connection-state__dot" :class="{ 'connection-state__dot--online': runtimeState.peerStatus === 'online' }" aria-hidden="true" />
+        <span class="connection-state__dot" :class="{ 'connection-state__dot--online': effectivePeerStatus === 'online' }" aria-hidden="true" />
         {{ connectionLabel }}
       </div>
     </header>
@@ -33,11 +33,11 @@
         <span v-if="activePrecision">{{ activePrecision }}</span>
         <span v-if="viewerCount > 0">{{ viewerCount }} connected</span>
         <span class="status-card__privacy">Private</span>
-        <button v-if="runtimeState.shares.length > 0" class="status-card__stop" type="button" @click="stopAllShares">Stop</button>
+        <button v-if="activeShares.length > 0" class="status-card__stop" type="button" @click="stopAllShares">Stop</button>
       </div>
     </section>
 
-    <button v-if="!invitationPending" class="share-button" type="button" @click="shareSheetOpen = true">
+    <button v-if="!invitationPending && (!backgroundSharing || activeShares.length === 0)" class="share-button" type="button" @click="shareSheetOpen = true">
       <span aria-hidden="true">⌁</span>
       Share location
     </button>
@@ -46,6 +46,7 @@
       v-if="shareSheetOpen"
       :draft="shareDraft"
       :can-submit="canCreateShare(shareDraft) && !creatingShare"
+      :runtime-note="backgroundSharing ? 'Android keeps an active share running with a notification. You may need to allow location all the time.' : 'Sharing continues only while this page remains open.'"
       @close="shareSheetOpen = false"
       @submit="createShare"
       @precision="updatePrecision"
@@ -66,14 +67,22 @@
 </template>
 
 <script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, ref } from "vue";
 
+import {
+  createAndroidBackgroundSharing,
+  type AndroidBackgroundStatus,
+} from "../android/backgroundSharing.ts";
 import LocationMap from "../components/LocationMap.vue";
 import ShareReadySheet from "../components/ShareReadySheet.vue";
 import ShareSheet from "../components/ShareSheet.vue";
 import { createBrowserLocationSource } from "../location/browser.ts";
 import { locationObservationToMapLocation } from "../location/mapModel.ts";
-import { createPlatformGeolocation } from "../location/platform.ts";
+import {
+  createPlatformGeolocation,
+  ensureTauriLocationPermission,
+} from "../location/platform.ts";
 import { subscribeTauriDeepLinks } from "../platform/deepLinks.ts";
 import {
   acknowledgeUntilRevoked,
@@ -104,6 +113,16 @@ const shareBaseUrl = resolveShareBaseUrl(
   new URL(window.location.href),
 );
 const runtime = createSharingRuntime(locationSource, shareBaseUrl);
+const backgroundSharing = createAndroidBackgroundSharing({
+  isAndroid:
+    "__TAURI_INTERNALS__" in window && /Android/i.test(navigator.userAgent),
+  now: Date.now,
+  invoke,
+  preparePermissions: () => ensureTauriLocationPermission(
+    () => import("@tauri-apps/plugin-geolocation"),
+  ),
+});
+const backgroundStatus = ref<AndroidBackgroundStatus>();
 const runtimeState = ref<SharingRuntimeState>({
   peerStatus: "offline",
   location: locationSource.getState(),
@@ -144,9 +163,28 @@ void subscribeTauriDeepLinks(shareBaseUrl, offerInvitation)
 const unsubscribe = runtime.subscribe((next) => {
   runtimeState.value = next;
 });
+let backgroundPoll: number | undefined;
+const refreshBackgroundStatus = async (): Promise<void> => {
+  if (!backgroundSharing) return;
+  backgroundStatus.value = await backgroundSharing.status();
+};
+if (backgroundSharing) {
+  void refreshBackgroundStatus().catch(() => undefined);
+  backgroundPoll = window.setInterval(
+    () => void refreshBackgroundStatus().catch(() => undefined),
+    1_000,
+  );
+}
+
+const activeShares = computed(() => [
+  ...runtimeState.value.shares,
+  ...(backgroundStatus.value?.share ? [backgroundStatus.value.share] : []),
+]);
 
 const locations = computed(() => {
-  const own = runtimeState.value.location;
+  const own = backgroundStatus.value?.share
+    ? backgroundStatus.value.location
+    : runtimeState.value.location;
   const ownLocations =
     own.status === "live" || own.status === "delayed" || own.status === "stale"
       ? [locationObservationToMapLocation(own.observation, own.status)]
@@ -160,32 +198,43 @@ const locations = computed(() => {
 });
 
 const viewerCount = computed(() =>
-  runtimeState.value.shares.reduce((sum, share) => sum + share.viewerCount, 0),
+  activeShares.value.reduce((sum, share) => sum + share.viewerCount, 0),
 );
 const activePrecision = computed(() => {
-  const choices = new Set(runtimeState.value.shares.map((share) => share.precision));
+  const choices = new Set(activeShares.value.map((share) => share.precision));
   if (choices.size === 0) return "";
   if (choices.size > 1) return "Mixed precision";
   return choices.has("approximate") ? "Approximate" : "Exact";
 });
 const sharingLabel = computed(() => {
-  if (runtimeState.value.shares.length > 0) {
-    if (runtimeState.value.location.status === "acquiring") return "Acquiring location…";
-    if (runtimeState.value.location.status === "denied") return "Location permission denied";
-    if (runtimeState.value.location.status === "error") return "Location unavailable";
-    return `${runtimeState.value.shares.length} active ${runtimeState.value.shares.length === 1 ? "share" : "shares"}`;
+  if (activeShares.value.length > 0) {
+    const ownLocation = backgroundStatus.value?.share
+      ? backgroundStatus.value.location
+      : runtimeState.value.location;
+    if (ownLocation.status === "acquiring") return "Acquiring location…";
+    if (ownLocation.status === "denied") return "Location permission denied";
+    if (ownLocation.status === "error") return "Location unavailable";
+    return `${activeShares.value.length} active ${activeShares.value.length === 1 ? "share" : "shares"}`;
   }
   if (runtimeState.value.received.length > 0) return "Viewing a shared location";
   if (runtimeState.value.location.status === "denied") return "Location permission denied";
   return "Not sharing";
+});
+const effectivePeerStatus = computed(() => {
+  if (backgroundStatus.value?.state === "sharing") return "online";
+  if (backgroundStatus.value?.state === "starting") return "connecting";
+  if (backgroundStatus.value?.state === "error") return "error";
+  return runtimeState.value.peerStatus;
 });
 const connectionLabel = computed(() => ({
   offline: "Offline",
   connecting: "Connecting",
   online: "P2P online",
   error: "Connection error",
-})[runtimeState.value.peerStatus]);
-const statusMessage = computed(() => localError.value || runtimeState.value.message);
+})[effectivePeerStatus.value]);
+const statusMessage = computed(() =>
+  localError.value || backgroundStatus.value?.message || runtimeState.value.message,
+);
 
 const updatePrecision = (precision: LocationPrecision) => {
   shareDraft.value = setPrecision(shareDraft.value, precision);
@@ -204,7 +253,23 @@ const createShare = async (): Promise<void> => {
   creatingShare.value = true;
   localError.value = "";
   try {
-    readyShare.value = await runtime.createShare(shareDraft.value);
+    if (!backgroundSharing) {
+      readyShare.value = await runtime.createShare(shareDraft.value);
+    } else {
+      backgroundStatus.value = await backgroundSharing.start(
+        shareDraft.value,
+        shareBaseUrl,
+      );
+      const deadline = Date.now() + 30_000;
+      while (backgroundStatus.value.state === "starting" && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        await refreshBackgroundStatus();
+      }
+      if (!backgroundStatus.value.share) {
+        throw new Error(backgroundStatus.value.message || "Could not start background sharing.");
+      }
+      readyShare.value = backgroundStatus.value.share;
+    }
     shareSheetOpen.value = false;
     shareDraft.value = createShareDraft();
   } catch (error) {
@@ -232,7 +297,11 @@ const acceptInvitation = async (): Promise<void> => {
 
 const stopReadyShare = async (): Promise<void> => {
   if (!readyShare.value) return;
-  await runtime.stopShare(readyShare.value.shareId);
+  if (backgroundStatus.value?.share?.shareId === readyShare.value.shareId) {
+    backgroundStatus.value = await backgroundSharing?.stop();
+  } else {
+    await runtime.stopShare(readyShare.value.shareId);
+  }
   readyShare.value = undefined;
 };
 
@@ -240,6 +309,9 @@ const stopAllShares = async (): Promise<void> => {
   await Promise.all(
     runtimeState.value.shares.map((share) => runtime.stopShare(share.shareId)),
   );
+  if (backgroundStatus.value?.share && backgroundSharing) {
+    backgroundStatus.value = await backgroundSharing.stop();
+  }
   readyShare.value = undefined;
 };
 
@@ -247,6 +319,7 @@ onBeforeUnmount(() => {
   unmounted = true;
   stopDeepLinks();
   unsubscribe();
+  if (backgroundPoll !== undefined) window.clearInterval(backgroundPoll);
   void runtime.stop();
 });
 </script>

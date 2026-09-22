@@ -14,7 +14,7 @@ import {
   parseLocationObservationV1,
   type LocationObservationV1,
 } from "../location/locationObservation.ts";
-import type { ShareDraft } from "../shareDraft.ts";
+import { shareExpiryFor, type ShareDraft } from "../shareDraft.ts";
 import {
   createConstellationMessagePort,
   dialShareStream,
@@ -84,12 +84,6 @@ interface SourceShare {
 const randomToken = (bytes = 16): string =>
   bytesToBase64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 
-const expiryFor = (draft: ShareDraft, now: number): number | null => {
-  if (draft.duration === "1h") return now + 60 * 60 * 1_000;
-  if (draft.duration === "8h") return now + 8 * 60 * 60 * 1_000;
-  return null;
-};
-
 const capacityFor = (draft: ShareDraft): number =>
   Math.min(
     draft.viewerCapacity === "unlimited"
@@ -117,7 +111,10 @@ export const createSharingRuntime = (
   shareBaseUrl = window.location.origin + window.location.pathname,
 ): {
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void;
-  createShare: (draft: ShareDraft) => Promise<ShareSummary>;
+  createShare: (
+    draft: ShareDraft,
+    expiresAt?: number | null,
+  ) => Promise<ShareSummary>;
   acceptShare: (url: string, label?: string) => Promise<void>;
   stopShare: (shareId: string) => Promise<void>;
   stop: () => Promise<void>;
@@ -364,7 +361,7 @@ export const createSharingRuntime = (
       observer(state);
       return () => observers.delete(observer);
     },
-    createShare: async (draft) => {
+    createShare: async (draft, expiresAt = shareExpiryFor(draft, Date.now())) => {
       const { node, addresses } = await ensurePeer();
       if (addresses.length === 0) {
         throw new Error("No reachable P2P address is available.");
@@ -373,7 +370,7 @@ export const createSharingRuntime = (
         baseUrl: shareBaseUrl,
         sourcePeerId: node.peerId.toString(),
         addresses,
-        expiresAt: expiryFor(draft, Date.now()),
+        expiresAt,
       });
       const share: SourceShare = {
         capability: invitation.capability,

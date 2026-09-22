@@ -42,3 +42,12 @@ export const acknowledgeUntilRevoked = (
 
 export const canCreateShare = (draft: ShareDraft): boolean =>
   draft.duration !== "until-revoked" || draft.untilRevokedAcknowledged;
+
+export const shareExpiryFor = (
+  draft: ShareDraft,
+  now: number,
+): number | null => {
+  if (draft.duration === "1h") return now + 60 * 60 * 1_000;
+  if (draft.duration === "8h") return now + 8 * 60 * 60 * 1_000;
+  return null;
+};

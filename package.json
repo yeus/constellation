@@ -16,6 +16,7 @@
     "dev:tauri:frontend": "yarn build:vendor && vite --mode tauri",
     "build": "yarn build:vendor && vue-tsc --noEmit && vite build",
     "build:tauri:frontend": "yarn build:vendor && vue-tsc --noEmit && vite build --mode tauri",
+    "build:android:runtime": "yarn build:vendor && vite build --config vite.background.config.ts",
     "tauri": "tauri",
     "android:init": "tauri android init",
     "build:android:dev": "tauri android build --debug --apk --target x86_64",

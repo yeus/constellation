@@ -42,7 +42,8 @@ const waitForReachabilityAddresses = async (
   node: BrowserLibp2pNode,
   relayAddress: string | undefined,
 ): Promise<string[]> => {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     const addresses = node.getMultiaddrs().map((address) => address.toString());
     const reachable = relayAddress
       ? addresses.filter((address) => address.startsWith(`${relayAddress}/p2p/`))

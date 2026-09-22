@@ -15,6 +15,13 @@ const adb = (args) => execFileSync(adbPath, args, {
   env: adbEnvironment,
   stdio: ["ignore", "pipe", "pipe"],
 });
+const grantIfSupported = (permission) => {
+  try {
+    adb(["shell", "pm", "grant", packageName, permission]);
+  } catch {
+    // Android versions before the permission was introduced reject the grant.
+  }
+};
 const wait = (milliseconds) => new Promise((resolve) => {
   setTimeout(resolve, milliseconds);
 });
@@ -132,6 +139,12 @@ const runShareFlow = async (cdp, browser) => {
   }, "the Android share link", 30_000);
   adb(["emu", "geo", "fix", "-70.0001", "40.0001"]);
   await wait(1_000);
+  adb(["shell", "input", "keyevent", "KEYCODE_HOME"]);
+  await waitFor(
+    async () => adb(["shell", "dumpsys", "activity", "services", packageName])
+      .includes("LocationShareService"),
+    "the Android foreground location service",
+  );
 
   const viewer = await browser.newPage();
   const invitation = new URL(shareUrl);
@@ -159,6 +172,7 @@ const runShareFlow = async (cdp, browser) => {
       { cause: error },
     );
   }
+  adb(["shell", "am", "start", "-n", `${packageName}/.MainActivity`]);
   await waitFor(() => androidTextIncludes(cdp, "1 connected"), "Android viewer presence", 30_000);
   assert.equal(await clickButton(cdp, "Stop sharing"), true);
   await viewer.getByText("Location sharing ended.").waitFor({ timeout: 15_000 });
@@ -166,13 +180,22 @@ const runShareFlow = async (cdp, browser) => {
 };
 
 const main = async () => {
-  assert.equal(adb(["devices"]).split("\n").filter((line) => /\sdevice$/.test(line)).length, 1);
+  if (process.env.ANDROID_SERIAL) {
+    assert.equal(adb(["get-state"]).trim(), "device");
+  } else {
+    assert.equal(
+      adb(["devices"]).split("\n").filter((line) => /\sdevice$/.test(line)).length,
+      1,
+    );
+  }
   let server;
   let cdp;
   let browser;
   try {
     adb(["emu", "geo", "fix", "-70.0000", "40.0000"]);
-    adb(["shell", "pm", "grant", packageName, "android.permission.ACCESS_FINE_LOCATION"]);
+    grantIfSupported("android.permission.ACCESS_FINE_LOCATION");
+    grantIfSupported("android.permission.ACCESS_BACKGROUND_LOCATION");
+    grantIfSupported("android.permission.POST_NOTIFICATIONS");
     adb(["shell", "am", "force-stop", packageName]);
     adb(["shell", "am", "start", "-n", `${packageName}/.MainActivity`]);
     server = await startWebServer();

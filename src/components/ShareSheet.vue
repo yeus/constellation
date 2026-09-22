@@ -105,7 +105,7 @@
       >
         Create private link
       </button>
-      <p class="runtime-note">Sharing continues only while this page remains open.</p>
+      <p class="runtime-note">{{ runtimeNote }}</p>
     </section>
   </div>
 </template>
@@ -121,6 +121,7 @@ import type {
 defineProps<{
   draft: ShareDraft;
   canSubmit: boolean;
+  runtimeNote?: string;
 }>();
 
 const emit = defineEmits<{

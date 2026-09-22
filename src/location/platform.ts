@@ -29,22 +29,31 @@ interface TauriGeolocationApi {
 const deniedError = (): BrowserPositionError & Error =>
   Object.assign(new Error("Location permission denied."), { code: 1 });
 
+export const ensureTauriLocationPermission = async (
+  loadApi: () => Promise<TauriGeolocationApi>,
+): Promise<void> => {
+  const api = await loadApi();
+  let permissions = await api.checkPermissions();
+  if (
+    permissions.location === "prompt" ||
+    permissions.location === "prompt-with-rationale"
+  ) {
+    permissions = await api.requestPermissions(["location"]);
+  }
+  if (permissions.location !== "granted") throw deniedError();
+};
+
 export const createTauriGeolocationAdapter = (
   loadApi: () => Promise<TauriGeolocationApi>,
 ): BrowserGeolocation => ({
   watchPosition: async (success, error, options = {}) => {
     const api = await loadApi();
-    let permissions = await api.checkPermissions();
-    if (
-      permissions.location === "prompt" ||
-      permissions.location === "prompt-with-rationale"
-    ) {
-      permissions = await api.requestPermissions(["location"]);
-    }
-    if (permissions.location !== "granted") {
+    try {
+      await ensureTauriLocationPermission(async () => api);
+    } catch (permissionError) {
       const denied = deniedError();
       error?.(denied);
-      throw denied;
+      throw permissionError;
     }
     return api.watchPosition({
       enableHighAccuracy: options.enableHighAccuracy ?? true,

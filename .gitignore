@@ -1,6 +1,7 @@
 node_modules/
 .direnv/
 dist/
+dist-background/
 src-tauri/target/
 src-tauri/gen/schemas/
 src-tauri/icons/*
