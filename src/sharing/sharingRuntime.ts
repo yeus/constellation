@@ -114,6 +114,7 @@ const requireAuthorized = (
 
 export const createSharingRuntime = (
   locationSource: BrowserLocationSource,
+  shareBaseUrl = window.location.origin + window.location.pathname,
 ): {
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void;
   createShare: (draft: ShareDraft) => Promise<ShareSummary>;
@@ -285,7 +286,9 @@ export const createSharingRuntime = (
       publish({ peerStatus: "connecting", message: "Connecting to the P2P network…" });
       peer = startPrivateBrowserPeer()
         .then(async (started) => {
-          await started.node.handle(SHARE_STREAM_PROTOCOL, handleIncomingStream);
+          await started.node.handle(SHARE_STREAM_PROTOCOL, handleIncomingStream, {
+            runOnLimitedConnection: true,
+          });
           handlerNode = started.node;
           publish({ peerStatus: "online", message: "" });
           return started;
@@ -367,7 +370,7 @@ export const createSharingRuntime = (
         throw new Error("No reachable P2P address is available.");
       }
       const invitation = createShareInvitation({
-        baseUrl: window.location.origin + window.location.pathname,
+        baseUrl: shareBaseUrl,
         sourcePeerId: node.peerId.toString(),
         addresses,
         expiresAt: expiryFor(draft, Date.now()),

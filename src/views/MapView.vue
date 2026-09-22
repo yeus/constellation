@@ -73,6 +73,8 @@ import ShareReadySheet from "../components/ShareReadySheet.vue";
 import ShareSheet from "../components/ShareSheet.vue";
 import { createBrowserLocationSource } from "../location/browser.ts";
 import { locationObservationToMapLocation } from "../location/mapModel.ts";
+import { createPlatformGeolocation } from "../location/platform.ts";
+import { subscribeTauriDeepLinks } from "../platform/deepLinks.ts";
 import {
   acknowledgeUntilRevoked,
   canCreateShare,
@@ -85,6 +87,7 @@ import {
   type ViewerCapacity,
 } from "../shareDraft.ts";
 import { bytesToBase64Url } from "../sharing/encoding.ts";
+import { resolveShareBaseUrl } from "../sharing/shareBaseUrl.ts";
 import { parseShareInvitation } from "../sharing/shareLink.ts";
 import {
   createSharingRuntime,
@@ -94,9 +97,13 @@ import {
 
 const locationSource = createBrowserLocationSource({
   sourceId: bytesToBase64Url(crypto.getRandomValues(new Uint8Array(16))),
-  geolocation: navigator.geolocation,
+  geolocation: createPlatformGeolocation(navigator.geolocation),
 });
-const runtime = createSharingRuntime(locationSource);
+const shareBaseUrl = resolveShareBaseUrl(
+  import.meta.env.VITE_CONSTELLATION_PUBLIC_URL,
+  new URL(window.location.href),
+);
+const runtime = createSharingRuntime(locationSource, shareBaseUrl);
 const runtimeState = ref<SharingRuntimeState>({
   peerStatus: "offline",
   location: locationSource.getState(),
@@ -110,14 +117,29 @@ const creatingShare = ref(false);
 const accepting = ref(false);
 const readyShare = ref<ShareSummary>();
 const invitationPending = ref(false);
+const invitationUrl = ref<string>();
 const localError = ref("");
 
-try {
-  parseShareInvitation(window.location.href);
-  invitationPending.value = true;
-} catch {
-  invitationPending.value = false;
-}
+const offerInvitation = (url: string): void => {
+  try {
+    parseShareInvitation(url);
+    invitationUrl.value = url;
+    invitationPending.value = true;
+  } catch {
+    // Unrelated navigation and malformed external links are ignored.
+  }
+};
+offerInvitation(window.location.href);
+let stopDeepLinks = (): void => undefined;
+let unmounted = false;
+void subscribeTauriDeepLinks(shareBaseUrl, offerInvitation)
+  .then((stop) => {
+    if (unmounted) stop();
+    else stopDeepLinks = stop;
+  })
+  .catch(() => {
+    localError.value = "Could not listen for shared links.";
+  });
 
 const unsubscribe = runtime.subscribe((next) => {
   runtimeState.value = next;
@@ -196,8 +218,10 @@ const acceptInvitation = async (): Promise<void> => {
   accepting.value = true;
   localError.value = "";
   try {
-    await runtime.acceptShare(window.location.href);
+    if (!invitationUrl.value) throw new Error("The share link is unavailable.");
+    await runtime.acceptShare(invitationUrl.value);
     invitationPending.value = false;
+    invitationUrl.value = undefined;
     window.history.replaceState({}, "", window.location.pathname);
   } catch (error) {
     localError.value = error instanceof Error ? error.message : "Could not open the share.";
@@ -220,6 +244,8 @@ const stopAllShares = async (): Promise<void> => {
 };
 
 onBeforeUnmount(() => {
+  unmounted = true;
+  stopDeepLinks();
   unsubscribe();
   void runtime.stop();
 });

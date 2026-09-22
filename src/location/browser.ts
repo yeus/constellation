@@ -25,8 +25,8 @@ export interface BrowserGeolocation {
     success: (position: BrowserPosition) => void,
     error?: (error: BrowserPositionError) => void,
     options?: PositionOptions,
-  ) => number;
-  clearWatch: (watchId: number) => void;
+  ) => number | Promise<number>;
+  clearWatch: (watchId: number) => void | Promise<void>;
 }
 
 export type BrowserLocationState =
@@ -109,6 +109,7 @@ export const createBrowserLocationSource = (
     : { status: "unavailable" };
   let sequence = 0;
   let watchId: number | undefined;
+  let watchGeneration = 0;
   let freshnessTimers: number[] = [];
 
   const emitState = (next: BrowserLocationState): void => {
@@ -154,7 +155,8 @@ export const createBrowserLocationSource = (
     );
   };
   const stopWatching = (): void => {
-    if (watchId !== undefined) options.geolocation?.clearWatch(watchId);
+    watchGeneration += 1;
+    if (watchId !== undefined) void options.geolocation?.clearWatch(watchId);
     watchId = undefined;
     clearFreshnessTimers();
   };
@@ -199,12 +201,47 @@ export const createBrowserLocationSource = (
     getState: () => state,
     start: () => {
       if (!options.geolocation || watchId !== undefined) return;
+      const generation = ++watchGeneration;
+      let errorReported = false;
       emitState({ status: "acquiring" });
-      watchId = options.geolocation.watchPosition(
-        receivePosition,
-        receiveError,
-        positionOptions,
-      );
+      const reportError = (error: BrowserPositionError): void => {
+        errorReported = true;
+        receiveError(error);
+      };
+      try {
+        const pendingWatch = options.geolocation.watchPosition(
+          receivePosition,
+          reportError,
+          positionOptions,
+        );
+        if (typeof pendingWatch === "number") {
+          watchId = pendingWatch;
+          return;
+        }
+        void pendingWatch
+          .then((startedWatchId) => {
+            if (generation !== watchGeneration) {
+              void options.geolocation?.clearWatch(startedWatchId);
+              return;
+            }
+            watchId = startedWatchId;
+          })
+          .catch((error: unknown) => {
+            if (generation !== watchGeneration || errorReported) return;
+            receiveError(
+              typeof error === "object" && error !== null && "code" in error
+                ? { code: Number(error.code) }
+                : { code: 0 },
+            );
+          });
+      } catch (error) {
+        if (errorReported) return;
+        receiveError(
+          typeof error === "object" && error !== null && "code" in error
+            ? { code: Number(error.code) }
+            : { code: 0 },
+        );
+      }
     },
     stop: () => {
       stopWatching();

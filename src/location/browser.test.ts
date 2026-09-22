@@ -22,7 +22,9 @@ const createFixture = () => {
       receivedOptions = options;
       return 42;
     },
-    clearWatch: (id) => cleared.push(id),
+    clearWatch: (id) => {
+      cleared.push(id);
+    },
   };
 
   const source = createBrowserLocationSource({
@@ -125,4 +127,29 @@ test("reports denied and unavailable capabilities explicitly", () => {
   assert.equal(unavailable.getState().status, "unavailable");
   unavailable.start();
   assert.equal(unavailable.getState().status, "unavailable");
+});
+
+test("clears an asynchronous watch that resolves after stop", async () => {
+  let resolveWatch: ((watchId: number) => void) | undefined;
+  const cleared: number[] = [];
+  const source = createBrowserLocationSource({
+    sourceId: "async-platform",
+    geolocation: {
+      watchPosition: () =>
+        new Promise<number>((resolve) => {
+          resolveWatch = resolve;
+        }),
+      clearWatch: async (watchId) => {
+        cleared.push(watchId);
+      },
+    },
+  });
+
+  source.start();
+  source.stop();
+  resolveWatch?.(17);
+  await Promise.resolve();
+
+  assert.deepEqual(cleared, [17]);
+  assert.equal(source.getState().status, "permission-required");
 });

@@ -1,0 +1,19 @@
+[package]
+name = "constellation"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "constellation_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+serde_json = "1"
+tauri = { version = "=2.11.5", features = [] }
+tauri-plugin-deep-link = "=2.4.10"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-geolocation = "=2.3.3"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }

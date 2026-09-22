@@ -83,20 +83,29 @@ export const startPrivateBrowserPeer = async (): Promise<{
   };
 };
 
+export const orderShareAddresses = (addresses: readonly string[]): string[] =>
+  [...addresses].sort((left, right) => {
+    const rank = (address: string) =>
+      address.includes("/p2p-circuit/webrtc")
+        ? 2
+        : address.includes("/p2p-circuit")
+          ? 0
+          : 1;
+    return rank(left) - rank(right);
+  });
+
 export const dialShareStream = async (
-  node: BrowserLibp2pNode,
+  node: Pick<BrowserLibp2pNode, "dialProtocol">,
   addresses: readonly string[],
   protocol: string,
 ): Promise<Stream> => {
-  const ordered = [...addresses].sort(
-    (left, right) =>
-      Number(left.includes("/p2p-circuit")) -
-      Number(right.includes("/p2p-circuit")),
-  );
+  const ordered = orderShareAddresses(addresses);
   let lastError: unknown;
   for (const address of ordered) {
     try {
-      return await node.dialProtocol(multiaddr(address), protocol);
+      return await node.dialProtocol(multiaddr(address), protocol, {
+        runOnLimitedConnection: true,
+      });
     } catch (error) {
       lastError = error;
     }
