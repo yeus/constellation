@@ -5,10 +5,17 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 gradle_file="$repo_root/src-tauri/gen/android/app/build.gradle.kts"
 properties_file="$repo_root/src-tauri/gen/android/app/keystore.properties"
 temporary_keystore=""
+temporary_properties=""
+properties_created=0
 gradle_backup=""
 
 cleanup() {
-  rm -f -- "$properties_file"
+  if [[ -n "$temporary_properties" ]]; then
+    rm -f -- "$temporary_properties"
+  fi
+  if (( properties_created )); then
+    rm -f -- "$properties_file"
+  fi
   if [[ -n "$temporary_keystore" ]]; then
     rm -f -- "$temporary_keystore"
   fi
@@ -18,6 +25,11 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+if [[ -e "$properties_file" || -L "$properties_file" ]]; then
+  echo "Android keystore.properties already exists; refusing to overwrite it." >&2
+  exit 1
+fi
 
 required=(
   ANDROID_KEYSTORE_PATH
@@ -45,12 +57,20 @@ fi
 temporary_keystore="$(mktemp "${TMPDIR:-/tmp}/constellation-android-release.XXXXXX.jks")"
 install -m 600 "$ANDROID_KEYSTORE_PATH" "$temporary_keystore"
 umask 077
-cat >"$properties_file" <<EOF
+temporary_properties="$(mktemp "$properties_file.XXXXXX")"
+cat >"$temporary_properties" <<EOF
 storeFile=$temporary_keystore
 storePassword=$ANDROID_KEYSTORE_PASSWORD
 keyAlias=$ANDROID_KEY_ALIAS
 keyPassword=$ANDROID_KEY_PASSWORD
 EOF
+if ! ln -- "$temporary_properties" "$properties_file"; then
+  echo "Android keystore.properties already exists; refusing to overwrite it." >&2
+  exit 1
+fi
+properties_created=1
+rm -f -- "$temporary_properties"
+temporary_properties=""
 
 if ! grep -q 'constellation-release-signing' "$gradle_file"; then
   gradle_backup="$(mktemp "${TMPDIR:-/tmp}/constellation-android-gradle.XXXXXX.kts")"
