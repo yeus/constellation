@@ -3,9 +3,9 @@ use tauri::{
     Manager, Runtime,
 };
 
+mod error;
 #[cfg(mobile)]
 mod mobile;
-mod error;
 
 pub use error::{Error, Result};
 

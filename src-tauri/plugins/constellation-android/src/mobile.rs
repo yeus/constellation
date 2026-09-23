@@ -21,9 +21,12 @@ pub struct ConstellationAndroid<R: Runtime>(PluginHandle<R>);
 impl<R: Runtime> ConstellationAndroid<R> {
     pub fn start(&self, request: &Value) -> crate::Result<Value> {
         self.0
-            .run_mobile_plugin("startBackgroundShare", json!({
-                "request": request.to_string(),
-            }))
+            .run_mobile_plugin(
+                "startBackgroundShare",
+                json!({
+                    "request": request.to_string(),
+                }),
+            )
             .map_err(Into::into)
     }
 

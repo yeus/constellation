@@ -1,0 +1,12 @@
+dist/
+dist-tauri/
+dist-background/
+flake.lock
+src-tauri/gen/
+src-tauri/plugins/**/android/.tauri/
+src-tauri/plugins/**/android/build/
+src-tauri/plugins/**/permissions/schemas/
+src-tauri/target/
+vendor/taskyon/
+test-results/
+yarn.lock

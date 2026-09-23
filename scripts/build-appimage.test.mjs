@@ -24,7 +24,10 @@ test('builds with a fresh Cargo target and copies the AppImage to dist', (t) => 
     path.join(staleTarget, 'release/bundle/appimage/zzz-old.AppImage'),
     'stale appimage',
   )
-  fs.copyFileSync(path.join(projectRoot, 'scripts/build-appimage.sh'), path.join(scriptsDir, 'build-appimage.sh'))
+  fs.copyFileSync(
+    path.join(projectRoot, 'scripts/build-appimage.sh'),
+    path.join(scriptsDir, 'build-appimage.sh'),
+  )
   fs.copyFileSync(
     path.join(projectRoot, 'scripts/copy-desktop-artifact.mjs'),
     path.join(scriptsDir, 'copy-desktop-artifact.mjs'),
@@ -58,7 +61,10 @@ printf 'fresh appimage' > "$CARGO_TARGET_DIR/release/bundle/appimage/constellati
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
   assert.match(fs.readFileSync(yarnLog, 'utf8'), /build:desktop:appimage:internal/)
   assert.equal(
-    fs.readFileSync(path.join(fixtureRoot, 'dist/constellation-desktop-0.1.0-x86_64.AppImage'), 'utf8'),
+    fs.readFileSync(
+      path.join(fixtureRoot, 'dist/constellation-desktop-0.1.0-x86_64.AppImage'),
+      'utf8',
+    ),
     'fresh appimage',
   )
   assert.equal(fs.existsSync(fs.readFileSync(targetLog, 'utf8')), false)

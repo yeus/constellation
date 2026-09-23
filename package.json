@@ -25,6 +25,9 @@
     "build:android:dev": "bash scripts/with-android-build-tools.sh tauri android build --debug --apk --target x86_64 && node scripts/copy-android-apk.mjs debug x86_64",
     "build:android:device": "bash scripts/with-android-build-tools.sh tauri android build --debug --apk --target aarch64 && node scripts/copy-android-apk.mjs debug aarch64",
     "build:android:release": "bash scripts/build-android-release.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "vue-tsc --noEmit && eslint .",
     "typecheck": "yarn build:vendor && vue-tsc --noEmit",
     "test:android:config": "node scripts/check-android-config.mjs",
     "test:android:e2e": "node scripts/test-android.mjs",
@@ -52,15 +55,23 @@
     "zod": "4.1.8"
   },
   "devDependencies": {
+    "@eslint/js": "9.17.0",
     "@playwright/test": "1.61.1",
     "@tauri-apps/cli": "2.11.5",
     "@types/geojson": "7946.0.16",
     "@types/node": "22.13.0",
     "@types/qrcode": "1.5.6",
     "@vitejs/plugin-vue": "6.0.3",
+    "@vue/eslint-config-prettier": "10.1.0",
+    "@vue/eslint-config-typescript": "14.9.0",
     "@vue/tsconfig": "0.8.1",
+    "eslint": "9.14.0",
+    "eslint-plugin-vue": "10.4.0",
+    "globals": "16.4.0",
+    "prettier": "3.3.3",
     "typescript": "5.9.2",
     "vite": "7.3.6",
+    "vue-eslint-parser": "10.2.0",
     "vue-tsc": "3.0.7"
   }
 }
