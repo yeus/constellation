@@ -4,6 +4,7 @@ dist/
 dist-background/
 src-tauri/target/
 src-tauri/gen/schemas/
+src-tauri/gen/android/**/keystore.properties
 src-tauri/icons/*
 !src-tauri/icons/icon.png
 vendor/taskyon/*/dist/
