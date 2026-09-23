@@ -1,22 +1,12 @@
 <template>
   <div class="sheet-backdrop" @click.self="emit('close')">
-    <section
-      class="share-sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="share-title"
-    >
+    <section class="share-sheet" role="dialog" aria-modal="true" aria-labelledby="share-title">
       <header class="sheet-header">
         <div>
           <p class="eyebrow">New share</p>
           <h2 id="share-title">Share your location</h2>
         </div>
-        <button
-          class="icon-button"
-          type="button"
-          aria-label="Close"
-          @click="emit('close')"
-        >
+        <button class="icon-button" type="button" aria-label="Close" @click="emit('close')">
           ×
         </button>
       </header>
@@ -68,9 +58,7 @@
         <input
           type="checkbox"
           :checked="draft.untilRevokedAcknowledged"
-          @change="
-            emit('acknowledge', ($event.target as HTMLInputElement).checked)
-          "
+          @change="emit('acknowledge', ($event.target as HTMLInputElement).checked)"
         />
         <span>I understand this link stays active until I stop it.</span>
       </label>
@@ -92,17 +80,10 @@
             {{ option.label }}
           </button>
         </div>
-        <p class="field-help">
-          The link can be revoked for everyone or for one active session.
-        </p>
+        <p class="field-help">The link can be revoked for everyone or for one active session.</p>
       </fieldset>
 
-      <button
-        class="primary-action"
-        type="button"
-        :disabled="!canSubmit"
-        @click="emit('submit')"
-      >
+      <button class="primary-action" type="button" :disabled="!canSubmit" @click="emit('submit')">
         Create private link
       </button>
       <p class="runtime-note">{{ runtimeNote }}</p>
@@ -111,38 +92,33 @@
 </template>
 
 <script setup lang="ts">
-import type {
-  LocationPrecision,
-  ShareDraft,
-  ShareDuration,
-  ViewerCapacity,
-} from "../shareDraft.ts";
+import type { LocationPrecision, ShareDraft, ShareDuration, ViewerCapacity } from '../shareDraft.ts'
 
 defineProps<{
-  draft: ShareDraft;
-  canSubmit: boolean;
-  runtimeNote?: string;
-}>();
+  draft: ShareDraft
+  canSubmit: boolean
+  runtimeNote?: string
+}>()
 
 const emit = defineEmits<{
-  close: [];
-  submit: [];
-  precision: [value: LocationPrecision];
-  duration: [value: ShareDuration];
-  viewers: [value: ViewerCapacity];
-  acknowledge: [value: boolean];
-}>();
+  close: []
+  submit: []
+  precision: [value: LocationPrecision]
+  duration: [value: ShareDuration]
+  viewers: [value: ViewerCapacity]
+  acknowledge: [value: boolean]
+}>()
 
 const durationOptions: readonly { label: string; value: ShareDuration }[] = [
-  { label: "1 hour", value: "1h" },
-  { label: "8 hours", value: "8h" },
-  { label: "Until stopped", value: "until-revoked" },
-];
+  { label: '1 hour', value: '1h' },
+  { label: '8 hours', value: '8h' },
+  { label: 'Until stopped', value: 'until-revoked' },
+]
 
 const viewerOptions: readonly { label: string; value: ViewerCapacity }[] = [
-  { label: "1", value: 1 },
-  { label: "10", value: 10 },
-  { label: "50", value: 50 },
-  { label: "No share cap", value: "unlimited" },
-];
+  { label: '1', value: 1 },
+  { label: '10', value: 10 },
+  { label: '50', value: 50 },
+  { label: 'No share cap', value: 'unlimited' },
+]
 </script>

@@ -16,7 +16,7 @@
       </p>
       <input class="share-ready__link" aria-label="Share link" :value="url" readonly />
       <button class="primary-action" type="button" @click="shareLink">
-        {{ canSystemShare ? "Share link" : "Copy link" }}
+        {{ canSystemShare ? 'Share link' : 'Copy link' }}
       </button>
       <button class="secondary-action" type="button" @click="emit('stop')">Stop sharing</button>
     </section>
@@ -24,27 +24,27 @@
 </template>
 
 <script setup lang="ts">
-import QRCode from "qrcode";
-import { computed, onMounted, ref } from "vue";
+import QRCode from 'qrcode'
+import { computed, onMounted, ref } from 'vue'
 
-const props = defineProps<{ url: string }>();
-const emit = defineEmits<{ close: []; stop: [] }>();
-const qrCode = ref("");
-const canSystemShare = computed(() => typeof navigator.share === "function");
+const props = defineProps<{ url: string }>()
+const emit = defineEmits<{ close: []; stop: [] }>()
+const qrCode = ref('')
+const canSystemShare = computed(() => typeof navigator.share === 'function')
 
 const shareLink = async (): Promise<void> => {
   if (canSystemShare.value) {
-    await navigator.share({ title: "View my location", url: props.url });
-    return;
+    await navigator.share({ title: 'View my location', url: props.url })
+    return
   }
-  await navigator.clipboard.writeText(props.url);
-};
+  await navigator.clipboard.writeText(props.url)
+}
 
 onMounted(async () => {
   qrCode.value = await QRCode.toDataURL(props.url, {
     width: 280,
     margin: 2,
-    errorCorrectionLevel: "M",
-  });
-});
+    errorCorrectionLevel: 'M',
+  })
+})
 </script>

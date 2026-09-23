@@ -8,153 +8,126 @@
 </template>
 
 <script setup lang="ts">
-import type { GeoJSONSource, StyleSpecification } from "maplibre-gl";
-import maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { GeoJSONSource, StyleSpecification } from 'maplibre-gl'
+import maplibregl from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import {
-  createLocationFeatureCollection,
-  type MapLocation,
-} from "../location/mapModel.ts";
-import {
-  createPmtilesRuntime,
-  DEFAULT_WORLD_PMTILES_URL,
-} from "../map/pmtiles.ts";
+import { createLocationFeatureCollection, type MapLocation } from '../location/mapModel.ts'
+import { createPmtilesRuntime, DEFAULT_WORLD_PMTILES_URL } from '../map/pmtiles.ts'
 
-const LOCATION_SOURCE_ID = "constellation-locations";
+const LOCATION_SOURCE_ID = 'constellation-locations'
 
 const props = withDefaults(
   defineProps<{
-    locations: readonly MapLocation[];
-    pmtilesUrl?: string;
+    locations: readonly MapLocation[]
+    pmtilesUrl?: string
   }>(),
   { pmtilesUrl: DEFAULT_WORLD_PMTILES_URL },
-);
+)
 
-const mapElement = ref<HTMLDivElement | null>(null);
-const mapNotice = ref("");
-const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
-const theme = ref<"light" | "dark">(darkScheme.matches ? "dark" : "light");
-const runtime = createPmtilesRuntime();
-let map: maplibregl.Map | null = null;
+const mapElement = ref<HTMLDivElement | null>(null)
+const mapNotice = ref('')
+const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
+const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
+const runtime = createPmtilesRuntime()
+let map: maplibregl.Map | null = null
 
 const style = (): StyleSpecification => ({
   version: 8,
   sources: {},
   layers: [
     {
-      id: "background",
-      type: "background",
+      id: 'background',
+      type: 'background',
       paint: {
-        "background-color": theme.value === "dark" ? "#111822" : "#e8edf2",
+        'background-color': theme.value === 'dark' ? '#111822' : '#e8edf2',
       },
     },
   ],
-});
+})
 
 const addLocationLayers = (target: maplibregl.Map): void => {
   target.addSource(LOCATION_SOURCE_ID, {
-    type: "geojson",
+    type: 'geojson',
     data: createLocationFeatureCollection(props.locations),
-  });
+  })
   target.addLayer({
     id: `${LOCATION_SOURCE_ID}-areas`,
-    type: "fill",
+    type: 'fill',
     source: LOCATION_SOURCE_ID,
-    filter: ["==", ["geometry-type"], "Polygon"],
+    filter: ['==', ['geometry-type'], 'Polygon'],
     paint: {
-      "fill-color": "#f78f3b",
-      "fill-opacity": [
-        "match",
-        ["get", "state"],
-        "stale",
-        0.1,
-        "delayed",
-        0.18,
-        0.26,
-      ],
+      'fill-color': '#f78f3b',
+      'fill-opacity': ['match', ['get', 'state'], 'stale', 0.1, 'delayed', 0.18, 0.26],
     },
-  });
+  })
   target.addLayer({
     id: `${LOCATION_SOURCE_ID}-outlines`,
-    type: "line",
+    type: 'line',
     source: LOCATION_SOURCE_ID,
-    filter: ["==", ["geometry-type"], "Polygon"],
-    paint: { "line-color": "#f78f3b", "line-width": 2 },
-  });
+    filter: ['==', ['geometry-type'], 'Polygon'],
+    paint: { 'line-color': '#f78f3b', 'line-width': 2 },
+  })
   target.addLayer({
     id: `${LOCATION_SOURCE_ID}-points`,
-    type: "circle",
+    type: 'circle',
     source: LOCATION_SOURCE_ID,
-    filter: ["==", ["geometry-type"], "Point"],
+    filter: ['==', ['geometry-type'], 'Point'],
     paint: {
-      "circle-color": [
-        "match",
-        ["get", "state"],
-        "stale",
-        "#7b8794",
-        "#f78f3b",
-      ],
-      "circle-radius": 7,
-      "circle-stroke-color": theme.value === "dark" ? "#ffffff" : "#2a3548",
-      "circle-stroke-width": 2,
+      'circle-color': ['match', ['get', 'state'], 'stale', '#7b8794', '#f78f3b'],
+      'circle-radius': 7,
+      'circle-stroke-color': theme.value === 'dark' ? '#ffffff' : '#2a3548',
+      'circle-stroke-width': 2,
     },
-  });
-};
+  })
+}
 
 const initialize = (): void => {
-  if (!mapElement.value || map) return;
-  runtime.setup();
+  if (!mapElement.value || map) return
+  runtime.setup()
   map = new maplibregl.Map({
     container: mapElement.value,
     style: style(),
     center: [0, 20],
     zoom: 1.5,
     attributionControl: false,
-  });
-  map.addControl(new maplibregl.NavigationControl(), "bottom-right");
-  map.on("load", () => {
+  })
+  map.addControl(new maplibregl.NavigationControl(), 'bottom-right')
+  map.on('load', () => {
     void (async () => {
-      if (!map) return;
+      if (!map) return
       try {
-        await runtime.addWorldMap(map, props.pmtilesUrl, theme.value);
+        await runtime.addWorldMap(map, props.pmtilesUrl, theme.value)
       } catch {
-        mapNotice.value =
-          "Basemap unavailable; location sharing remains available.";
+        mapNotice.value = 'Basemap unavailable; location sharing remains available.'
       }
-      addLocationLayers(map);
-    })();
-  });
-};
+      addLocationLayers(map)
+    })()
+  })
+}
 
 const updateLocations = (): void => {
-  const source = map?.getSource(LOCATION_SOURCE_ID) as
-    | GeoJSONSource
-    | undefined;
-  source?.setData(createLocationFeatureCollection(props.locations));
-};
+  const source = map?.getSource<GeoJSONSource>(LOCATION_SOURCE_ID)
+  source?.setData(createLocationFeatureCollection(props.locations))
+}
 
 const updateTheme = (event: MediaQueryListEvent): void => {
-  theme.value = event.matches ? "dark" : "light";
-  map?.setPaintProperty(
-    "background",
-    "background-color",
-    event.matches ? "#111822" : "#e8edf2",
-  );
-};
+  theme.value = event.matches ? 'dark' : 'light'
+  map?.setPaintProperty('background', 'background-color', event.matches ? '#111822' : '#e8edf2')
+}
 
-watch(() => props.locations, updateLocations, { deep: true });
+watch(() => props.locations, updateLocations, { deep: true })
 onMounted(() => {
-  darkScheme.addEventListener("change", updateTheme);
-  initialize();
-});
+  darkScheme.addEventListener('change', updateTheme)
+  initialize()
+})
 onBeforeUnmount(() => {
-  darkScheme.removeEventListener("change", updateTheme);
-  map?.remove();
-  map = null;
-  runtime.dispose();
-});
+  darkScheme.removeEventListener('change', updateTheme)
+  map?.remove()
+  map = null
+  runtime.dispose()
+})
 </script>
 
 <style scoped>
