@@ -31,7 +31,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun startBackgroundShare(invoke: Invoke) {
     try {
       requireLocationPermission()
-      requestNotificationPermission()
+      requireNotificationPermission()
       check(!serviceRunning()) { "Stop the current Android share before creating another." }
       val args = invoke.parseArgs(BackgroundShareArgs::class.java)
       val request = validateRequest(args.request)
@@ -98,7 +98,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     }
   }
 
-  private fun requestNotificationPermission() {
+  private fun requireNotificationPermission() {
     if (
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
       ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -109,6 +109,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         arrayOf(Manifest.permission.POST_NOTIFICATIONS),
         NOTIFICATION_PERMISSION_REQUEST,
       )
+      throw IllegalStateException("Allow notifications, then create the share again.")
     }
   }
 

@@ -176,7 +176,15 @@ class LocationShareService : Service(), LocationListener {
     locationManager = manager
     for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
       if (runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)) {
-        runCatching { manager.requestLocationUpdates(provider, 1_000L, 0f, this, Looper.getMainLooper()) }
+        runCatching {
+          manager.requestLocationUpdates(
+            provider,
+            LOCATION_UPDATE_INTERVAL_MS,
+            LOCATION_UPDATE_MINIMUM_DISTANCE_METRES,
+            this,
+            Looper.getMainLooper(),
+          )
+        }
       }
     }
   }
@@ -251,6 +259,8 @@ class LocationShareService : Service(), LocationListener {
   private companion object {
     const val PAGE_URL = "https://constellation.invalid/runtime.html"
     const val SCRIPT_URL = "https://constellation.invalid/constellation-background.js"
+    const val LOCATION_UPDATE_INTERVAL_MS = 5_000L
+    const val LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f
     const val HTML = "<!doctype html><meta charset=\"utf-8\"><script src=\"/constellation-background.js\"></script>"
     const val STOPPED_STATUS = "{\"state\":\"stopped\",\"location\":{\"status\":\"unavailable\"},\"message\":\"\"}"
   }

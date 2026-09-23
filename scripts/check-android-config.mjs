@@ -13,6 +13,14 @@ const serviceManifest = fs.readFileSync(
   "src-tauri/plugins/constellation-android/android/src/main/AndroidManifest.xml",
   "utf8",
 );
+const androidPlugin = fs.readFileSync(
+  "src-tauri/plugins/constellation-android/android/src/main/java/space/taskyon/constellation/plugin/ConstellationAndroidPlugin.kt",
+  "utf8",
+);
+const locationService = fs.readFileSync(
+  "src-tauri/plugins/constellation-android/android/src/main/java/space/taskyon/constellation/plugin/LocationShareService.kt",
+  "utf8",
+);
 
 assert.equal(tauri.identifier, "space.taskyon.constellation");
 assert.equal(tauri.bundle.android.minSdkVersion, 29);
@@ -47,5 +55,10 @@ for (const permission of [
 }
 assert.match(serviceManifest, /android:foregroundServiceType="location\|dataSync"/);
 assert.match(serviceManifest, /android:stopWithTask="false"/);
+assert.match(androidPlugin, /requireNotificationPermission\(\)/);
+assert.match(androidPlugin, /Allow notifications, then create the share again\./);
+assert.doesNotMatch(androidPlugin, /requestNotificationPermission\(\)/);
+assert.match(locationService, /LOCATION_UPDATE_INTERVAL_MS = 5_000L/);
+assert.match(locationService, /LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f/);
 
 console.log("Android configuration checks passed.");
