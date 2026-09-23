@@ -7,11 +7,11 @@
     "beforeBuildCommand": "yarn build:tauri:frontend",
     "beforeDevCommand": "yarn dev:tauri:frontend",
     "devUrl": "http://127.0.0.1:5173",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist-tauri"
   },
   "app": {
     "security": {
-      "capabilities": ["mobile"]
+      "capabilities": ["desktop", "mobile"]
     },
     "windows": [
       {
@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "targets": ["appimage"],
     "icon": ["icons/icon.png"],
     "android": {
       "minSdkVersion": 29

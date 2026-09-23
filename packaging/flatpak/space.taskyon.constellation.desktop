@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Constellation
+Comment=Share live locations privately
+Exec=constellation
+Icon=space.taskyon.constellation
+Terminal=false
+Type=Application
+Categories=Network;Utility;
+StartupWMClass=Constellation

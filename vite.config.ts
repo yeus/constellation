@@ -1,14 +1,15 @@
-import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [vue()],
   build: {
-    target: "es2022",
+    outDir: mode === 'tauri' ? 'dist-tauri' : 'dist',
+    target: 'es2022',
   },
   server: {
-    host: "127.0.0.1",
+    host: '127.0.0.1',
     port: 5173,
     strictPort: true,
   },
-});
+}))

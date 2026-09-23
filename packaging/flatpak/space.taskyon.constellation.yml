@@ -1,0 +1,50 @@
+id: space.taskyon.constellation
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: constellation
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node22
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+
+modules:
+  - name: constellation
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+      env:
+        HOME: /run/build/constellation
+        CARGO_HOME: /run/build/constellation/cargo
+        npm_config_cache: /run/build/constellation/npm-cache
+      append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
+    build-commands:
+      - corepack yarn install --immutable
+      - corepack yarn tauri build --no-bundle
+      - install -Dm755 src-tauri/target/release/constellation /app/bin/constellation
+      - install -Dm644 packaging/flatpak/space.taskyon.constellation.desktop /app/share/applications/space.taskyon.constellation.desktop
+      - install -Dm644 packaging/flatpak/space.taskyon.constellation.metainfo.xml /app/share/metainfo/space.taskyon.constellation.metainfo.xml
+      - install -Dm644 src-tauri/icons/32x32.png /app/share/icons/hicolor/32x32/apps/space.taskyon.constellation.png
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/space.taskyon.constellation.png
+      - install -Dm644 src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/space.taskyon.constellation.png
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .direnv
+          - .flatpak-builder
+          - .tmp
+          - dist
+          - dist-background
+          - node_modules
+          - src-tauri/gen
+          - src-tauri/target

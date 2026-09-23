@@ -1,93 +1,137 @@
 # Constellation
 
+Constellation is a small peer-to-peer live-location sharing app. A source
+creates a private link or QR code, chooses exact or approximate disclosure and
+an expiry, and can see how many viewers are connected. A recipient opens the
+link without creating an account or managing a Space.
 
+Version 0.1 is under active development. The browser flow and Android
+foreground-service flow work through the configured libp2p circuit relay.
+Linux desktop packaging, hosted deployment, signed releases, direct-path NAT
+coverage and physical-device acceptance are not yet release-verified.
 
-## Getting started
+## Development
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+The locked Nix shell includes Node 22, Yarn 4, Rust, Java 17, Tauri's Linux
+dependencies and the Android SDK/NDK:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+```sh
+nix develop
+yarn install --immutable
+yarn dev
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/xyntopia/constellation.git
-git branch -M main
-git push -uf origin main
+
+Without Nix, use Node 22 and Corepack:
+
+```sh
+corepack yarn install --immutable
+corepack yarn dev
 ```
 
-## Integrate with your tools
+Run the lightweight quality checks with:
 
-* [Set up project integrations](https://gitlab.com/xyntopia/constellation/-/settings/integrations)
+```sh
+yarn lint
+yarn test
+yarn build
+yarn test:e2e
+```
 
-## Collaborate with your team
+The end-to-end browser launcher removes a Nix-only library override before
+starting Playwright's downloaded Chromium. This prevents host Chromium from
+loading an incompatible Nix glibc.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Tauri desktop
 
-## Test and Deploy
+Run the Linux desktop shell during development:
 
-Use the built-in continuous integration in GitLab.
+```sh
+yarn tauri dev
+```
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+Build an AppImage and copy it to `dist/`:
 
-***
+```sh
+yarn build:desktop:appimage
+```
 
-# Editing this README
+Inside the Nix development shell, the command runs the Tauri build in a Nix
+FHS environment with the Linux libraries required by AppImage. It uses a fresh
+temporary Cargo target and copies the artifact to
+`dist/constellation-desktop-<version>-x86_64.AppImage`. You can also run the
+same builder directly with `nix run .#build-appimage`.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+The Flatpak manifest is in `packaging/flatpak`. With Flatpak Builder and the
+Flathub remote installed, build a local bundle in `dist/`:
 
-## Suggestions for a good README
+```sh
+yarn build:desktop:flatpak
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+The current manifest uses network access to resolve Yarn and Cargo dependencies
+during a local build. A source-pinned, offline manifest is still required
+before submission to Flathub.
 
-## Name
-Choose a self-explaining name for your project.
+## Android
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Initialize generated Android project files once if they are absent:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```sh
+yarn android:init
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Build an x86_64 debug APK for an emulator:
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```sh
+yarn build:android:dev
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+Build an arm64 debug APK for a device:
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+```sh
+yarn build:android:device
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Both commands copy their APK to `dist/`. Android configuration and managed
+emulator checks are available separately:
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```sh
+yarn test:android:config
+yarn test:android:managed
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+For a signed arm64 release, export `ANDROID_KEYSTORE_PATH`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`,
+then run:
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+```sh
+yarn build:android:release
+```
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Signing values and the temporary Gradle properties file remain outside Git.
+The resulting artifact is
+`dist/constellation-android-release-arm64-v8a.apk`.
+
+The managed test needs a working emulator and relay connectivity. It uses only
+synthetic coordinates.
+
+## Architecture and security
+
+Constellation is a self-contained repository. Temporary Taskyon protocol and
+libp2p snapshots live under `vendor/taskyon` and are imported by package name;
+released Taskyon packages can replace them later without changing application
+imports.
+
+Share capabilities stay in the URL fragment. The relay transports encrypted,
+capability-scoped streams and does not receive location history from the app.
+The application keeps only current observations in memory. Approximate sharing
+publishes a bounded area containing the real position rather than claiming a
+displaced point is exact.
+
+`SYSTEM_DEFINITION.csv` is the canonical record of requirements, current
+evidence, release scope and known limitations. Keep it synchronized with every
+behavioral change.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+MIT. See `LICENSE`.

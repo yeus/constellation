@@ -1,6 +1,10 @@
 node_modules/
 .direnv/
+.flatpak-builder/
+.tmp/
+.envrc
 dist/
+dist-tauri/
 dist-background/
 src-tauri/target/
 src-tauri/gen/schemas/
