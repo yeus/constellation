@@ -19,6 +19,7 @@ type BackgroundCommand =
       readonly request: {
         readonly precision: ShareDraft['precision']
         readonly viewerCapacity: ShareDraft['viewerCapacity']
+        readonly name: string
         readonly expiresAt: number | null
         readonly shareBaseUrl: string
       }
@@ -42,6 +43,8 @@ const draftFor = (
   duration: durationFor(request.expiresAt),
   viewerCapacity: request.viewerCapacity,
   untilRevokedAcknowledged: request.expiresAt === null,
+  name: request.name,
+  publication: 'background',
 })
 
 const start = (): void => {

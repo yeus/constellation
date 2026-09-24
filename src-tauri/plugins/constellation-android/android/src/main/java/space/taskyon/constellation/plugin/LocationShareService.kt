@@ -44,8 +44,11 @@ class LocationShareService : Service(), LocationListener {
       return START_NOT_STICKY
     }
     val request = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
-      ?: store.loadRequest()
-    if (request == null || expired(request)) {
+    if (request == null) {
+      failClosed("Background sharing stopped because its peer identity cannot be restored.")
+      return START_NOT_STICKY
+    }
+    if (expired(request)) {
       finishStop()
       return START_NOT_STICKY
     }
@@ -86,6 +89,7 @@ class LocationShareService : Service(), LocationListener {
     stopTask?.let(mainHandler::removeCallbacks)
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
+    ShareServiceContract.currentStatus = null
     super.onDestroy()
   }
 
@@ -155,7 +159,8 @@ class LocationShareService : Service(), LocationListener {
       "location-watch-stop" -> stopLocationUpdates()
       "status" -> {
         val status = parsed.optJSONObject("status") ?: return
-        store.saveStatus(status.toString())
+        ShareServiceContract.currentStatus = status.toString()
+        store.saveStatus(redactedStatus(status))
         val viewers = status.optJSONObject("share")?.optInt("viewerCount", 0) ?: 0
         ShareNotification.update(
           this,
@@ -215,12 +220,18 @@ class LocationShareService : Service(), LocationListener {
     return expiresAt >= 0 && System.currentTimeMillis() >= expiresAt
   }
 
+  private fun redactedStatus(status: JSONObject): String = JSONObject(status.toString())
+    .put("location", JSONObject().put("status", "unavailable"))
+    .toString()
+
   private fun failClosed(message: String) {
-    store.saveStatus(JSONObject()
+    val status = JSONObject()
       .put("state", "error")
       .put("location", JSONObject().put("status", "unavailable"))
       .put("message", message)
-      .toString())
+      .toString()
+    ShareServiceContract.currentStatus = status
+    store.saveStatus(status)
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }
@@ -243,6 +254,7 @@ class LocationShareService : Service(), LocationListener {
     stopLocationUpdates()
     store.clear()
     store.saveStatus(STOPPED_STATUS)
+    ShareServiceContract.currentStatus = STOPPED_STATUS
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }

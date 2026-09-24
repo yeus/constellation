@@ -23,9 +23,60 @@ class BackgroundShareArgs {
   var request: String = ""
 }
 
+@InvokeArg
+class PrivateStateArgs {
+  var state: String = ""
+}
+
 @TauriPlugin
 class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activity) {
   private val store by lazy { EncryptedShareStore(activity.applicationContext) }
+  private val privateStore by lazy {
+    EncryptedShareStore(
+      activity.applicationContext,
+      "private-ui-state-v1",
+      "constellation-private-ui-state-v1",
+      false,
+    )
+  }
+
+  @Command
+  fun takeSharedText(invoke: Invoke) {
+    val intent = activity.intent
+    val text = if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+      intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.length <= 8192 }
+    } else null
+    if (intent?.action == Intent.ACTION_SEND) {
+      intent.removeExtra(Intent.EXTRA_TEXT)
+      intent.action = Intent.ACTION_MAIN
+    }
+    val result = JSObject()
+    result.put("text", text ?: "")
+    invoke.resolve(result)
+  }
+
+  @Command
+  fun loadPrivateState(invoke: Invoke) {
+    try {
+      val result = JSObject()
+      result.put("state", privateStore.loadPrivateState() ?: "")
+      invoke.resolve(result)
+    } catch (_: Exception) {
+      invoke.reject("Protected location state could not be opened.")
+    }
+  }
+
+  @Command
+  fun savePrivateState(invoke: Invoke) {
+    try {
+      val state = invoke.parseArgs(PrivateStateArgs::class.java).state
+      JSONObject(state)
+      privateStore.savePrivateState(state)
+      invoke.resolve(JSObject())
+    } catch (_: Exception) {
+      invoke.reject("Protected location state could not be saved.")
+    }
+  }
 
   @Command
   fun startBackgroundShare(invoke: Invoke) {
@@ -35,8 +86,8 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       check(!serviceRunning()) { "Stop the current Android share before creating another." }
       val args = invoke.parseArgs(BackgroundShareArgs::class.java)
       val request = validateRequest(args.request)
-      store.saveRequest(request.toString())
       store.saveStatus(STARTING_STATUS)
+      ShareServiceContract.currentStatus = STARTING_STATUS
       val intent = Intent(activity, LocationShareService::class.java)
         .setAction(ShareServiceContract.ACTION_START)
         .putExtra(ShareServiceContract.EXTRA_REQUEST, request.toString())
@@ -50,11 +101,12 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   @Command
   fun backgroundShareStatus(invoke: Invoke) {
     try {
-      val stored = store.loadStatus() ?: STOPPED_STATUS
+      val stored = ShareServiceContract.currentStatus ?: store.loadStatus() ?: STOPPED_STATUS
       val state = runCatching { JSONObject(stored).optString("state") }.getOrDefault("error")
       if (state in setOf("sharing", "paused") && !serviceRunning()) {
         store.clear()
         store.saveStatus(INTERRUPTED_STATUS)
+        ShareServiceContract.currentStatus = INTERRUPTED_STATUS
         invoke.resolve(JSObject(INTERRUPTED_STATUS))
       } else {
         invoke.resolve(JSObject(stored))
@@ -131,6 +183,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     require(capacity == "unlimited" || capacity is Number && capacity.toInt() in 1..128) {
       "Background share capacity is invalid."
     }
+    require(request.optString("name").length <= 32) { "Background share name is invalid." }
     val expiresAt = if (request.isNull("expiresAt")) null else request.optLong("expiresAt")
     require(expiresAt == null || expiresAt > System.currentTimeMillis()) {
       "Background share has already expired."

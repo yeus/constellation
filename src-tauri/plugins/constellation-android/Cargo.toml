@@ -2,6 +2,7 @@
 name = "tauri-plugin-constellation-android"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 links = "tauri-plugin-constellation-android"
 
 [dependencies]

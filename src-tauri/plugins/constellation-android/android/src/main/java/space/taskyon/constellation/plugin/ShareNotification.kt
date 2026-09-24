@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 
 internal object ShareServiceContract {
+  @Volatile var currentStatus: String? = null
   const val ACTION_START = "space.taskyon.constellation.START_LOCATION_SHARE"
   const val ACTION_STOP = "space.taskyon.constellation.STOP_LOCATION_SHARE"
   const val EXTRA_REQUEST = "space.taskyon.constellation.SHARE_REQUEST"
@@ -29,7 +30,7 @@ internal object ShareNotification {
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
     val builder = NotificationCompat.Builder(context, ShareServiceContract.CHANNEL_ID)
-      .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+      .setSmallIcon(R.drawable.ic_stat_constellation)
       .setContentTitle("Constellation is sharing your location")
       .setContentText(body)
       .setCategory(Notification.CATEGORY_SERVICE)

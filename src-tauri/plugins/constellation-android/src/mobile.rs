@@ -41,4 +41,22 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .run_mobile_plugin("stopBackgroundShare", json!({}))
             .map_err(Into::into)
     }
+
+    pub fn take_shared_text(&self) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin("takeSharedText", json!({}))
+            .map_err(Into::into)
+    }
+
+    pub fn load_private_state(&self) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin("loadPrivateState", json!({}))
+            .map_err(Into::into)
+    }
+
+    pub fn save_private_state(&self, state: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin("savePrivateState", json!({ "state": state }))
+            .map_err(Into::into)
+    }
 }
