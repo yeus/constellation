@@ -7,7 +7,7 @@
           <h2>Share this QR code</h2>
         </div>
         <button class="icon-button" type="button" aria-label="Close" @click="emit('close')">
-          ×
+          <CloseIcon />
         </button>
       </header>
       <img v-if="qrCode" class="share-ready__qr" :src="qrCode" alt="Location share QR code" />
@@ -24,6 +24,7 @@
 </template>
 
 <script setup lang="ts">
+import CloseIcon from './icons/CloseIcon.vue'
 import QRCode from 'qrcode'
 import { computed, onMounted, ref } from 'vue'
 

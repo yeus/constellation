@@ -6,6 +6,8 @@ import {
   canCreateShare,
   createShareDraft,
   setDuration,
+  setName,
+  setPublication,
   setPrecision,
   setViewerCapacity,
 } from './shareDraft.ts'
@@ -16,7 +18,20 @@ test('new shares use privacy-preserving defaults', () => {
     duration: '1h',
     viewerCapacity: 1,
     untilRevokedAcknowledged: false,
+    name: '',
+    publication: 'foreground',
   })
+})
+
+test('name and publication mode remain independent per link', () => {
+  const initial = createShareDraft()
+  const named = setName(initial, '  River  ')
+  const background = setPublication(named, 'background')
+
+  assert.equal(initial.name, '')
+  assert.equal(named.name, 'River')
+  assert.equal(background.publication, 'background')
+  assert.equal(canCreateShare(setName(initial, 'x'.repeat(33))), false)
 })
 
 test('share updates return new drafts without mutating the original', () => {

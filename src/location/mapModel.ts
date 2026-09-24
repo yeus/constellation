@@ -13,6 +13,7 @@ export interface MapLocation {
   readonly accuracyMeters?: number
   readonly radiusMeters?: number
   readonly label?: string
+  readonly color?: string
   readonly state?: 'live' | 'delayed' | 'stale'
 }
 
@@ -21,14 +22,16 @@ interface LocationProperties {
   readonly precision: MapLocation['precision']
   readonly shape: 'position' | 'accuracy' | 'approximate'
   readonly label?: string
+  readonly color?: string
   readonly state: NonNullable<MapLocation['state']>
 }
 
 export const locationObservationToMapLocation = (
   observation: LocationObservationV1,
   state: NonNullable<MapLocation['state']> = 'live',
+  display: { readonly id?: string; readonly label?: string; readonly color?: string } = {},
 ): MapLocation => ({
-  id: observation.sourceId,
+  id: display.id ?? observation.sourceId,
   latitude: observation.latitude,
   longitude: observation.longitude,
   precision: observation.precision,
@@ -36,6 +39,8 @@ export const locationObservationToMapLocation = (
     ? { accuracyMeters: observation.accuracyMeters }
     : { radiusMeters: observation.accuracyMeters }),
   state,
+  ...(display.label ? { label: display.label } : {}),
+  ...(display.color ? { color: display.color } : {}),
 })
 
 const assertLocation = (location: MapLocation): void => {
@@ -60,12 +65,13 @@ const propertiesFor = (
   shape,
   state: location.state ?? 'live',
   ...(location.label === undefined ? {} : { label: location.label }),
+  ...(location.color === undefined ? {} : { color: location.color }),
 })
 
-const uncertaintyRing = (location: MapLocation, radius: number): number[][] => {
+const uncertaintyRing = (location: MapLocation, radius: number): [number, number][] => {
   const latitudeRadians = (location.latitude * Math.PI) / 180
   const angularDistance = radius / EARTH_RADIUS_METERS
-  const ring = Array.from({ length: AREA_SEGMENTS }, (_, index) => {
+  const ring: [number, number][] = Array.from({ length: AREA_SEGMENTS }, (_, index) => {
     const bearing = (index / AREA_SEGMENTS) * Math.PI * 2
     const latitude = Math.asin(
       Math.sin(latitudeRadians) * Math.cos(angularDistance) +
@@ -97,6 +103,54 @@ const areaFeature = (
   },
 })
 
+export const locationAreaBounds = (
+  location: MapLocation,
+): [[number, number], [number, number]] | undefined => {
+  assertLocation(location)
+  const radius =
+    location.precision === 'approximate' ? location.radiusMeters : location.accuracyMeters
+  if (radius === undefined) return undefined
+  if (!Number.isFinite(radius) || radius <= 0)
+    throw new RangeError(`Invalid area radius for ${location.id}.`)
+  const ring = uncertaintyRing(location, radius)
+  return [
+    [
+      Math.min(...ring.map(([longitude]) => longitude)),
+      Math.min(...ring.map(([, latitude]) => latitude)),
+    ],
+    [
+      Math.max(...ring.map(([longitude]) => longitude)),
+      Math.max(...ring.map(([, latitude]) => latitude)),
+    ],
+  ]
+}
+
+export const locationsBounds = (
+  locations: readonly MapLocation[],
+): [[number, number], [number, number]] | undefined => {
+  const anchor = locations[0]?.longitude
+  if (anchor === undefined) return undefined
+  return locations.reduce<[[number, number], [number, number]] | undefined>(
+    (combined, location) => {
+      const area: [[number, number], [number, number]] = locationAreaBounds(location) ?? [
+        [location.longitude, location.latitude],
+        [location.longitude, location.latitude],
+      ]
+      const shift = 360 * Math.round((anchor - location.longitude) / 360)
+      const next: [[number, number], [number, number]] = [
+        [area[0][0] + shift, area[0][1]],
+        [area[1][0] + shift, area[1][1]],
+      ]
+      if (!combined) return next
+      return [
+        [Math.min(combined[0][0], next[0][0]), Math.min(combined[0][1], next[0][1])],
+        [Math.max(combined[1][0], next[1][0]), Math.max(combined[1][1], next[1][1])],
+      ]
+    },
+    undefined,
+  )
+}
+
 const featuresFor = (location: MapLocation): Feature<Point | Polygon, LocationProperties>[] => {
   assertLocation(location)
   if (location.precision === 'approximate') {
@@ -116,6 +170,10 @@ const featuresFor = (location: MapLocation): Feature<Point | Polygon, LocationPr
   ) {
     throw new RangeError(`Invalid accuracy for ${location.id}.`)
   }
+  if (location.accuracyMeters !== undefined) {
+    return [areaFeature(location, location.accuracyMeters, 'accuracy')]
+  }
+
   const point: Feature<Point, LocationProperties> = {
     type: 'Feature',
     properties: propertiesFor(location, 'position'),
@@ -124,12 +182,7 @@ const featuresFor = (location: MapLocation): Feature<Point | Polygon, LocationPr
       coordinates: [location.longitude, location.latitude],
     },
   }
-  return [
-    point,
-    ...(location.accuracyMeters === undefined
-      ? []
-      : [areaFeature(location, location.accuracyMeters, 'accuracy')]),
-  ]
+  return [point]
 }
 
 export const createLocationFeatureCollection = (

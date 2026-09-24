@@ -20,6 +20,7 @@ export const shareProtocolV1 = defineFrpServiceProtocol({
         sessionId: z.string().min(16).max(64),
         expiresAt: z.number().int().positive().nullable(),
         precision: z.enum(['exact', 'approximate']),
+        sourceName: z.string().max(32).optional(),
         heartbeatIntervalMs: z.number().int().min(5_000).max(60_000),
       }),
       defaultTimeoutMs: 10_000,

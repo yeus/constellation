@@ -33,6 +33,9 @@
   --privacy-text: #566376;
   --selected-text: #2a3548;
   --warning-text: #7a3d0b;
+  --error-background: #fff1f1;
+  --error-border: #be535d;
+  --error-text: #84242e;
   --backdrop: rgba(19, 27, 38, 0.46);
   --button-shadow: rgba(42, 53, 72, 0.22);
   --sheet-shadow: rgba(42, 53, 72, 0.2);
@@ -58,6 +61,9 @@
     --privacy-text: #b7c1ce;
     --selected-text: #ffffff;
     --warning-text: #f7cfaf;
+    --error-background: #321c22;
+    --error-border: #e87179;
+    --error-text: #ffd5d8;
     --backdrop: rgba(3, 6, 10, 0.66);
     --button-shadow: rgba(0, 0, 0, 0.32);
     --sheet-shadow: rgba(0, 0, 0, 0.5);
@@ -97,9 +103,13 @@ button {
   background: var(--page-background);
 }
 
+.map-screen--actions-open {
+  --map-control-lift: 3.75rem;
+}
+
 .map-surface {
   position: absolute;
-  inset: 0;
+  inset: 0 0 calc(4rem + env(safe-area-inset-bottom)) 0;
   display: grid;
   place-items: center;
   background-color: var(--map-background);
@@ -135,9 +145,7 @@ button {
   box-shadow: 0 0 0 10px var(--accent-shadow);
 }
 
-.top-bar,
-.status-card,
-.share-button {
+.top-bar {
   position: absolute;
   z-index: 2;
 }
@@ -149,11 +157,10 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: max(1rem, env(safe-area-inset-top)) 1rem 1rem;
+  padding: max(1.7rem, calc(env(safe-area-inset-top) + 0.85rem)) 1rem 1rem;
 }
 
-.brand,
-.connection-state {
+.brand-button {
   display: flex;
   align-items: center;
   gap: 0.55rem;
@@ -165,18 +172,111 @@ button {
   backdrop-filter: blur(18px);
 }
 
-.brand {
-  font-weight: 720;
+.brand-button {
+  width: 2.5rem;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.brand-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.brand-wordmark {
+  position: absolute;
+  top: max(0.25rem, env(safe-area-inset-top));
+  right: 1rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
   letter-spacing: -0.02em;
 }
 
-.brand-mark {
-  color: var(--accent);
+.intro-note {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  width: min(20rem, calc(100% - 2rem));
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: var(--surface-strong);
+  box-shadow: 0 0.6rem 1.8rem var(--sheet-shadow);
+  transform: translate(-50%, -50%);
 }
 
-.connection-state {
+.intro-note p:not(.eyebrow) {
   color: var(--muted);
   font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.intro-note__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.intro-note__actions button {
+  min-height: 2.2rem;
+  padding: 0 0.6rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: var(--control-fill);
+  cursor: pointer;
+}
+
+.app-menu {
+  position: absolute;
+  z-index: 4;
+  top: max(4.3rem, calc(env(safe-area-inset-top) + 3.3rem));
+  left: 1rem;
+  display: grid;
+  gap: 0.25rem;
+  min-width: 12rem;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: var(--surface-strong);
+  box-shadow: 0 0.6rem 1.8rem var(--sheet-shadow);
+}
+
+.app-menu button {
+  min-height: 2.5rem;
+  padding: 0 0.65rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-menu button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--selected-text);
+}
+
+.recenter-button {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px var(--sheet-shadow));
+}
+
+.recenter-button svg {
+  width: 2.15rem;
+  height: 2.15rem;
 }
 
 .connection-state__dot {
@@ -190,28 +290,11 @@ button {
   background: #36a269;
 }
 
-.status-card__details {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-
-.status-card__stop {
-  min-height: 2rem;
-  padding: 0 0.65rem;
-  border: 1px solid var(--accent-border);
-  border-radius: 999px;
-  background: var(--accent-soft);
-  cursor: pointer;
-}
-
 .accept-card {
   position: absolute;
   z-index: 3;
   left: 50%;
-  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  bottom: calc(6.8rem + env(safe-area-inset-bottom));
   width: min(30rem, calc(100% - 2rem));
   padding: 1.1rem;
   border: 1px solid var(--border);
@@ -221,25 +304,113 @@ button {
   transform: translateX(-50%);
 }
 
+.map-screen--actions-open .accept-card {
+  bottom: calc(10.6rem + env(safe-area-inset-bottom));
+}
+
 .accept-card p:not(.eyebrow) {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.45;
 }
 
-.status-card {
-  left: 50%;
-  bottom: 6.7rem;
-  width: min(30rem, calc(100% - 2rem));
+.connection-dock {
+  position: absolute;
+  z-index: 2;
+  inset: auto 0 0;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.25rem 0.75rem calc(0.3rem + env(safe-area-inset-bottom));
+  background: transparent;
+}
+
+.dock-status {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.9rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 1rem;
-  background: var(--surface);
-  backdrop-filter: blur(18px);
+  justify-content: center;
+  gap: 0.25rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.1;
+}
+
+.dock-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.quick-action-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  position: absolute;
+  bottom: calc(100% + 0.55rem);
+  left: 50%;
+  width: min(26rem, calc(100vw - 1.5rem));
   transform: translateX(-50%);
+}
+.quick-action-row button {
+  display: grid;
+  place-content: center;
+  gap: 0.1rem;
+  min-height: 3rem;
+  border-radius: 0.75rem;
+  background: var(--accent);
+  color: #1b1008;
+  box-shadow: 0 0.45rem 1.2rem var(--button-shadow);
+}
+
+.quick-action-row small {
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.connection-dock button {
+  border: 0;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.dock-side {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+  min-height: 2.35rem;
+  padding: 0 0.45rem;
+  border-radius: 0.75rem;
+  background: var(--surface);
+  backdrop-filter: blur(10px);
+  color: var(--text);
+}
+
+.dock-add {
+  display: grid;
+  place-items: center;
+  width: 2.35rem;
+  min-width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+}
+
+.connection-dock svg {
+  width: 1rem;
+  height: 1rem;
+}
+.dock-add svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+.preview-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.preview-actions > button {
+  flex: 1;
 }
 
 .eyebrow {
@@ -249,33 +420,6 @@ button {
   font-weight: 720;
   letter-spacing: 0.11em;
   text-transform: uppercase;
-}
-
-.status-card__privacy {
-  padding: 0.35rem 0.6rem;
-  border-radius: 999px;
-  color: var(--privacy-text);
-  background: var(--privacy-fill);
-  font-size: 0.74rem;
-}
-
-.share-button {
-  left: 50%;
-  bottom: max(1.25rem, env(safe-area-inset-bottom));
-  width: min(30rem, calc(100% - 2rem));
-  min-height: 4.25rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.65rem;
-  border: 0;
-  border-radius: 1.1rem;
-  background: var(--accent);
-  color: #1b1008;
-  box-shadow: 0 1rem 2.5rem var(--button-shadow);
-  font-weight: 780;
-  transform: translateX(-50%);
-  cursor: pointer;
 }
 
 .sheet-backdrop {
@@ -322,6 +466,12 @@ button {
   background: var(--control-fill);
   font-size: 1.4rem;
   cursor: pointer;
+}
+
+.icon-button svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  vertical-align: middle;
 }
 
 fieldset {
@@ -487,7 +637,7 @@ legend {
   position: fixed;
   z-index: 20;
   left: 50%;
-  bottom: 1.25rem;
+  bottom: calc(6.8rem + env(safe-area-inset-bottom));
   width: max-content;
   max-width: calc(100% - 2rem);
   margin: 0;
@@ -498,6 +648,10 @@ legend {
   color: var(--toast-text);
   font-size: 0.8rem;
   transform: translateX(-50%);
+}
+
+.map-screen--actions-open .toast {
+  bottom: calc(10.6rem + env(safe-area-inset-bottom));
 }
 
 @media (min-width: 700px) {
@@ -517,6 +671,115 @@ legend {
 
   .viewer-options {
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .share-backdrop {
+    padding: max(0.5rem, env(safe-area-inset-top)) 0.75rem max(0.5rem, env(safe-area-inset-bottom));
+  }
+
+  .share-sheet--create {
+    min-height: 0;
+    max-height: calc(100dvh - 1rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    padding: 0.85rem;
+    border-radius: 1.1rem;
+  }
+
+  .share-sheet--create .sheet-header {
+    align-items: center;
+    margin-bottom: 0.1rem;
+  }
+
+  .share-sheet--create .sheet-header h2 {
+    font-size: 1.2rem;
+  }
+
+  .share-sheet--create > .field-help {
+    margin: 0;
+    font-size: 0.7rem;
+    line-height: 1.3;
+  }
+
+  .share-sheet--create .share-name {
+    gap: 0.25rem;
+    margin: 0;
+    font-size: 0.75rem;
+  }
+
+  .share-sheet--create .share-name input {
+    min-height: 2.35rem;
+  }
+
+  .share-sheet--create fieldset {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .share-sheet--create legend {
+    margin-bottom: 0.35rem;
+    font-size: 0.75rem;
+  }
+
+  .share-sheet--create .choice-grid {
+    gap: 0.4rem;
+  }
+
+  .share-sheet--create .choice {
+    min-height: 3.2rem;
+    padding: 0.5rem;
+    border-radius: 0.7rem;
+  }
+
+  .share-sheet--create .choice strong {
+    font-size: 0.8rem;
+  }
+
+  .share-sheet--create .choice span {
+    font-size: 0.65rem;
+  }
+
+  .share-sheet--create .choice-grid--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .share-sheet--create .choice--compact {
+    min-height: 2.5rem;
+    padding: 0.35rem;
+  }
+
+  .share-sheet--create .viewer-options {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.35rem;
+  }
+
+  .share-sheet--create .viewer-option {
+    min-height: 2.25rem;
+    padding: 0.2rem 0.35rem;
+    font-size: 0.7rem;
+  }
+
+  .share-sheet--create fieldset .field-help {
+    margin: 0.3rem 0 0;
+    font-size: 0.65rem;
+    line-height: 1.25;
+  }
+
+  .share-sheet--create .warning {
+    margin: 0;
+    padding: 0.45rem 0.55rem;
+    font-size: 0.72rem;
+  }
+
+  .share-sheet--create .primary-action {
+    min-height: 2.9rem;
+  }
+
+  .share-sheet--create .runtime-note {
+    margin: 0;
+    font-size: 0.66rem;
+    line-height: 1.25;
   }
 }
 

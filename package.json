@@ -2,6 +2,7 @@
   "name": "constellation",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "vendor/taskyon/*"
   ],
@@ -12,6 +13,7 @@
   },
   "scripts": {
     "build:vendor": "yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build",
+    "icons:generate": "tauri icon assets/icon-manifest.json -o src-tauri/icons",
     "dev": "yarn build:vendor && vite",
     "dev:tauri:frontend": "yarn build:vendor && vite --mode tauri",
     "build": "yarn build:vendor && vue-tsc --noEmit && vite build",
@@ -41,8 +43,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@libp2p/crypto": "5.1.23",
     "@libp2p/interface": "3.3.0",
     "@multiformats/multiaddr": "13.0.3",
+    "@protomaps/basemaps": "5.7.2",
     "@taskyon/p2p-core": "workspace:*",
     "@taskyon/protocol": "workspace:*",
     "@tauri-apps/api": "2.11.1",

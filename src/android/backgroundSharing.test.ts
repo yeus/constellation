@@ -12,6 +12,8 @@ const draft: ShareDraft = {
   duration: '1h',
   viewerCapacity: 10,
   untilRevokedAcknowledged: false,
+  name: 'River',
+  publication: 'background',
 }
 
 const readyStatus: AndroidBackgroundStatus = {
@@ -69,6 +71,7 @@ test('Android start request contains policy but no location', async () => {
         request: {
           precision: 'approximate',
           viewerCapacity: 10,
+          name: 'River',
           expiresAt: 3_601_000,
           shareBaseUrl: 'https://constellation.taskyon.space/',
         },

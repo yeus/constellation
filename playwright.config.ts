@@ -14,9 +14,19 @@ export default defineConfig({
     { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
     { name: 'mobile', use: { ...devices['Pixel 5'] } },
   ],
-  webServer: {
-    command: 'corepack yarn dev --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-  },
+  webServer: [
+    {
+      command: 'node scripts/e2e-relay.mjs',
+      url: 'http://127.0.0.1:9113/health',
+      stdout: 'ignore',
+      stderr: 'ignore',
+      reuseExistingServer: false,
+    },
+    {
+      command: 'corepack yarn vite --host 127.0.0.1 --port 4173',
+      url: 'http://127.0.0.1:4173',
+      env: { VITE_CONSTELLATION_RELAY_ADDRS: '/ip4/127.0.0.1/tcp/9111/ws' },
+      reuseExistingServer: false,
+    },
+  ],
 })

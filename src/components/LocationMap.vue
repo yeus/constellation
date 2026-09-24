@@ -1,20 +1,32 @@
 <template>
   <div class="location-map">
     <div ref="mapElement" class="location-map__canvas" />
-    <p v-if="mapNotice" class="location-map__notice" role="status">
+    <p v-if="mapNotice" class="location-map__notice" role="alert">
       {{ mapNotice }}
     </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import type { GeoJSONSource, StyleSpecification } from 'maplibre-gl'
+import type { GeoJSONSource } from 'maplibre-gl'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { createLocationFeatureCollection, type MapLocation } from '../location/mapModel.ts'
-import { createPmtilesRuntime, DEFAULT_WORLD_PMTILES_URL } from '../map/pmtiles.ts'
+import { describeDiagnosticError, type SessionLogInput } from '../diagnostics/sessionLog.ts'
+import {
+  createLocationFeatureCollection,
+  locationAreaBounds,
+  locationsBounds,
+  type MapLocation,
+} from '../location/mapModel.ts'
+import {
+  createPmtilesRuntime,
+  createWorldStyle,
+  DEFAULT_WORLD_PMTILES_URL,
+  MAP_ATTRIBUTION,
+  type MapFamily,
+} from '../map/pmtiles.ts'
 
 const LOCATION_SOURCE_ID = 'constellation-locations'
 
@@ -22,9 +34,14 @@ const props = withDefaults(
   defineProps<{
     locations: readonly MapLocation[]
     pmtilesUrl?: string
+    mapFamily?: MapFamily
   }>(),
-  { pmtilesUrl: DEFAULT_WORLD_PMTILES_URL },
+  { pmtilesUrl: DEFAULT_WORLD_PMTILES_URL, mapFamily: 'default' },
 )
+const emit = defineEmits<{
+  select: [shareId: string]
+  diagnostic: [entry: SessionLogInput]
+}>()
 
 const mapElement = ref<HTMLDivElement | null>(null)
 const mapNotice = ref('')
@@ -33,22 +50,8 @@ const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
 const runtime = createPmtilesRuntime()
 let map: maplibregl.Map | null = null
 
-const mapBackground = (): string =>
-  getComputedStyle(document.documentElement).getPropertyValue('--map-background').trim()
-
-const style = (): StyleSpecification => ({
-  version: 8,
-  sources: {},
-  layers: [
-    {
-      id: 'background',
-      type: 'background',
-      paint: { 'background-color': mapBackground() },
-    },
-  ],
-})
-
 const addLocationLayers = (target: maplibregl.Map): void => {
+  if (target.getSource(LOCATION_SOURCE_ID)) return
   target.addSource(LOCATION_SOURCE_ID, {
     type: 'geojson',
     data: createLocationFeatureCollection(props.locations),
@@ -59,7 +62,7 @@ const addLocationLayers = (target: maplibregl.Map): void => {
     source: LOCATION_SOURCE_ID,
     filter: ['==', ['geometry-type'], 'Polygon'],
     paint: {
-      'fill-color': '#f78f3b',
+      'fill-color': ['coalesce', ['get', 'color'], '#f78f3b'],
       'fill-opacity': ['match', ['get', 'state'], 'stale', 0.1, 'delayed', 0.18, 0.26],
     },
   })
@@ -68,7 +71,7 @@ const addLocationLayers = (target: maplibregl.Map): void => {
     type: 'line',
     source: LOCATION_SOURCE_ID,
     filter: ['==', ['geometry-type'], 'Polygon'],
-    paint: { 'line-color': '#f78f3b', 'line-width': 2 },
+    paint: { 'line-color': ['coalesce', ['get', 'color'], '#f78f3b'], 'line-width': 2 },
   })
   target.addLayer({
     id: `${LOCATION_SOURCE_ID}-points`,
@@ -76,7 +79,13 @@ const addLocationLayers = (target: maplibregl.Map): void => {
     source: LOCATION_SOURCE_ID,
     filter: ['==', ['geometry-type'], 'Point'],
     paint: {
-      'circle-color': ['match', ['get', 'state'], 'stale', '#7b8794', '#f78f3b'],
+      'circle-color': [
+        'match',
+        ['get', 'state'],
+        'stale',
+        '#7b8794',
+        ['coalesce', ['get', 'color'], '#f78f3b'],
+      ],
       'circle-radius': 7,
       'circle-stroke-color': theme.value === 'dark' ? '#ffffff' : '#2a3548',
       'circle-stroke-width': 2,
@@ -92,7 +101,8 @@ const canRenderWebGL = (): boolean => {
 }
 
 const showMapUnavailable = (): void => {
-  mapNotice.value = 'Map rendering unavailable; location sharing remains available.'
+  mapNotice.value = 'WebGL unavailable: this browser could not create a rendering context.'
+  emit('diagnostic', { level: 'error', event: 'map.webgl.unavailable' })
 }
 
 const initialize = (): void => {
@@ -103,51 +113,99 @@ const initialize = (): void => {
       return
     }
     runtime.setup()
+    emit('diagnostic', { level: 'info', event: 'map.runtime.ready' })
     map = new maplibregl.Map({
       container: mapElement.value,
-      style: style(),
+      style: createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value),
       center: [0, 20],
       zoom: 1.5,
       attributionControl: false,
     })
     map.addControl(new maplibregl.NavigationControl(), 'bottom-right')
-    map.on('error', () => {
-      if (!mapNotice.value) {
-        mapNotice.value = 'Map tiles could not be displayed; location sharing remains available.'
-      }
+    map.addControl(
+      new maplibregl.AttributionControl({ compact: false, customAttribution: MAP_ATTRIBUTION }),
+      'bottom-right',
+    )
+    map.on('click', (event) => {
+      if (!map) return
+      const layers = [`${LOCATION_SOURCE_ID}-points`, `${LOCATION_SOURCE_ID}-areas`].filter((id) =>
+        map?.getLayer(id),
+      )
+      if (layers.length === 0) return
+      const id = map.queryRenderedFeatures(event.point, { layers })[0]?.properties?.id
+      if (typeof id === 'string') emit('select', id)
     })
-    map.on('load', () => {
-      void (async () => {
-        if (!map) return
-        try {
-          await runtime.addWorldMap(map, props.pmtilesUrl, theme.value)
-        } catch {
-          mapNotice.value = 'Basemap data could not be loaded; location sharing remains available.'
-        }
-        runtime.updateTheme(map, theme.value)
-        addLocationLayers(map)
-      })()
+    map.on('style.load', () => {
+      if (map) addLocationLayers(map)
+      emit('diagnostic', { level: 'info', event: 'map.style.loaded' })
     })
-  } catch {
+    map.on('error', ({ error }) => {
+      const detail = describeDiagnosticError(error)
+      mapNotice.value = `Map error (${detail.category}): ${detail.message}`
+      emit('diagnostic', { level: 'error', event: 'map.error', ...detail })
+    })
+    void runtime.verifyArchive(props.pmtilesUrl).then(
+      () => emit('diagnostic', { level: 'info', event: 'map.archive.verified' }),
+      (error: unknown) => {
+        const detail = describeDiagnosticError(error)
+        mapNotice.value = `Basemap error (${detail.category}): ${detail.message}`
+        emit('diagnostic', { level: 'error', event: 'map.archive.failed', ...detail })
+      },
+    )
+  } catch (error) {
     map?.remove()
     map = null
     runtime.dispose()
-    showMapUnavailable()
+    const detail = describeDiagnosticError(error)
+    mapNotice.value = `Map initialization error (${detail.category}): ${detail.message}`
+    emit('diagnostic', { level: 'error', event: 'map.error', ...detail })
   }
 }
 
 const updateLocations = (): void => {
   const source = map?.getSource<GeoJSONSource>(LOCATION_SOURCE_ID)
-  source?.setData(createLocationFeatureCollection(props.locations))
+  if (source) source.setData(createLocationFeatureCollection(props.locations))
 }
 
 const updateTheme = (event: MediaQueryListEvent): void => {
   theme.value = event.matches ? 'dark' : 'light'
-  map?.setPaintProperty('background', 'background-color', mapBackground())
-  if (map) runtime.updateTheme(map, theme.value)
+  map?.setStyle(createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value))
 }
 
+const fitAreaBounds = (bounds: [[number, number], [number, number]]): void => {
+  if (!map) return
+  const { clientWidth, clientHeight } = map.getContainer()
+  map.fitBounds(bounds, {
+    padding: {
+      top: Math.min(80, clientHeight / 4),
+      bottom: Math.min(80, clientHeight / 4),
+      left: Math.min(40, clientWidth / 8),
+      right: Math.min(40, clientWidth / 8),
+    },
+    maxZoom: 17,
+  })
+}
+const centerOn = (location: MapLocation): void => {
+  if (!map) return
+  const bounds = locationAreaBounds(location)
+  if (bounds) fitAreaBounds(bounds)
+  else
+    map.flyTo({
+      center: [location.longitude, location.latitude],
+      zoom: Math.max(map.getZoom(), 13),
+    })
+}
+const focusLocations = (locations: readonly MapLocation[]): void => {
+  const bounds = locationsBounds(locations)
+  if (bounds) fitAreaBounds(bounds)
+}
+defineExpose({ centerOn, focusLocations })
+
 watch(() => props.locations, updateLocations, { deep: true })
+watch(
+  () => props.mapFamily,
+  () => map?.setStyle(createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value)),
+)
 onMounted(() => {
   darkScheme.addEventListener('change', updateTheme)
   initialize()
@@ -172,7 +230,30 @@ onBeforeUnmount(() => {
 }
 
 :deep(.maplibregl-ctrl-bottom-right) {
-  bottom: 12rem;
+  bottom: 0;
+}
+
+:deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group) {
+  position: absolute;
+  right: 0;
+  bottom: calc(2.25rem + var(--map-control-lift, 0rem));
+}
+
+:deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib) {
+  position: relative;
+  bottom: var(--map-control-lift, 0rem);
+  margin: 0 4px 2px 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.625rem;
+  line-height: 1.1;
+  text-align: right;
+  text-shadow: 0 1px 2px var(--page-background);
+}
+
+:deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib a) {
+  color: var(--text);
 }
 
 .location-map__notice {
@@ -185,10 +266,10 @@ onBeforeUnmount(() => {
   max-width: min(22rem, calc(100% - 2rem));
   margin: 0;
   padding: 0.65rem 0.8rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--error-border);
   border-radius: 0.8rem;
-  background: var(--surface);
-  color: var(--muted);
+  background: var(--error-background);
+  color: var(--error-text);
   font-size: 0.75rem;
   backdrop-filter: blur(18px);
 }

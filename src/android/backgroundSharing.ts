@@ -76,6 +76,7 @@ export const createAndroidBackgroundSharing = (
           request: {
             precision: draft.precision,
             viewerCapacity: draft.viewerCapacity,
+            name: draft.name,
             expiresAt: shareExpiryFor(draft, dependencies.now()),
             shareBaseUrl,
           },

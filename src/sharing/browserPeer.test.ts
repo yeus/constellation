@@ -3,7 +3,20 @@ import test from 'node:test'
 
 import type { BrowserLibp2pNode } from '@taskyon/p2p-core/browser'
 
-import { dialShareStream, orderShareAddresses, requireReachablePeer } from './browserPeer.ts'
+import {
+  dialShareStream,
+  orderShareAddresses,
+  reachableRelayAddresses,
+  requireReachablePeer,
+} from './browserPeer.ts'
+
+test('finds a reserved relay address using the connected address form', () => {
+  const connected = '/ip4/192.0.2.10/tcp/443/wss/p2p/relay'
+  const circuit = `${connected}/p2p-circuit/p2p/source`
+
+  assert.deepEqual(reachableRelayAddresses([circuit], connected), [circuit])
+  assert.deepEqual(reachableRelayAddresses([circuit], '/dns4/relay.invalid/tcp/443/wss'), [])
+})
 
 test('prefers plain circuit relay before WebRTC-over-relay', () => {
   const webRtc = '/dns4/relay.invalid/tcp/443/wss/p2p-circuit/webrtc'

@@ -1,12 +1,15 @@
 export type LocationPrecision = 'approximate' | 'exact'
 export type ShareDuration = '1h' | '8h' | 'until-revoked'
 export type ViewerCapacity = 1 | 10 | 50 | 'unlimited'
+export type SharePublication = 'foreground' | 'background'
 
 export interface ShareDraft {
   readonly precision: LocationPrecision
   readonly duration: ShareDuration
   readonly viewerCapacity: ViewerCapacity
   readonly untilRevokedAcknowledged: boolean
+  readonly name: string
+  readonly publication: SharePublication
 }
 
 export const createShareDraft = (): ShareDraft => ({
@@ -14,6 +17,8 @@ export const createShareDraft = (): ShareDraft => ({
   duration: '1h',
   viewerCapacity: 1,
   untilRevokedAcknowledged: false,
+  name: '',
+  publication: 'foreground',
 })
 
 export const setPrecision = (draft: ShareDraft, precision: LocationPrecision): ShareDraft => ({
@@ -37,8 +42,18 @@ export const acknowledgeUntilRevoked = (
   untilRevokedAcknowledged: boolean,
 ): ShareDraft => ({ ...draft, untilRevokedAcknowledged })
 
+export const setName = (draft: ShareDraft, name: string): ShareDraft => ({
+  ...draft,
+  name: name.trim(),
+})
+
+export const setPublication = (draft: ShareDraft, publication: SharePublication): ShareDraft => ({
+  ...draft,
+  publication,
+})
+
 export const canCreateShare = (draft: ShareDraft): boolean =>
-  draft.duration !== 'until-revoked' || draft.untilRevokedAcknowledged
+  draft.name.length <= 32 && (draft.duration !== 'until-revoked' || draft.untilRevokedAcknowledged)
 
 export const shareExpiryFor = (draft: ShareDraft, now: number): number | null => {
   if (draft.duration === '1h') return now + 60 * 60 * 1_000

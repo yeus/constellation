@@ -1,5 +1,7 @@
 import { createPortClient, createPortServer } from '@taskyon/protocol'
 import type { BrowserLibp2pNode } from '@taskyon/p2p-core/browser'
+import type { PrivateKey } from '@libp2p/interface'
+import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 
 import { projectApproximateLocation, type ApproximationState } from '../location/approximation.ts'
 import type { BrowserLocationSource, BrowserLocationState } from '../location/browser.ts'
@@ -19,6 +21,7 @@ import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { createRedemptionProof, verifyRedemptionProof } from './shareAuth.ts'
 import { createShareInvitation, parseShareInvitation, type ShareCapability } from './shareLink.ts'
 import { constellationProtocolV1, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import type { createBrowserPrivateStore, PrivateState } from './privateStore.ts'
 
 const LOCATION_SENSOR_ID = 'location'
 const DESCRIPTOR_REVISION = 'constellation-location-v1'
@@ -35,26 +38,45 @@ export interface ShareSummary {
   readonly precision: ShareDraft['precision']
   readonly expiresAt: number | null
   readonly viewerCount: number
+  readonly viewers?: readonly { fingerprint: string; lastSeenAt: number }[]
+  readonly name?: string
+  readonly publication?: ShareDraft['publication']
 }
+
+export interface FollowSummary {
+  readonly shareId: string
+  readonly sourceName?: string
+  readonly localName: string
+  readonly color: string
+  readonly connected: boolean
+  readonly saved: boolean
+}
+
+export const FOLLOW_COLORS = ['#438ec9', '#8a6fc9', '#289a82', '#c0709a'] as const
 
 export interface SharingRuntimeState {
   readonly peerStatus: PeerStatus
   readonly location: BrowserLocationState
   readonly shares: readonly ShareSummary[]
   readonly received: readonly {
+    shareId: string
     observation: LocationObservationV1
     state: 'live' | 'delayed' | 'stale'
   }[]
+  readonly following: readonly FollowSummary[]
   readonly message: string
+  readonly canSave: boolean
 }
 
 interface SourceSession {
   readonly peerId: string
   readonly close: () => Promise<void>
+  readonly closeAfterFlush: () => Promise<void>
   readonly send: (message: ConstellationMessage) => void
   sessionId?: string
   subscriptionId?: string
   lastHeartbeatAt: number
+  fingerprint?: string
 }
 
 interface SourceShare {
@@ -63,10 +85,43 @@ interface SourceShare {
   readonly secret: Uint8Array
   readonly precision: ShareDraft['precision']
   readonly capacity: number
+  readonly name?: string
+  readonly publication: ShareDraft['publication']
   readonly sessions: Set<SourceSession>
   readonly redeemedNonces: Set<string>
   approximation?: ApproximationState
   latest?: LocationObservationV1
+}
+
+interface FollowEntry {
+  readonly url: string
+  readonly sourcePeerId: string
+  sourceName?: string
+  localName: string
+  color: string
+  connected: boolean
+  saved: boolean
+}
+
+export const generatedFollowName = (shareId: string): string => {
+  const adjectives = ['Amber', 'Bright', 'Calm', 'Gentle', 'Lucky', 'Quiet', 'Silver', 'Sunny']
+  const nouns = ['Badger', 'Comet', 'Finch', 'Fox', 'Heron', 'Otter', 'Robin', 'Willow']
+  let hash = 2166136261
+  for (const character of shareId) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  return `${adjectives[(hash >>> 0) % adjectives.length]} ${nouns[((hash >>> 8) >>> 0) % nouns.length]}`
+}
+
+export const savedFollowRecords = (
+  entries: readonly { url: string; localName: string; color: string; saved: boolean }[],
+): PrivateState['followed'] =>
+  entries
+    .filter((entry) => entry.saved)
+    .map(({ url, localName, color }) => ({ url, localName, color }))
+
+const viewerFingerprint = async (shareId: string, peerId: string): Promise<string> => {
+  const input = new TextEncoder().encode(`${shareId}:${peerId}`)
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input))
+  return bytesToBase64Url(digest.slice(0, 6))
 }
 
 const randomToken = (bytes = 16): string =>
@@ -99,28 +154,46 @@ const requireAuthorized = (session: SourceSession, share: SourceShare | undefine
   return share
 }
 
+export interface SharingRuntime {
+  initialize: () => Promise<void>
+  subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
+  createShare: (draft: ShareDraft, expiresAt?: number | null) => Promise<ShareSummary>
+  acceptShare: (url: string, options?: { localName?: string; saved?: boolean }) => Promise<void>
+  saveFollowing: (shareId: string, localName: string) => Promise<void>
+  stopFollowing: (shareId: string) => Promise<void>
+  setFollowName: (shareId: string, name: string) => void
+  setFollowColor: (shareId: string, color: string) => void
+  setVisible: (visible: boolean, acquireLocation?: boolean) => void
+  stopShare: (shareId: string) => Promise<void>
+  stop: () => Promise<void>
+}
+
 export const createSharingRuntime = (
   locationSource: BrowserLocationSource,
   shareBaseUrl = window.location.origin + window.location.pathname,
-): {
-  subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
-  createShare: (draft: ShareDraft, expiresAt?: number | null) => Promise<ShareSummary>
-  acceptShare: (url: string, label?: string) => Promise<void>
-  stopShare: (shareId: string) => Promise<void>
-  stop: () => Promise<void>
-} => {
+  store?: ReturnType<typeof createBrowserPrivateStore>,
+): SharingRuntime => {
   const observers = new Set<(state: SharingRuntimeState) => void>()
   const shares = new Map<string, SourceShare>()
   const received = new Map<string, LocationObservationV1>()
-  const viewerClosers = new Set<() => Promise<void>>()
+  const followed = new Map<string, FollowEntry>()
+  const viewerClosers = new Map<string, () => Promise<void>>()
+  const reconnecting = new Set<string>()
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
+  let visible = true
+  let privateKey: PrivateKey | undefined
+  let preparation: Promise<void> | undefined
+  let persistence = Promise.resolve()
+  let privateStateAvailable = true
   let state: SharingRuntimeState = {
     peerStatus: 'offline',
     location: locationSource.getState(),
     shares: [],
     received: [],
+    following: [],
     message: '',
+    canSave: Boolean(store),
   }
 
   const publish = (patch: Partial<SharingRuntimeState> = {}): void => {
@@ -134,18 +207,139 @@ export const createSharingRuntime = (
         precision: share.precision,
         expiresAt: share.capability.expiresAt,
         viewerCount: share.sessions.size,
+        viewers: [...share.sessions]
+          .filter((session) => session.fingerprint)
+          .map((session) => ({
+            fingerprint: session.fingerprint!,
+            lastSeenAt: session.lastHeartbeatAt,
+          })),
+        ...(share.name ? { name: share.name } : {}),
+        publication: share.publication,
       })),
-      received: [...received.values()].map((observation) => ({
+      received: [...received.entries()].map(([shareId, observation]) => ({
+        shareId,
         observation,
         state:
-          now >= observation.expiresAt
+          !followed.get(shareId)?.connected || now >= observation.expiresAt
             ? 'stale'
             : now >= observation.capturedAt + 15_000
               ? 'delayed'
               : 'live',
       })),
+      following: [...followed.entries()].map(([shareId, entry]) => ({
+        shareId,
+        sourceName: entry.sourceName,
+        localName: entry.localName,
+        color: entry.color,
+        connected: entry.connected,
+        saved: entry.saved,
+      })),
     }
     observers.forEach((observer) => observer(state))
+  }
+
+  const snapshot = (): PrivateState => {
+    if (!privateKey) throw new Error('Protected peer identity is unavailable.')
+    return {
+      version: 1,
+      privateKey: bytesToBase64Url(privateKeyToProtobuf(privateKey)),
+      shares: [...shares.values()].map((share) => ({
+        url: share.url,
+        precision: share.precision,
+        capacity: share.capacity,
+        name: share.name,
+        publication: share.publication,
+        approximation: share.approximation,
+      })),
+      followed: savedFollowRecords([...followed.values()]),
+    }
+  }
+
+  const persist = (): Promise<void> => {
+    if (!store) return Promise.resolve()
+    if (!privateStateAvailable) {
+      return Promise.reject(
+        new Error('Protected storage is unavailable; this location can only be previewed.'),
+      )
+    }
+    const saved = snapshot()
+    persistence = persistence.catch(() => undefined).then(() => store.save(saved))
+    return persistence
+  }
+
+  const useEphemeralIdentity = async (): Promise<void> => {
+    privateStateAvailable = false
+    privateKey ??= await generateKeyPair('Ed25519')
+    publish({ canSave: false, message: 'Protected storage is unavailable; preview only.' })
+  }
+
+  const prepareState = (): Promise<void> => {
+    if (!store) return Promise.resolve()
+    if (!preparation) {
+      preparation = (async () => {
+        let saved: PrivateState | undefined
+        try {
+          saved = await store.load()
+        } catch {
+          await useEphemeralIdentity()
+          return
+        }
+        privateKey = saved
+          ? privateKeyFromProtobuf(base64UrlToBytes(saved.privateKey))
+          : await generateKeyPair('Ed25519')
+        if (!saved) {
+          try {
+            await persist()
+          } catch {
+            await useEphemeralIdentity()
+            return
+          }
+        }
+        for (const record of saved?.shares ?? []) {
+          try {
+            const capability = parseShareInvitation(record.url)
+            shares.set(capability.shareId, {
+              capability,
+              url: record.url,
+              secret: base64UrlToBytes(capability.secret),
+              precision: record.precision,
+              capacity: record.capacity,
+              name: record.name,
+              publication: record.publication,
+              sessions: new Set(),
+              redeemedNonces: new Set(),
+              approximation: record.approximation,
+            })
+          } catch {
+            // Expired or invalid grants are never restored.
+          }
+        }
+        for (const record of saved?.followed ?? []) {
+          try {
+            const capability = parseShareInvitation(record.url)
+            followed.set(capability.shareId, {
+              url: record.url,
+              sourcePeerId: capability.sourcePeerId,
+              localName: record.localName,
+              color: record.color,
+              connected: false,
+              saved: true,
+            })
+          } catch {
+            // Expired or invalid links are not reopened.
+          }
+        }
+        publish()
+      })().catch((error) => {
+        preparation = undefined
+        publish({
+          peerStatus: 'error',
+          message: error instanceof Error ? error.message : 'Protected shares could not be opened.',
+        })
+        throw error
+      })
+    }
+    return preparation
   }
 
   const removeSession = (session: SourceSession): void => {
@@ -161,6 +355,7 @@ export const createSharingRuntime = (
     const session: SourceSession = {
       peerId: connection.remotePeer.toString(),
       close: () => messagePort.close(),
+      closeAfterFlush: () => messagePort.closeAfterFlush(),
       send: messagePort.port.send,
       lastHeartbeatAt: Date.now(),
     }
@@ -192,6 +387,7 @@ export const createSharingRuntime = (
             authorizedShare = candidate
             session.sessionId = randomToken()
             session.lastHeartbeatAt = Date.now()
+            session.fingerprint = await viewerFingerprint(shareId, session.peerId)
             rememberRedeemedNonce(candidate.redeemedNonces, viewerNonce)
             candidate.sessions.add(session)
             publish()
@@ -199,6 +395,7 @@ export const createSharingRuntime = (
               sessionId: session.sessionId,
               expiresAt: candidate.capability.expiresAt,
               precision: candidate.precision,
+              ...(candidate.name ? { sourceName: candidate.name } : {}),
               heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
             }
           },
@@ -266,10 +463,10 @@ export const createSharingRuntime = (
     })
   }
 
-  const ensurePeer = async () => {
+  const startPeer = async () => {
     if (!peer) {
       publish({ peerStatus: 'connecting', message: 'Connecting to the P2P network…' })
-      peer = startPrivateBrowserPeer()
+      peer = startPrivateBrowserPeer(privateKey)
         .then(async (started) => {
           await started.node.handle(SHARE_STREAM_PROTOCOL, handleIncomingStream, {
             runOnLimitedConnection: true,
@@ -289,19 +486,35 @@ export const createSharingRuntime = (
     }
     return peer
   }
+  const ensurePeer = async () => {
+    await prepareState()
+    return startPeer()
+  }
+
+  const updateShareLocation = (share: SourceShare, exact: LocationObservationV1): boolean => {
+    if (share.precision === 'exact') {
+      share.latest = exact
+      return false
+    }
+    const projected = projectApproximateLocation(exact, share.approximation)
+    const changed =
+      !share.approximation ||
+      Object.entries(projected.state).some(
+        ([key, value]) => value !== share.approximation?.[key as keyof ApproximationState],
+      )
+    share.approximation = projected.state
+    share.latest = projected.observation
+    return changed
+  }
 
   const unsubscribeLocationState = locationSource.subscribeState((location) =>
     publish({ location }),
   )
   const unsubscribeLocationObservation = locationSource.subscribeObservation((exact) => {
+    let privateStateChanged = false
     for (const share of shares.values()) {
-      if (share.precision === 'approximate') {
-        const projected = projectApproximateLocation(exact, share.approximation)
-        share.approximation = projected.state
-        share.latest = projected.observation
-      } else {
-        share.latest = exact
-      }
+      if (!visible && share.publication === 'foreground') continue
+      if (updateShareLocation(share, exact)) privateStateChanged = true
       for (const session of share.sessions) {
         if (!session.subscriptionId || !share.latest) continue
         session.send(
@@ -321,6 +534,9 @@ export const createSharingRuntime = (
         )
       }
     }
+    if (privateStateChanged) {
+      void persist().catch(() => publish({ message: 'Private share state could not be saved.' }))
+    }
   })
 
   const heartbeatSweep = window.setInterval(() => {
@@ -333,13 +549,41 @@ export const createSharingRuntime = (
           void session.close()
         }
       }
-      if (expired) shares.delete(share.capability.shareId)
+      if (expired) {
+        shares.delete(share.capability.shareId)
+        void persist().catch(() => publish({ message: 'Expired share state could not be saved.' }))
+      }
     }
-    if (shares.size === 0) locationSource.stop()
+    for (const [shareId, entry] of followed) {
+      if (entry.connected || viewerClosers.has(shareId) || reconnecting.has(shareId)) continue
+      try {
+        parseShareInvitation(entry.url)
+      } catch {
+        continue
+      }
+      reconnecting.add(shareId)
+      void runtime
+        .acceptShare(entry.url, { localName: entry.localName, saved: entry.saved })
+        .catch(() => undefined)
+        .finally(() => reconnecting.delete(shareId))
+    }
     publish()
   }, HEARTBEAT_INTERVAL_MS)
 
-  return {
+  const runtime: SharingRuntime = {
+    initialize: async () => {
+      await prepareState()
+      if (shares.size > 0) {
+        await startPeer()
+        if (visible) locationSource.start()
+      }
+      const pending = [...followed.values()].filter((entry) => !entry.connected)
+      void Promise.allSettled(
+        pending.map((entry) =>
+          runtime.acceptShare(entry.url, { localName: entry.localName, saved: entry.saved }),
+        ),
+      )
+    },
     subscribe: (observer) => {
       observers.add(observer)
       observer(state)
@@ -359,99 +603,248 @@ export const createSharingRuntime = (
         secret: base64UrlToBytes(invitation.capability.secret),
         precision: draft.precision,
         capacity: capacityFor(draft),
+        ...(draft.name ? { name: draft.name } : {}),
+        publication: draft.publication,
         sessions: new Set(),
         redeemedNonces: new Set(),
       }
       shares.set(share.capability.shareId, share)
-      locationSource.start()
+      const currentLocation = locationSource.getState()
+      if (
+        (currentLocation.status === 'live' || currentLocation.status === 'delayed') &&
+        currentLocation.observation.expiresAt > Date.now()
+      ) {
+        updateShareLocation(share, currentLocation.observation)
+      }
+      try {
+        await persist()
+      } catch (error) {
+        shares.delete(share.capability.shareId)
+        throw error
+      }
+      if (visible || draft.publication === 'background') locationSource.start()
       publish()
       return state.shares.find(({ shareId }) => shareId === share.capability.shareId)!
     },
-    acceptShare: async (url, label) => {
+    acceptShare: async (url, options = {}) => {
+      if (!store && options.saved !== false) {
+        throw new Error('Protected storage is not configured; preview only.')
+      }
       const capability = parseShareInvitation(url)
+      if (followed.get(capability.shareId)?.connected) {
+        throw new Error('Already following this link.')
+      }
       const { node } = await ensurePeer()
       const stream = await dialShareStream(node, capability.addresses, SHARE_STREAM_PROTOCOL)
       const messagePort = createConstellationMessagePort(stream)
       const client = createPortClient(messagePort.port, constellationProtocolV1)
-      const viewerNonce = randomToken()
-      const session = await client.share.redeem({
-        shareId: capability.shareId,
-        viewerNonce,
-        proof: await createRedemptionProof(base64UrlToBytes(capability.secret), {
+      const previousFollow = followed.get(capability.shareId)
+      const previousObservation = received.get(capability.shareId)
+      try {
+        const viewerNonce = randomToken()
+        const session = await client.share.redeem({
           shareId: capability.shareId,
-          sourcePeerId: capability.sourcePeerId,
-          viewerPeerId: node.peerId.toString(),
           viewerNonce,
-        }),
-        ...(label?.trim() ? { label: label.trim() } : {}),
-      })
-      await client.sensor.describe({ sensorId: LOCATION_SENSOR_ID })
-      const activeSubscription: { id?: string } = {}
-      let pendingObservation: unknown
-      const receiveObservation = (payload: unknown): void => {
-        try {
-          const observation = parseLocationObservationV1(payload)
-          const current = received.get(capability.shareId)
-          if (!acceptNewerLocationObservation(current, observation)) return
-          received.set(capability.shareId, observation)
-          publish({ message: '' })
-        } catch {
-          // Invalid location payloads are ignored without retaining their data.
-        }
-      }
-      const unsubscribe = messagePort.port.receive((message) => {
-        const parsed =
-          constellationProtocolV1.streams['sensor.observations'].observation.safeParse(message)
-        if (!parsed.success) return
-        if (!activeSubscription.id) {
-          pendingObservation = parsed.data
-          return
-        }
-        if (parsed.data.subscriptionId === activeSubscription.id) {
-          receiveObservation(parsed.data.observation.payload)
-        }
-      })
-      const subscription = await client.sensor.subscribe({
-        sensorId: LOCATION_SENSOR_ID,
-      })
-      activeSubscription.id = subscription.subscriptionId
-      const pending =
-        constellationProtocolV1.streams['sensor.observations'].observation.safeParse(
-          pendingObservation,
+          proof: await createRedemptionProof(base64UrlToBytes(capability.secret), {
+            shareId: capability.shareId,
+            sourcePeerId: capability.sourcePeerId,
+            viewerPeerId: node.peerId.toString(),
+            viewerNonce,
+          }),
+        })
+        const existing = followed.get(capability.shareId)
+        const existingPeer = [...followed.values()].find(
+          (entry) => entry.sourcePeerId === capability.sourcePeerId,
         )
-      if (pending.success && pending.data.subscriptionId === activeSubscription.id) {
-        receiveObservation(pending.data.observation.payload)
-      }
-      const heartbeat = window.setInterval(() => {
-        void client.share
-          .heartbeat({ sessionId: session.sessionId })
-          .catch(() => publish({ message: 'The location connection was lost.' }))
-      }, session.heartbeatIntervalMs)
-      const close = async () => {
-        window.clearInterval(heartbeat)
-        unsubscribe()
+        followed.set(capability.shareId, {
+          url,
+          sourcePeerId: capability.sourcePeerId,
+          sourceName: session.sourceName,
+          localName:
+            existing?.localName ??
+            options.localName?.trim() ??
+            session.sourceName ??
+            generatedFollowName(capability.shareId),
+          color:
+            existing?.color ??
+            existingPeer?.color ??
+            FOLLOW_COLORS[followed.size % FOLLOW_COLORS.length]!,
+          connected: true,
+          saved: existing?.saved ?? options.saved ?? true,
+        })
+        received.delete(capability.shareId)
+        await client.sensor.describe({ sensorId: LOCATION_SENSOR_ID })
+        const activeSubscription: { id?: string } = {}
+        let pendingObservation: unknown
+        const receiveObservation = (payload: unknown): void => {
+          try {
+            const observation = parseLocationObservationV1(payload)
+            const current = received.get(capability.shareId)
+            if (!acceptNewerLocationObservation(current, observation)) return
+            received.set(capability.shareId, observation)
+            publish({ message: '' })
+          } catch {
+            // Invalid location payloads are ignored without retaining their data.
+          }
+        }
+        const unsubscribe = messagePort.port.receive((message) => {
+          const closed = constellationProtocolV1.streams['share.sessions'].closed.safeParse(message)
+          if (closed.success && closed.data.sessionId === session.sessionId) {
+            const entry = followed.get(capability.shareId)
+            if (entry) entry.connected = false
+            publish({ message: 'Location sharing ended.' })
+            void messagePort.close()
+            return
+          }
+          const parsed =
+            constellationProtocolV1.streams['sensor.observations'].observation.safeParse(message)
+          if (!parsed.success) return
+          if (!activeSubscription.id) {
+            pendingObservation = parsed.data
+            return
+          }
+          if (parsed.data.subscriptionId === activeSubscription.id) {
+            receiveObservation(parsed.data.observation.payload)
+          }
+        })
+        const subscription = await client.sensor.subscribe({
+          sensorId: LOCATION_SENSOR_ID,
+        })
+        activeSubscription.id = subscription.subscriptionId
+        const pending =
+          constellationProtocolV1.streams['sensor.observations'].observation.safeParse(
+            pendingObservation,
+          )
+        if (pending.success && pending.data.subscriptionId === activeSubscription.id) {
+          receiveObservation(pending.data.observation.payload)
+        }
+        const heartbeat = window.setInterval(() => {
+          void client.share.heartbeat({ sessionId: session.sessionId }).catch(() => {
+            const entry = followed.get(capability.shareId)
+            if (entry) entry.connected = false
+            publish({ message: 'The location connection was lost.' })
+            void messagePort.close()
+          })
+        }, session.heartbeatIntervalMs)
+        const close = async () => {
+          window.clearInterval(heartbeat)
+          unsubscribe()
+          try {
+            await client.share.leave({ sessionId: session.sessionId })
+          } catch {
+            // Closing the transport still ends this local viewer session.
+          }
+          await messagePort.close()
+        }
+        viewerClosers.set(capability.shareId, close)
         try {
-          await client.share.leave({ sessionId: session.sessionId })
-        } catch {
-          // Closing the transport still ends this local viewer session.
+          if (followed.get(capability.shareId)?.saved) await persist()
+        } catch (error) {
+          viewerClosers.delete(capability.shareId)
+          if (existing) followed.set(capability.shareId, existing)
+          else followed.delete(capability.shareId)
+          await close()
+          throw error
         }
+        void messagePort.closed.then((result) => {
+          window.clearInterval(heartbeat)
+          unsubscribe()
+          if (viewerClosers.get(capability.shareId) !== close) return
+          viewerClosers.delete(capability.shareId)
+          const entry = followed.get(capability.shareId)
+          if (entry) entry.connected = false
+          if (result.reason !== 'local') {
+            publish({ message: 'Location sharing ended.' })
+          }
+          publish()
+        })
+        publish({ message: 'Waiting for the first location…' })
+      } catch (error) {
+        if (previousFollow) followed.set(capability.shareId, previousFollow)
+        else followed.delete(capability.shareId)
+        if (previousObservation) received.set(capability.shareId, previousObservation)
         await messagePort.close()
+        throw error
       }
-      viewerClosers.add(close)
-      void messagePort.closed.then((result) => {
-        window.clearInterval(heartbeat)
-        unsubscribe()
-        viewerClosers.delete(close)
-        if (result.reason !== 'local') {
-          publish({ message: 'Location sharing ended.' })
+    },
+    stopFollowing: async (shareId) => {
+      const close = viewerClosers.get(shareId)
+      const entry = followed.get(shareId)
+      const observation = received.get(shareId)
+      followed.delete(shareId)
+      received.delete(shareId)
+      try {
+        if (entry?.saved) await persist()
+      } catch (error) {
+        if (entry) followed.set(shareId, entry)
+        if (observation) received.set(shareId, observation)
+        throw error
+      }
+      viewerClosers.delete(shareId)
+      if (close) await close()
+      publish()
+    },
+    saveFollowing: async (shareId, localName) => {
+      const entry = followed.get(shareId)
+      if (!entry) throw new Error('This location is no longer available.')
+      if (!store || !privateStateAvailable) {
+        throw new Error('Protected storage is unavailable; preview only.')
+      }
+      const previousName = entry.localName
+      const wasSaved = entry.saved
+      entry.localName = localName.trim().slice(0, 32) || generatedFollowName(shareId)
+      entry.saved = true
+      try {
+        await persist()
+      } catch (error) {
+        entry.localName = previousName
+        entry.saved = wasSaved
+        throw error
+      }
+      publish()
+    },
+    setFollowName: (shareId, name) => {
+      const entry = followed.get(shareId)
+      if (!entry) return
+      entry.localName = name.trim().slice(0, 32)
+      if (entry.saved)
+        void persist().catch(() => publish({ message: 'Nickname could not be saved.' }))
+      publish()
+    },
+    setFollowColor: (shareId, color) => {
+      if (!FOLLOW_COLORS.includes(color as (typeof FOLLOW_COLORS)[number])) return
+      const entry = followed.get(shareId)
+      if (!entry) return
+      for (const candidate of followed.values()) {
+        if (candidate.sourcePeerId === entry.sourcePeerId) candidate.color = color
+      }
+      if (entry.saved) void persist().catch(() => publish({ message: 'Color could not be saved.' }))
+      publish()
+    },
+    setVisible: (nextVisible, acquireLocation = true) => {
+      visible = nextVisible
+      if (visible) {
+        if (acquireLocation || shares.size > 0) locationSource.start()
+      } else {
+        for (const share of shares.values()) {
+          if (share.publication === 'foreground') share.latest = undefined
         }
-      })
-      publish({ message: 'Waiting for the first location…' })
+        if (![...shares.values()].some((share) => share.publication === 'background')) {
+          locationSource.stop()
+        }
+      }
+      publish()
     },
     stopShare: async (shareId) => {
       const share = shares.get(shareId)
       if (!share) return
       shares.delete(shareId)
+      try {
+        await persist()
+      } catch (error) {
+        shares.set(shareId, share)
+        throw error
+      }
       for (const session of share.sessions) {
         if (session.sessionId) {
           session.send(
@@ -463,16 +856,15 @@ export const createSharingRuntime = (
           )
         }
       }
-      await Promise.all([...share.sessions].map((session) => session.close()))
+      await Promise.all([...share.sessions].map((session) => session.closeAfterFlush()))
       publish()
-      if (shares.size === 0) locationSource.stop()
     },
     stop: async () => {
       window.clearInterval(heartbeatSweep)
       unsubscribeLocationState()
       unsubscribeLocationObservation()
       locationSource.stop()
-      await Promise.all([...viewerClosers].map((close) => close()))
+      await Promise.all([...viewerClosers.values()].map((close) => close()))
       for (const share of shares.values()) {
         await Promise.all([...share.sessions].map((session) => session.close()))
       }
@@ -482,7 +874,9 @@ export const createSharingRuntime = (
       }
       shares.clear()
       received.clear()
+      followed.clear()
       observers.clear()
     },
   }
+  return runtime
 }

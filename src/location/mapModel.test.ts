@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createLocationFeatureCollection, locationObservationToMapLocation } from './mapModel.ts'
+import {
+  createLocationFeatureCollection,
+  locationAreaBounds,
+  locationObservationToMapLocation,
+  locationsBounds,
+} from './mapModel.ts'
 import { LOCATION_PROFILE_V1 } from './locationObservation.ts'
 
-test('renders exact positions and approximate areas', () => {
+test('renders GPS accuracy and approximate areas without center markers', () => {
   const features = createLocationFeatureCollection([
     {
       id: 'exact',
@@ -24,10 +29,11 @@ test('renders exact positions and approximate areas', () => {
     },
   ])
 
-  assert.equal(features.features.length, 3)
-  assert.equal(features.features[0]?.geometry.type, 'Point')
+  assert.equal(features.features.length, 2)
+  assert.equal(features.features[0]?.geometry.type, 'Polygon')
+  assert.equal(features.features[0]?.properties?.shape, 'accuracy')
   assert.equal(features.features[1]?.geometry.type, 'Polygon')
-  assert.equal(features.features[2]?.geometry.type, 'Polygon')
+  assert.equal(features.features[1]?.properties?.shape, 'approximate')
 })
 
 test('keeps source-owned disclosure precision when adapting observations', () => {
@@ -53,6 +59,46 @@ test('keeps source-owned disclosure precision when adapting observations', () =>
   })
 })
 
+test('represents approximate locations only with their uncertainty area', () => {
+  const location = {
+    id: 'synthetic-area',
+    latitude: 40,
+    longitude: 20,
+    precision: 'approximate' as const,
+    radiusMeters: 500,
+  }
+
+  const feature = createLocationFeatureCollection([location]).features[0]
+  assert.equal(feature?.geometry.type, 'Polygon')
+  assert.equal(feature?.properties?.shape, 'approximate')
+})
+
+test('provides bounds around the full uncertainty area', () => {
+  const bounds = locationAreaBounds({
+    id: 'synthetic-area',
+    latitude: 40,
+    longitude: 20,
+    precision: 'approximate',
+    radiusMeters: 1_000,
+  })
+
+  assert.ok(bounds)
+  assert.ok(bounds[0][0] < 20 && bounds[1][0] > 20)
+  assert.ok(bounds[0][1] < 40 && bounds[1][1] > 40)
+})
+
+test('frames several peer areas together across the date line', () => {
+  const bounds = locationsBounds([
+    { id: 'east', latitude: 10, longitude: 179.8, precision: 'approximate', radiusMeters: 500 },
+    { id: 'west', latitude: 11, longitude: -179.8, precision: 'approximate', radiusMeters: 500 },
+  ])
+
+  assert.ok(bounds)
+  assert.ok(bounds[1][0] - bounds[0][0] < 2)
+  assert.ok(bounds[0][1] < 10 && bounds[1][1] > 11)
+  assert.equal(locationsBounds([]), undefined)
+})
+
 test('rejects invalid coordinates and uncertainty radii', () => {
   assert.throws(() =>
     createLocationFeatureCollection([
@@ -70,4 +116,21 @@ test('rejects invalid coordinates and uncertainty radii', () => {
       },
     ]),
   )
+})
+
+test('carries owner and peer colors into exact points and approximate areas', () => {
+  const features = createLocationFeatureCollection([
+    { id: 'own', latitude: 1, longitude: 2, precision: 'exact', color: '#f78f3b' },
+    {
+      id: 'peer',
+      latitude: 3,
+      longitude: 4,
+      precision: 'approximate',
+      radiusMeters: 400,
+      color: '#438ec9',
+    },
+  ])
+
+  assert.equal(features.features[0]?.properties?.color, '#f78f3b')
+  assert.equal(features.features[1]?.properties?.color, '#438ec9')
 })

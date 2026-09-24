@@ -5,7 +5,7 @@ import {
 } from '@taskyon/p2p-core/browser'
 import { PRIMARY_RELAY_WS_MULTIADDR } from '@taskyon/p2p-core/constants'
 import { createLibp2pMessagePort } from '@taskyon/p2p-core/messagePort'
-import type { Stream } from '@libp2p/interface'
+import type { PrivateKey, Stream } from '@libp2p/interface'
 import { multiaddr } from '@multiformats/multiaddr'
 import type { ProtocolMessage } from '@taskyon/protocol'
 
@@ -37,6 +37,16 @@ const configuredRelays = (): string[] => {
   return addresses?.length ? addresses : [PRIMARY_RELAY_WS_MULTIADDR]
 }
 
+export const reachableRelayAddresses = (
+  addresses: readonly string[],
+  connectedRelayAddress: string,
+): string[] =>
+  addresses.filter(
+    (address) =>
+      address.startsWith(`${connectedRelayAddress}/p2p-circuit/p2p/`) &&
+      !address.includes('/p2p-circuit/p2p-circuit'),
+  )
+
 const waitForReachabilityAddresses = async (
   node: BrowserLibp2pNode,
   relayAddress: string | undefined,
@@ -44,12 +54,8 @@ const waitForReachabilityAddresses = async (
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
     const addresses = node.getMultiaddrs().map((address) => address.toString())
-    const reachable = relayAddress
-      ? addresses.filter((address) => address.startsWith(`${relayAddress}/p2p/`))
-      : []
-    if (reachable.some((address) => address.includes('/p2p-circuit'))) {
-      return reachable.slice(0, 4)
-    }
+    const reachable = relayAddress ? reachableRelayAddresses(addresses, relayAddress) : []
+    if (reachable.length > 0) return reachable.slice(0, 4)
     await new Promise((resolve) => window.setTimeout(resolve, 100))
   }
   return []
@@ -64,17 +70,20 @@ export const requireReachablePeer = async <Node extends Pick<BrowserLibp2pNode, 
   throw new Error('No reachable P2P address is available.')
 }
 
-export const startPrivateBrowserPeer = async (): Promise<{
+export const startPrivateBrowserPeer = async (
+  privateKey?: PrivateKey,
+): Promise<{
   node: BrowserLibp2pNode
   addresses: string[]
 }> => {
-  const node = await startBrowserLibp2p({ logNamespaces: '' })
+  const node = await startBrowserLibp2p({ logNamespaces: '', privateKey })
   let reservedRelay: string | undefined
   for (const address of configuredRelays()) {
     try {
       const connection = await node.dial(multiaddr(address))
-      if (await ensureRelayReservation(node, multiaddr(connection.remoteAddr.toString()))) {
-        reservedRelay = address
+      const connectedRelayAddress = connection.remoteAddr.toString()
+      if (await ensureRelayReservation(node, multiaddr(connectedRelayAddress))) {
+        reservedRelay = connectedRelayAddress
         break
       }
     } catch {
