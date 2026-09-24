@@ -22,5 +22,5 @@ cleanup() {
 trap cleanup EXIT
 
 export CARGO_TARGET_DIR="$build_root/cargo-target"
-yarn build:desktop:appimage:internal "$@"
+yarn build:desktop:release:appimage:internal "$@"
 node scripts/copy-desktop-artifact.mjs

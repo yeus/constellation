@@ -59,7 +59,7 @@ printf 'fresh appimage' > "$CARGO_TARGET_DIR/release/bundle/appimage/constellati
   })
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-  assert.match(fs.readFileSync(yarnLog, 'utf8'), /build:desktop:appimage:internal/)
+  assert.match(fs.readFileSync(yarnLog, 'utf8'), /build:desktop:release:appimage:internal/)
   assert.equal(
     fs.readFileSync(
       path.join(fixtureRoot, 'dist/constellation-desktop-0.1.0-x86_64.AppImage'),

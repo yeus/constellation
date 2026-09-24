@@ -6,15 +6,37 @@ const scripts = JSON.parse(fs.readFileSync('package.json', 'utf8')).scripts
 const gitignore = fs.readFileSync('.gitignore', 'utf8')
 const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
 
-test('routes AppImage builds through the Nix FHS launcher', () => {
-  assert.equal(scripts['build:desktop:appimage'], 'constellation-build-appimage')
-  assert.equal(scripts['build:desktop:appimage:internal'], 'tauri build --bundles appimage')
-})
-
-test('uses explicit Android emulator, device, and release build paths', () => {
-  assert.match(scripts['build:android:dev'], /with-android-build-tools\.sh.*x86_64/)
-  assert.match(scripts['build:android:device'], /with-android-build-tools\.sh.*aarch64/)
-  assert.equal(scripts['build:android:release'], 'bash scripts/build-android-release.sh')
+test('names distributable builds by platform, mode, and target', () => {
+  assert.equal(scripts['build:desktop:release:appimage'], 'constellation-build-release-appimage')
+  assert.equal(scripts['build:desktop:release:appimage:internal'], 'tauri build --bundles appimage')
+  assert.equal(scripts['build:desktop:release:flatpak'], 'bash scripts/build-flatpak.sh')
+  assert.match(
+    scripts['build:android:debug:x86_64-emulator'],
+    /with-android-build-tools\.sh.*--debug --apk --target x86_64/,
+  )
+  assert.match(
+    scripts['build:android:debug:arm64-device'],
+    /with-android-build-tools\.sh.*--debug --apk --target aarch64/,
+  )
+  assert.equal(
+    scripts['build:android:release:arm64-device'],
+    'bash scripts/build-android-release.sh',
+  )
+  assert.equal(scripts['build:android:release'], 'yarn build:android:release:arm64-device')
+  assert.match(
+    scripts['build:android:background-runtime'],
+    /vite build --config vite\.background\.config\.ts/,
+  )
+  for (const oldName of [
+    'build:desktop:appimage',
+    'build:desktop:appimage:internal',
+    'build:desktop:flatpak',
+    'build:android:runtime',
+    'build:android:dev',
+    'build:android:device',
+  ]) {
+    assert.equal(scripts[oldName], undefined, `${oldName} should be replaced by a clearer name`)
+  }
 })
 
 test('excludes temporary Android signing properties', () => {

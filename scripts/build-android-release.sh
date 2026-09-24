@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/android-release-secrets.sh"
 gradle_file="$repo_root/src-tauri/gen/android/app/build.gradle.kts"
 properties_file="$repo_root/src-tauri/gen/android/app/keystore.properties"
 temporary_keystore=""
@@ -31,28 +32,11 @@ if [[ -e "$properties_file" || -L "$properties_file" ]]; then
   exit 1
 fi
 
-required=(
-  ANDROID_KEYSTORE_PATH
-  ANDROID_KEYSTORE_PASSWORD
-  ANDROID_KEY_ALIAS
-  ANDROID_KEY_PASSWORD
-)
-missing=()
-for name in "${required[@]}"; do
-  [[ -n "${!name:-}" ]] || missing+=("$name")
-done
-if (( ${#missing[@]} > 0 )); then
-  echo "Missing Android release signing values: ${missing[*]}" >&2
-  exit 1
-fi
-if [[ ! -f "$ANDROID_KEYSTORE_PATH" ]]; then
-  echo "Android release keystore does not exist." >&2
-  exit 1
-fi
 if [[ ! -f "$gradle_file" ]]; then
   echo "Run yarn android:init before building an Android release." >&2
   exit 1
 fi
+prepare_constellation_android_signing
 
 temporary_keystore="$(mktemp "${TMPDIR:-/tmp}/constellation-android-release.XXXXXX.jks")"
 install -m 600 "$ANDROID_KEYSTORE_PATH" "$temporary_keystore"

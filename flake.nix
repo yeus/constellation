@@ -145,7 +145,7 @@
           ];
           runScript = "bash";
         };
-        buildAppImageScript = pkgs.writeShellScriptBin "constellation-build-appimage" ''
+        buildAppImageScript = pkgs.writeShellScriptBin "constellation-build-release-appimage" ''
           set -euo pipefail
           umask 022
           repo_root="$PWD"
@@ -424,6 +424,7 @@ EOF
               flatpak
               flatpak-builder
             ])
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.libsecret
             ++ pkgs.lib.optional (system == "x86_64-linux") buildAppImageScript
             ++ desktopLibraries
             ++ browserLibraries
@@ -466,7 +467,7 @@ EOF
           appimage-fhs = appimageFhs;
         };
         apps = pkgs.lib.optionalAttrs (system == "x86_64-linux") {
-          build-appimage = flake-utils.lib.mkApp {
+          build-desktop-release-appimage = flake-utils.lib.mkApp {
             drv = buildAppImageScript;
           };
         };

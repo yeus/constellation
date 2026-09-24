@@ -19,6 +19,10 @@ test('does not overwrite an existing local Android keystore.properties', (t) => 
   fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
   fs.mkdirSync(generatedAppDir, { recursive: true })
   fs.copyFileSync(path.join(projectRoot, 'scripts/build-android-release.sh'), scriptPath)
+  fs.copyFileSync(
+    path.join(projectRoot, 'scripts/android-release-secrets.sh'),
+    path.join(fixtureRoot, 'scripts/android-release-secrets.sh'),
+  )
   fs.writeFileSync(path.join(generatedAppDir, 'build.gradle.kts'), 'plugins {}\n')
   fs.writeFileSync(keystorePath, 'synthetic keystore')
   fs.writeFileSync(propertiesPath, 'preserve this local configuration\n')

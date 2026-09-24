@@ -49,23 +49,23 @@ Run the Linux desktop shell during development:
 yarn tauri dev
 ```
 
-Build an AppImage and copy it to `dist/`:
+Build a release AppImage and copy it to `dist/`:
 
 ```sh
-yarn build:desktop:appimage
+yarn build:desktop:release:appimage
 ```
 
 Inside the Nix development shell, the command runs the Tauri build in a Nix
 FHS environment with the Linux libraries required by AppImage. It uses a fresh
 temporary Cargo target and copies the artifact to
 `dist/constellation-desktop-<version>-x86_64.AppImage`. You can also run the
-same builder directly with `nix run .#build-appimage`.
+same builder directly with `nix run .#build-desktop-release-appimage`.
 
 The Flatpak manifest is in `packaging/flatpak`. With Flatpak Builder and the
 Flathub remote installed, build a local bundle in `dist/`:
 
 ```sh
-yarn build:desktop:flatpak
+yarn build:desktop:release:flatpak
 ```
 
 The current manifest uses network access to resolve Yarn and Cargo dependencies
@@ -80,16 +80,16 @@ Initialize generated Android project files once if they are absent:
 yarn android:init
 ```
 
-Build an x86_64 debug APK for an emulator:
+Build a debug APK for an x86_64 emulator:
 
 ```sh
-yarn build:android:dev
+yarn build:android:debug:x86_64-emulator
 ```
 
-Build an arm64 debug APK for a device:
+Build a debug APK for an arm64 physical device:
 
 ```sh
-yarn build:android:device
+yarn build:android:debug:arm64-device
 ```
 
 Both commands copy their APK to `dist/`. Android configuration and managed
@@ -100,20 +100,33 @@ yarn test:android:config
 yarn test:android:managed
 ```
 
-For a signed arm64 release, export `ANDROID_KEYSTORE_PATH`,
-`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`,
-then run:
+On Linux, the release command uses Secret Service (`secret-tool`) for Android
+signing. The desktop session must provide a working, unlocked Secret Service;
+the Nix shell provides its `secret-tool` client. If no signing entries exist
+yet, the build creates random passwords and a keystore, then stores the signing
+values and a keystore backup in Secret Service. Keep that keyring backed up:
+losing the keystore means this signing identity cannot produce updates for
+already-installed copies of the app.
+
+Run either the short command or its explicit arm64-target equivalent:
 
 ```sh
 yarn build:android:release
+# Explicit arm64 target:
+yarn build:android:release:arm64-device
 ```
 
 Signing values and the temporary Gradle properties file remain outside Git.
 The resulting artifact is
 `dist/constellation-android-release-arm64-v8a.apk`.
+On systems without Linux Secret Service, provide all four `ANDROID_*` signing
+variables and an existing keystore file instead.
 
-The managed test needs a working emulator and relay connectivity. It uses only
-synthetic coordinates.
+The Gradle build generates the background-service bundle automatically through
+`build:android:background-runtime`; you can invoke that script directly for the
+intermediate `dist-background/constellation-background.js` bundle, but it is
+not an installable app. The managed test needs a working emulator and relay
+connectivity. It uses only synthetic coordinates.
 
 ## Architecture and security
 

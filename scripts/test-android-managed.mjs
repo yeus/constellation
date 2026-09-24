@@ -152,7 +152,9 @@ const runProfile = async (name, prepare) => {
 }
 
 const main = async () => {
-  if (!process.argv.includes('--skip-build')) run('yarn', ['build:android:dev'])
+  if (!process.argv.includes('--skip-build')) {
+    run('yarn', ['build:android:debug:x86_64-emulator'])
+  }
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-webview-'))
   try {
     let fixture

@@ -19,7 +19,7 @@ android {
 val workspaceRoot = projectDir.resolve("../../../..")
 val buildBackgroundRuntime by tasks.registering(Exec::class) {
     workingDir(workspaceRoot)
-    commandLine("yarn", "build:android:runtime")
+    commandLine("yarn", "build:android:background-runtime")
     inputs.files(fileTree(workspaceRoot.resolve("src")))
     inputs.files(fileTree(workspaceRoot.resolve("vendor/taskyon")))
     inputs.file(workspaceRoot.resolve("vite.background.config.ts"))
