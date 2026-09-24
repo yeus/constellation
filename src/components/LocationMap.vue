@@ -33,6 +33,9 @@ const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
 const runtime = createPmtilesRuntime()
 let map: maplibregl.Map | null = null
 
+const mapBackground = (): string =>
+  getComputedStyle(document.documentElement).getPropertyValue('--map-background').trim()
+
 const style = (): StyleSpecification => ({
   version: 8,
   sources: {},
@@ -40,9 +43,7 @@ const style = (): StyleSpecification => ({
     {
       id: 'background',
       type: 'background',
-      paint: {
-        'background-color': theme.value === 'dark' ? '#111822' : '#e8edf2',
-      },
+      paint: { 'background-color': mapBackground() },
     },
   ],
 })
@@ -83,28 +84,56 @@ const addLocationLayers = (target: maplibregl.Map): void => {
   })
 }
 
+const canRenderWebGL = (): boolean => {
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
+  context?.getExtension('WEBGL_lose_context')?.loseContext()
+  return context !== null
+}
+
+const showMapUnavailable = (): void => {
+  mapNotice.value = 'Map rendering unavailable; location sharing remains available.'
+}
+
 const initialize = (): void => {
   if (!mapElement.value || map) return
-  runtime.setup()
-  map = new maplibregl.Map({
-    container: mapElement.value,
-    style: style(),
-    center: [0, 20],
-    zoom: 1.5,
-    attributionControl: false,
-  })
-  map.addControl(new maplibregl.NavigationControl(), 'bottom-right')
-  map.on('load', () => {
-    void (async () => {
-      if (!map) return
-      try {
-        await runtime.addWorldMap(map, props.pmtilesUrl, theme.value)
-      } catch {
-        mapNotice.value = 'Basemap unavailable; location sharing remains available.'
+  try {
+    if (!canRenderWebGL()) {
+      showMapUnavailable()
+      return
+    }
+    runtime.setup()
+    map = new maplibregl.Map({
+      container: mapElement.value,
+      style: style(),
+      center: [0, 20],
+      zoom: 1.5,
+      attributionControl: false,
+    })
+    map.addControl(new maplibregl.NavigationControl(), 'bottom-right')
+    map.on('error', () => {
+      if (!mapNotice.value) {
+        mapNotice.value = 'Map tiles could not be displayed; location sharing remains available.'
       }
-      addLocationLayers(map)
-    })()
-  })
+    })
+    map.on('load', () => {
+      void (async () => {
+        if (!map) return
+        try {
+          await runtime.addWorldMap(map, props.pmtilesUrl, theme.value)
+        } catch {
+          mapNotice.value = 'Basemap data could not be loaded; location sharing remains available.'
+        }
+        runtime.updateTheme(map, theme.value)
+        addLocationLayers(map)
+      })()
+    })
+  } catch {
+    map?.remove()
+    map = null
+    runtime.dispose()
+    showMapUnavailable()
+  }
 }
 
 const updateLocations = (): void => {
@@ -114,7 +143,8 @@ const updateLocations = (): void => {
 
 const updateTheme = (event: MediaQueryListEvent): void => {
   theme.value = event.matches ? 'dark' : 'light'
-  map?.setPaintProperty('background', 'background-color', event.matches ? '#111822' : '#e8edf2')
+  map?.setPaintProperty('background', 'background-color', mapBackground())
+  if (map) runtime.updateTheme(map, theme.value)
 }
 
 watch(() => props.locations, updateLocations, { deep: true })
@@ -137,10 +167,21 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
+.location-map {
+  position: relative;
+}
+
+:deep(.maplibregl-ctrl-bottom-right) {
+  bottom: 12rem;
+}
+
 .location-map__notice {
   position: absolute;
+  z-index: 1;
+  top: 4.25rem;
+  left: 1rem;
   right: 1rem;
-  bottom: 1rem;
+  width: fit-content;
   max-width: min(22rem, calc(100% - 2rem));
   margin: 0;
   padding: 0.65rem 0.8rem;

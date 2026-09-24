@@ -10,7 +10,11 @@ export interface PmtilesRuntime {
   setup: () => void
   dispose: () => void
   addWorldMap: (map: MapLibreMap, url: string, theme: 'light' | 'dark') => Promise<void>
+  updateTheme: (map: MapLibreMap, theme: 'light' | 'dark') => void
 }
+
+const WORLD_SOURCE_ID = 'constellation-world'
+const fillPalette = ['#3f4953', '#495662', '#55616c', '#606b75', '#6a7580', '#737f89']
 
 const vectorLayerNames = (metadata: unknown): string[] => {
   if (!metadata || typeof metadata !== 'object') return []
@@ -31,7 +35,7 @@ const addLayers = (
   theme: 'light' | 'dark',
 ): void => {
   sourceLayers.forEach((sourceLayer, index) => {
-    const color = theme === 'dark' ? '#667481' : '#87939e'
+    const color = fillPalette[index % fillPalette.length] ?? '#55616c'
     map.addLayer({
       id: `${sourceId}-${index}-fill`,
       type: 'fill',
@@ -48,8 +52,11 @@ const addLayers = (
       type: 'line',
       source: sourceId,
       'source-layer': sourceLayer,
-      filter: ['==', ['geometry-type'], 'LineString'],
-      paint: { 'line-color': color, 'line-width': 0.7, 'line-opacity': 0.65 },
+      paint: {
+        'line-color': theme === 'dark' ? '#697682' : '#8b969f',
+        'line-width': 0.7,
+        'line-opacity': 0.65,
+      },
     })
     map.addLayer({
       id: `${sourceId}-${index}-point`,
@@ -58,7 +65,7 @@ const addLayers = (
       'source-layer': sourceLayer,
       filter: ['==', ['geometry-type'], 'Point'],
       paint: {
-        'circle-color': color,
+        'circle-color': theme === 'dark' ? '#88949f' : '#66727c',
         'circle-radius': 2,
         'circle-opacity': 0.5,
       },
@@ -69,6 +76,7 @@ const addLayers = (
 export const createPmtilesRuntime = (): PmtilesRuntime => {
   const protocol = new Protocol()
   let installed = false
+  let sourceLayers: string[] = []
 
   return {
     setup: () => {
@@ -78,18 +86,37 @@ export const createPmtilesRuntime = (): PmtilesRuntime => {
       installed = true
     },
     dispose: () => {
-      if (!installed) return
-      maplibregl.removeProtocol('pmtiles')
-      installed = false
+      if (installed) {
+        maplibregl.removeProtocol('pmtiles')
+        installed = false
+      }
+      sourceLayers = []
     },
     addWorldMap: async (map, url, theme) => {
       const archive = new PMTiles(url)
       protocol.add(archive)
       const metadata = await archive.getMetadata()
       await archive.getHeader()
-      const sourceId = 'constellation-world'
-      map.addSource(sourceId, { type: 'vector', url: `pmtiles://${url}` })
-      addLayers(map, sourceId, vectorLayerNames(metadata), theme)
+      sourceLayers = vectorLayerNames(metadata)
+      map.addSource(WORLD_SOURCE_ID, { type: 'vector', url: `pmtiles://${url}` })
+      addLayers(map, WORLD_SOURCE_ID, sourceLayers, theme)
+    },
+    updateTheme: (map, theme) => {
+      sourceLayers.forEach((_, index) => {
+        const prefix = `${WORLD_SOURCE_ID}-${index}`
+        const fillId = `${prefix}-fill`
+        const lineId = `${prefix}-line`
+        const pointId = `${prefix}-point`
+        if (map.getLayer(fillId)) {
+          map.setPaintProperty(fillId, 'fill-opacity', theme === 'dark' ? 0.08 : 0.12)
+        }
+        if (map.getLayer(lineId)) {
+          map.setPaintProperty(lineId, 'line-color', theme === 'dark' ? '#697682' : '#8b969f')
+        }
+        if (map.getLayer(pointId)) {
+          map.setPaintProperty(pointId, 'circle-color', theme === 'dark' ? '#88949f' : '#66727c')
+        }
+      })
     },
   }
 }

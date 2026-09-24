@@ -12,15 +12,15 @@
     sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --page-background: #f5f7fa;
-  --text: #202936;
+  --page-background: #f5f6f8;
+  --text: #202632;
   --surface: rgba(255, 255, 255, 0.92);
   --surface-strong: #ffffff;
   --border: rgba(42, 53, 72, 0.16);
   --muted: #647184;
   --primary: #2a3548;
   --accent: #f78f3b;
-  --map-background: #e8edf2;
+  --map-background: #edf1f4;
   --map-grid: rgba(42, 53, 72, 0.055);
   --map-placeholder: #39475a;
   --accent-soft: rgba(247, 143, 59, 0.1);
@@ -45,12 +45,12 @@
   :root {
     color-scheme: dark;
     --page-background: #0d1117;
-    --text: #f6f7f9;
+    --text: #f3f5f8;
     --surface: rgba(22, 29, 39, 0.92);
     --surface-strong: #161d27;
     --border: rgba(255, 255, 255, 0.12);
     --muted: #9aa6b5;
-    --map-background: #111822;
+    --map-background: #0e1116;
     --map-grid: rgba(255, 255, 255, 0.025);
     --map-placeholder: #d7dce3;
     --control-fill: rgba(255, 255, 255, 0.035);
