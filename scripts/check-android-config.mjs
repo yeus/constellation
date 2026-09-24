@@ -49,17 +49,25 @@ assert.match(cargo, /tauri-plugin-constellation-android/)
 for (const permission of [
   'android.permission.ACCESS_BACKGROUND_LOCATION',
   'android.permission.FOREGROUND_SERVICE_LOCATION',
-  'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
   'android.permission.POST_NOTIFICATIONS',
 ]) {
   assert.match(manifest, new RegExp(permission))
 }
-assert.match(serviceManifest, /android:foregroundServiceType="location\|dataSync"/)
+assert.match(serviceManifest, /android:foregroundServiceType="location"/)
+assert.match(manifest, /android\.intent\.action\.SEND/)
+assert.match(manifest, /android:mimeType="text\/plain"/)
+assert.match(androidPlugin, /fun takeSharedText\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun loadPrivateState\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun savePrivateState\(invoke: Invoke\)/)
+assert.doesNotMatch(manifest, /FOREGROUND_SERVICE_DATA_SYNC/)
 assert.match(serviceManifest, /android:stopWithTask="false"/)
 assert.match(androidPlugin, /requireNotificationPermission\(\)/)
 assert.match(androidPlugin, /Allow notifications, then create the share again\./)
 assert.doesNotMatch(androidPlugin, /requestNotificationPermission\(\)/)
 assert.match(locationService, /LOCATION_UPDATE_INTERVAL_MS = 5_000L/)
 assert.match(locationService, /LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f/)
+assert.equal(/\?: store\.loadRequest\(\)/.test(locationService), false)
+assert.equal(/store\.saveStatus\(status\.toString\(\)\)/.test(locationService), false)
+assert.match(locationService, /store\.saveStatus\(redactedStatus\(status\)\)/)
 
 console.log('Android configuration checks passed.')

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 
 import { androidTool, emulatorArguments, profile } from './android-emulator.mjs'
@@ -10,6 +13,18 @@ test('resolves Android tools from ANDROID_HOME', () => {
     androidTool('avdmanager', { ANDROID_HOME: '/sdk' }),
     '/sdk/cmdline-tools/latest/bin/avdmanager',
   )
+})
+
+test('finds versioned Android command-line tools without a latest symlink', () => {
+  const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-sdk-'))
+  try {
+    const executable = path.join(sdk, 'cmdline-tools', '13.0', 'bin', 'avdmanager')
+    fs.mkdirSync(path.dirname(executable), { recursive: true })
+    fs.writeFileSync(executable, '')
+    assert.equal(androidTool('avdmanager', { ANDROID_HOME: sdk }), executable)
+  } finally {
+    fs.rmSync(sdk, { recursive: true, force: true })
+  }
 })
 
 test('defines the supported Android compatibility profiles', () => {

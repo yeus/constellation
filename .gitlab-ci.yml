@@ -8,6 +8,7 @@
 stages:
   - test
   - secret-detection
+  - deploy
 quality:
   image: node:22
   stage: test
@@ -29,3 +30,19 @@ variables:
   SECRET_DETECTION_ENABLED: 'true'
 secret_detection:
   stage: secret-detection
+pages:
+  image: node:22
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  before_script:
+    - corepack enable
+    - corepack yarn install --immutable
+  script:
+    - VITE_CONSTELLATION_PUBLIC_URL=https://constellation.taskyon.space/ corepack yarn build
+    - node scripts/prepare-pages.mjs
+  pages:
+    publish: dist
+  environment:
+    name: production
+    url: https://constellation.taskyon.space/

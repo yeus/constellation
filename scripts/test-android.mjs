@@ -139,18 +139,34 @@ const describeInvitationAddresses = (shareUrl) => {
 
 const runShareFlow = async (cdp, browser) => {
   assert.equal(await clickButton(cdp, 'Share location'), true)
+  assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, 'Create private link'), true)
   let shareUrl
-  await waitFor(
-    async () => {
-      shareUrl = await cdp.evaluate(
-        'document.querySelector("input[aria-label=\\"Share link\\"]")?.value',
-      )
-      return typeof shareUrl === 'string' && shareUrl.includes('#share=')
-    },
-    'the Android share link',
-    30_000,
-  )
+  try {
+    await waitFor(
+      async () => {
+        shareUrl = await cdp.evaluate(
+          'document.querySelector("input[aria-label=\\"Share link\\"]")?.value',
+        )
+        return typeof shareUrl === 'string' && shareUrl.includes('#share=')
+      },
+      'the Android share link',
+      30_000,
+    )
+  } catch (error) {
+    const state = await cdp.evaluate(`(() => ({
+      backgroundSelected: [...document.querySelectorAll('button')]
+        .some((button) => button.textContent?.includes('In background') && button.getAttribute('aria-pressed') === 'true'),
+      shareDialogVisible: Boolean(document.querySelector('[aria-labelledby="share-title"]')),
+      connecting: document.body?.innerText?.includes('Connecting to the P2P network') === true,
+      noReachablePeer: document.body?.innerText?.includes('No reachable P2P address') === true,
+      permissionDenied: document.body?.innerText?.includes('Location permission denied') === true,
+      backgroundStarting: document.body?.innerText?.includes('Starting private P2P sharing') === true,
+    }))()`)
+    throw new Error(`Android share link unavailable. UI state: ${JSON.stringify(state)}`, {
+      cause: error,
+    })
+  }
   adb(['emu', 'geo', 'fix', '-70.0001', '40.0001'])
   await wait(1_000)
   adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])

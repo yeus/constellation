@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -12,6 +13,18 @@ export const androidTool = (name, environment = process.env) => {
   const sdk = environment.ANDROID_HOME ?? environment.ANDROID_SDK_ROOT
   const segments = androidToolPaths[name]
   if (!segments) throw new Error(`Unknown Android tool: ${name}`)
+  if (sdk && name === 'avdmanager') {
+    const tools = path.join(sdk, 'cmdline-tools')
+    if (fs.existsSync(tools)) {
+      const versions = fs
+        .readdirSync(tools)
+        .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
+      for (const version of ['latest', ...versions.filter((value) => value !== 'latest')]) {
+        const executable = path.join(tools, version, 'bin', name)
+        if (fs.existsSync(executable)) return executable
+      }
+    }
+  }
   return sdk ? path.join(sdk, ...segments) : name
 }
 
