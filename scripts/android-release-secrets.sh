@@ -56,12 +56,22 @@ constellation_validate_android_keystore() {
   local path="$1"
   local store_password="$2"
   local key_alias="$3"
+  local key_password="$4"
 
   if [[ ! -f "$path" ]] || ! keytool -list \
     -keystore "$path" \
     -storepass "$store_password" \
     -alias "$key_alias" >/dev/null 2>&1; then
     echo "Android release keystore does not match the configured password and alias; refusing to replace it." >&2
+    return 1
+  fi
+  if ! keytool -certreq \
+    -keystore "$path" \
+    -storepass "$store_password" \
+    -alias "$key_alias" \
+    -keypass "$key_password" \
+    -file /dev/null >/dev/null 2>&1; then
+    echo "Android release key password does not unlock the configured alias; refusing to replace the keystore." >&2
     return 1
   fi
 }
@@ -162,7 +172,7 @@ constellation_materialize_android_keystore() {
     fi
   fi
 
-  if ! constellation_validate_android_keystore "$path" "$store_password" "$key_alias"; then
+  if ! constellation_validate_android_keystore "$path" "$store_password" "$key_alias" "$key_password"; then
     return 1
   fi
   printf '%s' "$action"
@@ -173,12 +183,17 @@ constellation_get_or_create_android_secret() {
   local key="$2"
   local label="$3"
   local default_value="$4"
+  local existing_keystore="${5:-0}"
   local value="${!env_name:-}"
 
   if [[ -z "$value" ]]; then
     value="$(constellation_android_secret_lookup "$key")"
   fi
   if [[ -z "$value" ]]; then
+    if [[ "$existing_keystore" == 1 ]]; then
+      echo "$label is missing for an existing keystore; restore the original Secret Service entry." >&2
+      return 1
+    fi
     value="$default_value"
     if [[ -z "$value" ]]; then
       value="$(constellation_generate_android_secret)"
@@ -193,6 +208,7 @@ constellation_get_or_create_android_secret() {
 constellation_prepare_android_signing_from_secret_service() {
   local keystore_path="${ANDROID_KEYSTORE_PATH:-}"
   local keystore_base64="${ANDROID_KEYSTORE_BASE64:-}"
+  local existing_keystore=0
   local action
 
   [[ -n "$keystore_base64" ]] || keystore_base64="$(constellation_android_secret_lookup android_keystore_base64)"
@@ -201,11 +217,21 @@ constellation_prepare_android_signing_from_secret_service() {
     android_keystore_path \
     "Constellation Android keystore path" \
     "${XDG_CONFIG_HOME:-$HOME/.config}/constellation/android-release.jks")" || return 1
+  keystore_path="${keystore_path/#\~/$HOME}"
+  keystore_path="${keystore_path//\$\{HOME\}/$HOME}"
+  keystore_path="${keystore_path//\$HOME/$HOME}"
+  [[ "$keystore_path" == /* ]] || keystore_path="$PWD/$keystore_path"
+  export ANDROID_KEYSTORE_PATH="$keystore_path"
+  if [[ -e "$keystore_path" || -L "$keystore_path" || -n "$keystore_base64" ]]; then
+    existing_keystore=1
+  fi
+
   ANDROID_KEYSTORE_PASSWORD="$(constellation_get_or_create_android_secret \
     ANDROID_KEYSTORE_PASSWORD \
     android_keystore_password \
     "Constellation Android keystore password" \
-    "")" || return 1
+    "" \
+    "$existing_keystore")" || return 1
   export ANDROID_KEYSTORE_PASSWORD
   ANDROID_KEY_ALIAS="$(constellation_get_or_create_android_secret \
     ANDROID_KEY_ALIAS \
@@ -213,18 +239,14 @@ constellation_prepare_android_signing_from_secret_service() {
     "Constellation Android key alias" \
     "constellation-release-key")" || return 1
   export ANDROID_KEY_ALIAS
+
   ANDROID_KEY_PASSWORD="$(constellation_get_or_create_android_secret \
     ANDROID_KEY_PASSWORD \
     android_key_password \
     "Constellation Android key password" \
-    "")" || return 1
+    "" \
+    "$existing_keystore")" || return 1
   export ANDROID_KEY_PASSWORD
-
-  keystore_path="${keystore_path/#\~/$HOME}"
-  keystore_path="${keystore_path//\$\{HOME\}/$HOME}"
-  keystore_path="${keystore_path//\$HOME/$HOME}"
-  [[ "$keystore_path" == /* ]] || keystore_path="$PWD/$keystore_path"
-  export ANDROID_KEYSTORE_PATH="$keystore_path"
 
   action="$(constellation_materialize_android_keystore \
     "$keystore_path" \
@@ -251,7 +273,8 @@ prepare_constellation_android_signing() {
     if ! constellation_validate_android_keystore \
       "$keystore_path" \
       "$ANDROID_KEYSTORE_PASSWORD" \
-      "$ANDROID_KEY_ALIAS"; then
+      "$ANDROID_KEY_ALIAS" \
+      "$ANDROID_KEY_PASSWORD"; then
       return 1
     fi
     export ANDROID_KEYSTORE_PATH ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD

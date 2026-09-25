@@ -165,6 +165,12 @@ values and a keystore backup in Secret Service. Keep that keyring backed up:
 losing the keystore means this signing identity cannot produce updates for
 already-installed copies of the app.
 
+The five Secret Service entries are `android_keystore_path` (local file path),
+`android_keystore_base64` (file backup), `android_key_alias` (key name),
+`android_keystore_password` (opens the file), and `android_key_password`
+(unlocks the private key). KeePassXC may ask permission for each lookup; those
+prompts only authorize reading entries, not the key itself.
+
 Run either the short command or its explicit arm64-target equivalent:
 
 ```sh
@@ -178,6 +184,16 @@ The resulting artifact is
 `dist/constellation-android-release-arm64-v8a.apk`.
 On systems without Linux Secret Service, provide all four `ANDROID_*` signing
 variables and an existing keystore file instead.
+Before Gradle starts, the release command checks that both the keystore
+password and the key password unlock the configured alias. If the key password
+check fails, restore the original `android_key_password` entry in Secret
+Service (or supply the matching `ANDROID_KEY_PASSWORD`). Keep the existing
+keystore: generating a new key would prevent updates to an app signed with
+the old one. If either password entry is unavailable while a keystore or backup
+already exists, the script stops instead of generating a replacement. A locked
+or slow KeePassXC database can make a lookup appear missing; unlock it before
+retrying, and check the key password entry's history if a previous build
+updated it.
 
 The Gradle build generates the background-service bundle automatically through
 `build:android:background-runtime`; you can invoke that script directly for the

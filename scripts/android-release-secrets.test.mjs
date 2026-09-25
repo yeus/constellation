@@ -38,6 +38,7 @@ for (let index = 0; index < args.length;) {
 }
 const key = attributes.get('key')
 if (process.argv[2] === 'lookup') {
+  if (process.env.CONSTELLATION_TEST_DENIED_SECRET === key) process.exit(1)
   if (typeof store[key] !== 'string') process.exit(1)
   process.stdout.write(store[key])
 } else if (process.argv[2] === 'store') {
@@ -65,6 +66,10 @@ if (args[0] === '-genkeypair') {
 if (args[0] === '-list') {
   const contents = fs.readFileSync(option('-keystore'), 'utf8')
   process.exit(contents.startsWith('synthetic-') ? 0 : 1)
+}
+if (args[0] === '-certreq') {
+  const contents = fs.readFileSync(option('-keystore'), 'utf8')
+  process.exit(contents.startsWith('synthetic-') && option('-keypass') !== 'wrong-key-password' ? 0 : 1)
 }
 process.exit(2)
 `,
@@ -131,8 +136,95 @@ test('creates missing signing credentials and persists them to Secret Service', 
   assert.deepEqual(fs.readFileSync(fixture.keytoolCalls, 'utf8').trim().split('\n'), [
     '-genkeypair',
     '-list',
+    '-certreq',
     '-list',
+    '-certreq',
   ])
+})
+
+test('rejects a wrong key password before Gradle packaging', (t) => {
+  const fixture = createFixture(t)
+  const keystorePath = path.join(fixture.home, 'release.jks')
+  fs.writeFileSync(keystorePath, 'synthetic-existing-keystore')
+
+  const result = runPrepare(fixture, {
+    ANDROID_KEYSTORE_PATH: keystorePath,
+    ANDROID_KEYSTORE_PASSWORD: 'synthetic-store-password',
+    ANDROID_KEY_ALIAS: 'synthetic-release-alias',
+    ANDROID_KEY_PASSWORD: 'wrong-key-password',
+  })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /key password/i)
+  assert.equal(fs.readFileSync(keystorePath, 'utf8'), 'synthetic-existing-keystore')
+})
+
+test('does not invent a key password for an existing keystore', (t) => {
+  const fixture = createFixture(t)
+  const keystorePath = path.join(fixture.config, 'constellation/android-release.jks')
+  fs.mkdirSync(path.dirname(keystorePath), { recursive: true })
+  fs.writeFileSync(keystorePath, 'synthetic-existing-keystore')
+  fs.writeFileSync(
+    fixture.storePath,
+    JSON.stringify({
+      android_keystore_path: keystorePath,
+      android_keystore_password: 'synthetic-store-password',
+      android_key_alias: 'synthetic-release-alias',
+    }),
+  )
+
+  const result = runPrepare(fixture)
+  const stored = JSON.parse(fs.readFileSync(fixture.storePath, 'utf8'))
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /key password.*missing/i)
+  assert.equal(stored.android_key_password, undefined)
+  assert.equal(fs.readFileSync(keystorePath, 'utf8'), 'synthetic-existing-keystore')
+})
+
+test('does not invent a keystore password for an existing keystore', (t) => {
+  const fixture = createFixture(t)
+  const keystorePath = path.join(fixture.config, 'constellation/android-release.jks')
+  fs.mkdirSync(path.dirname(keystorePath), { recursive: true })
+  fs.writeFileSync(keystorePath, 'synthetic-existing-keystore')
+  fs.writeFileSync(
+    fixture.storePath,
+    JSON.stringify({
+      android_keystore_path: keystorePath,
+      android_key_alias: 'synthetic-release-alias',
+      android_key_password: 'synthetic-key-password',
+    }),
+  )
+
+  const result = runPrepare(fixture)
+  const stored = JSON.parse(fs.readFileSync(fixture.storePath, 'utf8'))
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /keystore password.*missing/i)
+  assert.equal(stored.android_keystore_password, undefined)
+  assert.equal(fs.readFileSync(keystorePath, 'utf8'), 'synthetic-existing-keystore')
+})
+
+test('does not replace a password when its Secret Service lookup is denied', (t) => {
+  const fixture = createFixture(t)
+  const keystorePath = path.join(fixture.config, 'constellation/android-release.jks')
+  fs.mkdirSync(path.dirname(keystorePath), { recursive: true })
+  fs.writeFileSync(keystorePath, 'synthetic-existing-keystore')
+  const stored = {
+    android_keystore_path: keystorePath,
+    android_keystore_password: 'synthetic-store-password',
+    android_key_alias: 'synthetic-release-alias',
+    android_key_password: 'synthetic-original-key-password',
+  }
+  fs.writeFileSync(fixture.storePath, JSON.stringify(stored))
+
+  const result = runPrepare(fixture, {
+    CONSTELLATION_TEST_DENIED_SECRET: 'android_key_password',
+  })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /key password.*missing/i)
+  assert.deepEqual(JSON.parse(fs.readFileSync(fixture.storePath, 'utf8')), stored)
 })
 
 test('restores a missing local keystore from Secret Service without regenerating it', (t) => {
@@ -154,7 +246,7 @@ test('restores a missing local keystore from Secret Service without regenerating
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
   assert.equal(fs.readFileSync(expectedPath, 'utf8'), 'synthetic-restored-keystore')
   assert.equal(fs.statSync(expectedPath).mode & 0o777, 0o600)
-  assert.match(calls, /^-list\n$/)
+  assert.match(calls, /^-list\n-certreq\n$/)
 })
 
 test('refuses to replace an existing keystore that does not match stored credentials', (t) => {
