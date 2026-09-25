@@ -27,6 +27,11 @@ export interface BrowserGeolocation {
     options?: PositionOptions,
   ) => number | Promise<number>
   clearWatch: (watchId: number) => void | Promise<void>
+  getCurrentPosition?: (
+    success: (position: BrowserPosition) => void,
+    error?: (error: BrowserPositionError) => void,
+    options?: PositionOptions,
+  ) => void
 }
 
 export type BrowserLocationState =
@@ -48,6 +53,7 @@ export interface BrowserLocationSource {
   getState: () => BrowserLocationState
   start: () => void
   stop: () => void
+  refresh: () => void
 }
 
 interface BrowserLocationSourceOptions {
@@ -99,6 +105,7 @@ export const createBrowserLocationSource = (
     ? { status: 'permission-required' }
     : { status: 'unavailable' }
   let sequence = 0
+  let lastRefreshRequestedAt = -Infinity
   let watchId: number | undefined
   let watchGeneration = 0
   let freshnessTimers: number[] = []
@@ -225,6 +232,21 @@ export const createBrowserLocationSource = (
     stop: () => {
       stopWatching()
       emitState(options.geolocation ? { status: 'permission-required' } : { status: 'unavailable' })
+    },
+    refresh: () => {
+      if (watchId === undefined || !options.geolocation?.getCurrentPosition) return
+      if ('observation' in state && now() - state.observation.capturedAt < 30_000) return
+      if (now() - lastRefreshRequestedAt < 60_000) return
+      lastRefreshRequestedAt = now()
+      try {
+        options.geolocation.getCurrentPosition(receivePosition, () => undefined, {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 20_000,
+        })
+      } catch {
+        // A one-shot refresh must not break an otherwise valid subscription.
+      }
     },
   }
 }

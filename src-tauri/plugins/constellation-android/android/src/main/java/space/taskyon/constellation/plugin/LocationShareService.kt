@@ -10,6 +10,8 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -30,6 +32,9 @@ class LocationShareService : Service(), LocationListener {
   private var webView: WebView? = null
   private var pendingRequest: String? = null
   private var locationManager: LocationManager? = null
+  private var refreshCancellation: CancellationSignal? = null
+  private var refreshListener: LocationListener? = null
+  private var refreshTimeout: Runnable? = null
   private var expiryTask: Runnable? = null
   private var stopTask: Runnable? = null
 
@@ -65,6 +70,10 @@ class LocationShareService : Service(), LocationListener {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onLocationChanged(location: Location) {
+    sendPosition(location, "location")
+  }
+
+  private fun sendPosition(location: Location, type: String) {
     val coords = JSONObject()
       .put("latitude", location.latitude)
       .put("longitude", location.longitude)
@@ -73,7 +82,7 @@ class LocationShareService : Service(), LocationListener {
       .put("heading", if (location.hasBearing()) location.bearing.toDouble() else JSONObject.NULL)
       .put("speed", if (location.hasSpeed()) location.speed.toDouble() else JSONObject.NULL)
     send(JSONObject()
-      .put("type", "location")
+      .put("type", type)
       .put("position", JSONObject().put("timestamp", location.time).put("coords", coords)))
   }
 
@@ -157,6 +166,7 @@ class LocationShareService : Service(), LocationListener {
       }
       "location-watch-start" -> startLocationUpdates()
       "location-watch-stop" -> stopLocationUpdates()
+      "location-refresh" -> requestFreshLocation()
       "status" -> {
         val status = parsed.optJSONObject("status") ?: return
         ShareServiceContract.currentStatus = status.toString()
@@ -195,8 +205,54 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun stopLocationUpdates() {
+    clearRefresh()
     locationManager?.let { manager -> runCatching { manager.removeUpdates(this) } }
     locationManager = null
+  }
+
+  private fun clearRefresh() {
+    refreshTimeout?.let(mainHandler::removeCallbacks)
+    refreshTimeout = null
+    refreshCancellation?.cancel()
+    refreshCancellation = null
+    refreshListener?.let { listener -> locationManager?.removeUpdates(listener) }
+    refreshListener = null
+  }
+
+  private fun requestFreshLocation() {
+    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+      PackageManager.PERMISSION_GRANTED) return
+    val manager = locationManager ?: getSystemService(LocationManager::class.java)
+    val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+      .firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) } ?: return
+    clearRefresh()
+    locationManager = manager
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val cancellation = CancellationSignal()
+      refreshCancellation = cancellation
+      val timeout = Runnable { clearRefresh() }
+      refreshTimeout = timeout
+      mainHandler.postDelayed(timeout, 20_000L)
+      runCatching {
+        manager.getCurrentLocation(provider, cancellation, mainExecutor) { location ->
+          clearRefresh()
+          if (location != null) sendPosition(location, "location-refresh-result")
+        }
+      }.onFailure { clearRefresh() }
+      return
+    }
+    val listener = object : LocationListener {
+      override fun onLocationChanged(location: Location) {
+        clearRefresh()
+        sendPosition(location, "location-refresh-result")
+      }
+    }
+    refreshListener = listener
+    val timeout = Runnable { clearRefresh() }
+    refreshTimeout = timeout
+    mainHandler.postDelayed(timeout, 20_000L)
+    runCatching { manager.requestSingleUpdate(provider, listener, Looper.getMainLooper()) }
+      .onFailure { clearRefresh() }
   }
 
   private fun send(command: JSONObject) {
@@ -222,6 +278,7 @@ class LocationShareService : Service(), LocationListener {
 
   private fun redactedStatus(status: JSONObject): String = JSONObject(status.toString())
     .put("location", JSONObject().put("status", "unavailable"))
+    .apply { remove("diagnostics") }
     .toString()
 
   private fun failClosed(message: String) {

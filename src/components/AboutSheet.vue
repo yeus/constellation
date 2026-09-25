@@ -45,8 +45,9 @@
         devices, untrusted app code, or recipients who copy their view.
       </p>
       <p>
-        Approximate sharing reduces precision, but repeated areas can still reveal movement
-        patterns. It does not make you anonymous.
+        Approximate sharing uses a neighborhood-sized area; Very coarse uses a city-sized area. Both
+        reduce precision, but repeated areas can still reveal movement patterns. Neither makes you
+        anonymous.
       </p>
       <p>
         Learn more about

@@ -76,6 +76,7 @@
       </button>
       <button type="button" @click="openAbout">Privacy and licenses</button>
       <button type="button" @click="copyLogs">Copy logs</button>
+      <button type="button" @click="openDiagnostics">P2P diagnostics</button>
       <button type="button" @click="openFollowInput">Follow a link</button>
       <button type="button" @click="openFollowing">
         Following ({{ runtimeState.following.length }})
@@ -83,6 +84,13 @@
     </section>
 
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
+    <NetworkDiagnosticsSheet
+      v-if="diagnosticsOpen"
+      :foreground="networkDiagnostics"
+      :location="runtimeState.location"
+      :background="backgroundStatus"
+      @close="diagnosticsOpen = false"
+    />
 
     <section v-if="introOpen" class="intro-note" role="region" aria-label="Privacy introduction">
       <p class="eyebrow">Private location sharing</p>
@@ -130,6 +138,28 @@
       <p v-if="!runtimeState.canSave">
         Protected storage is unavailable on this device; preview only.
       </p>
+    </section>
+
+    <section
+      v-if="shareBackPrompt"
+      class="accept-card"
+      role="region"
+      aria-label="Share back invitation"
+    >
+      <p class="eyebrow">Optional return share</p>
+      <strong>Share yours back with {{ shareBackPrompt }}?</strong>
+      <p>
+        Create a separate timed link with your own precision settings, then send it to them
+        yourself. Nothing is shared automatically.
+      </p>
+      <div class="preview-actions">
+        <button class="primary-action" type="button" @click="openReturnShare">
+          Share mine back
+        </button>
+        <button class="secondary-action" type="button" @click="shareBackPrompt = undefined">
+          Not now
+        </button>
+      </div>
     </section>
 
     <footer class="connection-dock" aria-label="Connections">
@@ -225,6 +255,7 @@
       @close="sharesOpen = false"
       @show="showExistingShare"
       @stop="revokeShare"
+      @viewer-name="setViewerName"
     />
 
     <div v-if="followInputOpen" class="sheet-backdrop" @click.self="followInputOpen = false">
@@ -303,6 +334,7 @@ import {
   type AndroidBackgroundStatus,
 } from '../android/backgroundSharing.ts'
 import LocationMap from '../components/LocationMap.vue'
+import NetworkDiagnosticsSheet from '../components/NetworkDiagnosticsSheet.vue'
 import CloseIcon from '../components/icons/CloseIcon.vue'
 import AboutSheet from '../components/AboutSheet.vue'
 import FollowingSheet from '../components/FollowingSheet.vue'
@@ -338,7 +370,13 @@ import {
   createSharingRuntime,
   type ShareSummary,
   type SharingRuntimeState,
+  type NetworkDiagnostics,
 } from '../sharing/sharingRuntime.ts'
+
+const transportSummary = (diagnostics: NetworkDiagnostics): string => {
+  const transports = diagnostics.connections.map((connection) => connection.transport).sort()
+  return `${diagnostics.connections.length} connections${transports.length ? `: ${transports.join(', ')}` : ''}`
+}
 
 const sessionLog = createSessionLog(
   Date.now,
@@ -386,6 +424,7 @@ const runtimeState = ref<SharingRuntimeState>({
   message: '',
   canSave: true,
 })
+const networkDiagnostics = ref(runtime.networkDiagnostics())
 const shareSheetOpen = ref(false)
 const mapFamily = ref<MapFamily>(
   window.localStorage.getItem('constellation.map-family') === 'minimalist'
@@ -401,6 +440,7 @@ const closeMenuOnOutsideClick = (event: MouseEvent): void => {
   menuOpen.value = false
 }
 const aboutOpen = ref(false)
+const diagnosticsOpen = ref(false)
 const sharesOpen = ref(false)
 const followInputOpen = ref(false)
 const followingOpen = ref(false)
@@ -415,6 +455,7 @@ const invitationPending = ref(false)
 const invitationUrl = ref<string>()
 const browserLocationDeferred = ref(!isNative && window.location.hash.startsWith('#share='))
 const nicknamePrompt = ref<{ shareId: string; name: string }>()
+const shareBackPrompt = ref<string>()
 const localError = ref('')
 const copyNotice = ref('')
 let copyNoticeTimeout: number | undefined
@@ -450,7 +491,25 @@ const unsubscribe = runtime.subscribe((next) => {
   if (runtimeState.value.peerStatus !== next.peerStatus) {
     sessionLog.record({ level: 'info', event: 'sharing.peer.status', state: next.peerStatus })
   }
+  for (const follow of next.following) {
+    const previous = runtimeState.value.following.find((entry) => entry.shareId === follow.shareId)
+    if (previous?.connected === follow.connected) continue
+    sessionLog.record({
+      level: follow.connected ? 'info' : 'warning',
+      event: 'sharing.follow.status',
+      state: follow.connected ? 'connected' : 'disconnected',
+    })
+  }
   runtimeState.value = next
+  const latestNetwork = runtime.networkDiagnostics()
+  if (transportSummary(networkDiagnostics.value) !== transportSummary(latestNetwork)) {
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.network.connections',
+      message: transportSummary(latestNetwork),
+    })
+  }
+  networkDiagnostics.value = latestNetwork
 })
 let backgroundPoll: number | undefined
 let sharedTextPoll: number | undefined
@@ -474,6 +533,34 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   if (backgroundStatus.value?.state !== next.state) {
     sessionLog.record({ level: 'info', event: 'sharing.background.status', state: next.state })
   }
+  if (next.peerStatus && backgroundStatus.value?.peerStatus !== next.peerStatus) {
+    sessionLog.record({ level: 'info', event: 'sharing.background.peer', state: next.peerStatus })
+  }
+  if (backgroundStatus.value?.share?.viewerCount !== next.share?.viewerCount) {
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.background.viewers',
+      message: `${next.share?.viewerCount ?? 0} connected sessions`,
+    })
+  }
+  if (backgroundStatus.value?.location.status !== next.location.status) {
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.background.location',
+      message: next.location.status,
+    })
+  }
+  if (
+    next.diagnostics &&
+    (!backgroundStatus.value?.diagnostics ||
+      transportSummary(backgroundStatus.value.diagnostics) !== transportSummary(next.diagnostics))
+  ) {
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.background.connections',
+      message: transportSummary(next.diagnostics),
+    })
+  }
   backgroundStatus.value = next
 }
 if (backgroundSharing) {
@@ -484,10 +571,18 @@ if (backgroundSharing) {
   )
 }
 
-const activeShares = computed(() => [
-  ...runtimeState.value.shares,
-  ...(backgroundStatus.value?.share ? [backgroundStatus.value.share] : []),
-])
+const activeShares = computed(() =>
+  [
+    ...runtimeState.value.shares,
+    ...(backgroundStatus.value?.share ? [backgroundStatus.value.share] : []),
+  ].map((share) => ({
+    ...share,
+    viewers: share.viewers?.map((viewer) => ({
+      ...viewer,
+      localName: runtime.getViewerLabel(share.shareId, viewer.fingerprint) ?? viewer.localName,
+    })),
+  })),
+)
 const previewFollow = computed(() => runtimeState.value.following.find((entry) => !entry.saved))
 
 const locations = computed(() => {
@@ -499,7 +594,7 @@ const locations = computed(() => {
       ? [locationObservationToMapLocation(own.observation, own.status)]
       : []
   return [
-    ...ownLocations.map((location) => ({ ...location, color: '#f78f3b' })),
+    ...ownLocations.map((location) => ({ ...location, isOwn: true, color: '#f78f3b' })),
     ...runtimeState.value.received.map(({ shareId, observation, state }) => {
       const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
       return locationObservationToMapLocation(observation, state, {
@@ -583,6 +678,10 @@ const openAbout = (): void => {
   aboutOpen.value = true
   menuOpen.value = false
 }
+const openDiagnostics = (): void => {
+  diagnosticsOpen.value = true
+  menuOpen.value = false
+}
 const dismissIntro = (): void => {
   introOpen.value = false
   window.localStorage.setItem(introSeenKey, '1')
@@ -628,6 +727,7 @@ let initiallyCentered = false
 watch(
   ownObservation,
   (observation) => {
+    if (observation && localError.value === 'Waiting for your location…') localError.value = ''
     if (!observation || initiallyCentered || !locationMap.value) return
     locationMap.value.centerOn(locationObservationToMapLocation(observation))
     initiallyCentered = true
@@ -771,13 +871,23 @@ const keepFollowing = (shareId: string): void => {
 const saveNickname = async (): Promise<void> => {
   if (!nicknamePrompt.value) return
   try {
-    await runtime.saveFollowing(nicknamePrompt.value.shareId, nicknamePrompt.value.name)
+    const { shareId, name } = nicknamePrompt.value
+    await runtime.saveFollowing(shareId, name)
+    shareBackPrompt.value =
+      runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
+      'this person'
     nicknamePrompt.value = undefined
     browserLocationDeferred.value = false
     updateVisibility()
   } catch (error) {
     localError.value = error instanceof Error ? error.message : 'Could not save this location.'
   }
+}
+
+const openReturnShare = (): void => {
+  shareBackPrompt.value = undefined
+  shareDraft.value = createShareDraft()
+  shareSheetOpen.value = true
 }
 
 const stopReadyShare = async (): Promise<void> => {
@@ -793,6 +903,13 @@ const stopReadyShare = async (): Promise<void> => {
 const showExistingShare = (share: ShareSummary): void => {
   readyShare.value = share
   sharesOpen.value = false
+}
+const setViewerName = async (shareId: string, fingerprint: string, name: string): Promise<void> => {
+  try {
+    await runtime.setViewerLabel(shareId, fingerprint, name)
+  } catch {
+    localError.value = 'Device name could not be saved in protected storage.'
+  }
 }
 const revokeShare = async (shareId: string): Promise<void> => {
   if (backgroundStatus.value?.share?.shareId === shareId) {

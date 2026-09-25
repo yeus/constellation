@@ -4,9 +4,13 @@ import type { LocationObservationV1 } from './locationObservation.ts'
 
 const EARTH_RADIUS_METERS = 6_371_008.8
 const AREA_SEGMENTS = 48
+const WEB_MERCATOR_CIRCUMFERENCE_METERS = 2 * Math.PI * 6_378_137
+export const LOCATION_MARKER_RADIUS_PX = 7
+export const LOCATION_MARKER_STROKE_PX = 2
 
 export interface MapLocation {
   readonly id: string
+  readonly isOwn?: boolean
   readonly latitude: number
   readonly longitude: number
   readonly precision: 'exact' | 'approximate'
@@ -103,6 +107,26 @@ const areaFeature = (
   },
 })
 
+const pointFeature = (
+  location: MapLocation,
+  shape: LocationProperties['shape'],
+): Feature<Point, LocationProperties> => ({
+  type: 'Feature',
+  properties: propertiesFor(location, shape),
+  geometry: {
+    type: 'Point',
+    coordinates: [location.longitude, location.latitude],
+  },
+})
+
+const areaFitsInsideMarker = (location: MapLocation, radius: number, zoom?: number): boolean => {
+  if (!location.isOwn || zoom === undefined) return false
+  const latitude = (location.latitude * Math.PI) / 180
+  const circumference = WEB_MERCATOR_CIRCUMFERENCE_METERS * Math.cos(latitude)
+  const radiusPixels = (radius * 512 * 2 ** zoom) / circumference
+  return radiusPixels <= LOCATION_MARKER_RADIUS_PX + LOCATION_MARKER_STROKE_PX
+}
+
 export const locationAreaBounds = (
   location: MapLocation,
 ): [[number, number], [number, number]] | undefined => {
@@ -151,7 +175,10 @@ export const locationsBounds = (
   )
 }
 
-const featuresFor = (location: MapLocation): Feature<Point | Polygon, LocationProperties>[] => {
+const featuresFor = (
+  location: MapLocation,
+  zoom?: number,
+): Feature<Point | Polygon, LocationProperties>[] => {
   assertLocation(location)
   if (location.precision === 'approximate') {
     if (
@@ -161,7 +188,11 @@ const featuresFor = (location: MapLocation): Feature<Point | Polygon, LocationPr
     ) {
       throw new RangeError(`Invalid approximate radius for ${location.id}.`)
     }
-    return [areaFeature(location, location.radiusMeters, 'approximate')]
+    return [
+      areaFitsInsideMarker(location, location.radiusMeters, zoom)
+        ? pointFeature(location, 'approximate')
+        : areaFeature(location, location.radiusMeters, 'approximate'),
+    ]
   }
 
   if (
@@ -171,23 +202,20 @@ const featuresFor = (location: MapLocation): Feature<Point | Polygon, LocationPr
     throw new RangeError(`Invalid accuracy for ${location.id}.`)
   }
   if (location.accuracyMeters !== undefined) {
-    return [areaFeature(location, location.accuracyMeters, 'accuracy')]
+    return [
+      areaFitsInsideMarker(location, location.accuracyMeters, zoom)
+        ? pointFeature(location, 'accuracy')
+        : areaFeature(location, location.accuracyMeters, 'accuracy'),
+    ]
   }
 
-  const point: Feature<Point, LocationProperties> = {
-    type: 'Feature',
-    properties: propertiesFor(location, 'position'),
-    geometry: {
-      type: 'Point',
-      coordinates: [location.longitude, location.latitude],
-    },
-  }
-  return [point]
+  return [pointFeature(location, 'position')]
 }
 
 export const createLocationFeatureCollection = (
   locations: readonly MapLocation[],
+  zoom?: number,
 ): FeatureCollection<Point | Polygon, LocationProperties> => ({
   type: 'FeatureCollection',
-  features: locations.flatMap(featuresFor),
+  features: locations.flatMap((location) => featuresFor(location, zoom)),
 })

@@ -2,6 +2,54 @@ import { expect, test } from '@playwright/test'
 
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
 
+test('very coarse shares deliver a 20 km approximate area to a browser viewer', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(90_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  const viewerContext = await browser.newContext({ baseURL })
+  try {
+    const source = await sourceContext.newPage()
+    const viewer = await viewerContext.newPage()
+    await source.goto('/')
+    await source.getByRole('button', { name: 'Share location' }).click()
+    await source.getByRole('button', { name: /Very coarse/ }).click()
+    await source.getByRole('button', { name: 'Create private link' }).click()
+    const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+    const broadState = () =>
+      source.evaluate(async () => {
+        const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+        const share = (await createBrowserPrivateStore().load())?.shares[0]
+        return { precision: share?.precision, radiusMeters: share?.approximation?.radiusMeters }
+      })
+    await expect.poll(broadState).toEqual({ precision: 'very-coarse', radiusMeters: 20_000 })
+
+    await source.reload()
+    await expect(source.getByRole('button', { name: 'Sharing 1' })).toBeVisible()
+    await expect.poll(broadState).toEqual({ precision: 'very-coarse', radiusMeters: 20_000 })
+
+    await viewer.goto(url)
+    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+      timeout: 30_000,
+    })
+    await viewer.getByRole('button', { name: 'Open menu' }).click()
+    await viewer.getByRole('button', { name: 'Following (1)' }).click()
+    await expect(viewer.getByRole('button', { name: 'Show on map' })).toBeVisible({
+      timeout: 30_000,
+    })
+  } finally {
+    await viewerContext.close()
+    await sourceContext.close()
+  }
+})
+
 test('browser link previews immediately and saves only after Keep following', async ({
   browser,
   baseURL,
@@ -55,6 +103,15 @@ test('browser link previews immediately and saves only after Keep following', as
     await expect(viewer.getByRole('dialog', { name: 'Keep following' })).toBeVisible()
     await viewer.getByRole('textbox', { name: 'Nickname' }).fill('My friend')
     await viewer.getByRole('button', { name: 'Save location' }).click()
+    await expect(viewer.getByRole('region', { name: 'Share back invitation' })).toContainText(
+      'Share yours back',
+    )
+    await viewer.getByRole('button', { name: 'Share mine back' }).click()
+    await expect(viewer.getByRole('dialog', { name: 'Share your location' })).toBeVisible()
+    await viewer
+      .getByRole('dialog', { name: 'Share your location' })
+      .getByRole('button', { name: 'Close' })
+      .click()
     await expect(viewer.getByText('Seeing 1')).toBeVisible()
     await expect
       .poll(() =>
@@ -75,7 +132,7 @@ test('shares a browser location over an authenticated P2P stream', async ({
   browser,
   baseURL,
 }, testInfo) => {
-  test.setTimeout(60_000)
+  test.setTimeout(90_000)
   test.skip(testInfo.project.name !== 'desktop')
   if (!baseURL) throw new Error('The test requires a configured base URL.')
 
@@ -138,8 +195,41 @@ test('shares a browser location over an authenticated P2P stream', async ({
     )
     await source.getByText('Connected viewers (1)').click()
     await expect(source.getByRole('dialog', { name: 'Active shares' })).toContainText('Connection ')
+    await source.getByRole('button', { name: /Edit device name/ }).click()
+    await source.getByRole('textbox', { name: 'Device name' }).fill('Friend phone')
     await source
       .getByRole('dialog', { name: 'Active shares' })
+      .getByRole('button', { name: 'Save' })
+      .click()
+    await expect(source.getByRole('dialog', { name: 'Active shares' })).toContainText(
+      'Friend phone',
+    )
+    await source
+      .getByRole('dialog', { name: 'Active shares' })
+      .getByRole('button', { name: 'Close' })
+      .click()
+    await source.getByRole('button', { name: 'Open menu' }).click()
+    await source.getByRole('button', { name: 'P2P diagnostics' }).click()
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('viewer')
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).not.toContainText('/ip4/')
+    await source.getByRole('button', { name: 'Reveal peer IDs and addresses' }).click()
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('/ip4/')
+    await source
+      .getByRole('dialog', { name: 'P2P diagnostics' })
+      .getByRole('button', { name: 'Close' })
+      .click()
+    await viewer.getByRole('button', { name: 'Open menu' }).click()
+    await viewer.getByRole('button', { name: 'Following (1)' }).click()
+    await expect(
+      viewer.getByRole('dialog', { name: 'Following' }).getByRole('button', {
+        name: 'Show on map',
+      }),
+    ).toBeVisible({ timeout: 30_000 })
+    await expect(viewer.getByRole('status').last()).not.toContainText(
+      'Waiting for the first location',
+    )
+    await viewer
+      .getByRole('dialog', { name: 'Following' })
       .getByRole('button', { name: 'Close' })
       .click()
     await viewer.reload()
@@ -148,11 +238,40 @@ test('shares a browser location over an authenticated P2P stream', async ({
     })
     await source.reload()
     await expect(source.getByText('Sharing 1')).toBeVisible({ timeout: 30_000 })
+    await expect(source.getByText('Your position ready')).toBeVisible({ timeout: 15_000 })
+    await viewer.getByRole('button', { name: 'Open menu' }).click()
+    await viewer.getByRole('button', { name: 'Following (1)' }).click()
+    await expect(
+      viewer.getByRole('dialog', { name: 'Following' }).getByRole('button', {
+        name: 'Show on map',
+      }),
+    ).toBeVisible({ timeout: 30_000 })
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Last location')
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText(
+      'Updates this session',
+    )
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Following since')
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Time left')
+    await viewer.getByRole('button', { name: /Edit nickname for/ }).click()
+    await viewer.getByRole('textbox', { name: 'Your nickname' }).fill('Local friend')
+    await viewer
+      .getByRole('dialog', { name: 'Following' })
+      .getByRole('button', { name: 'Save' })
+      .click()
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Local friend')
+    await viewer
+      .getByRole('dialog', { name: 'Following' })
+      .getByRole('button', { name: 'Close' })
+      .click()
     await expect(source.getByRole('button', { name: 'Share location' })).toHaveCount(0)
     await source.getByRole('button', { name: 'Sharing 1' }).click()
     await expect(source.getByRole('dialog', { name: 'Active shares' })).toContainText(
       '1 connected',
       { timeout: 30_000 },
+    )
+    await source.getByText('Connected viewers (1)').click()
+    await expect(source.getByRole('dialog', { name: 'Active shares' })).toContainText(
+      'Friend phone',
     )
     await source
       .getByRole('dialog', { name: 'Active shares' })

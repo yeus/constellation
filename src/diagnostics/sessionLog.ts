@@ -13,7 +13,13 @@ const EVENT_CODES = [
   'sharing.follow.accept.started',
   'sharing.follow.accept.succeeded',
   'sharing.follow.accept.failed',
+  'sharing.follow.status',
+  'sharing.network.connections',
   'sharing.background.status',
+  'sharing.background.peer',
+  'sharing.background.viewers',
+  'sharing.background.location',
+  'sharing.background.connections',
 ] as const
 
 const CATEGORIES = [
@@ -35,6 +41,8 @@ const STATES = [
   'sharing',
   'paused',
   'stopped',
+  'connected',
+  'disconnected',
 ] as const
 const LOG_LIMIT = 2_000
 const REPEAT_WINDOW_MS = 10_000

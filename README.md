@@ -2,7 +2,8 @@
 
 Constellation is a small, decentralized, end-to-end encrypted peer-to-peer
 live-location sharing app. A source
-creates a private link or QR code, chooses exact or approximate disclosure and
+creates a private link or QR code, chooses exact, approximate (1 km radius), or
+very coarse (20 km radius) disclosure and
 an expiry, and can see how many viewers are connected. A recipient opens the
 link without creating an account or managing a Space.
 
@@ -17,16 +18,25 @@ acceptance are not yet release-verified.
 The map normally shows your current position even before you share. Opening an
 incoming link in a browser previews that location immediately without
 requesting your own GPS; the source can see your connected session. The preview
-is not saved unless you choose **Keep following** and a nickname. Native apps
-ask before opening an incoming link. You can create
-separate timed links, reopen their URLs or QR codes, see connected-session
-counts, and revoke them individually. A viewer can follow multiple links and
-set private labels and marker colors. The menu offers Default and Minimalist
+is not saved unless you choose **Keep following** and a nickname. After saving,
+you may create a separate return share; send its link to the original sender
+yourself. Native apps ask before opening an incoming link. You can create
+separate timed links, reopen their URLs or QR codes, label connected viewer
+devices locally, see connected-session counts, and revoke links individually.
+A viewer can follow multiple links and set private labels and marker colors.
+The Following list shows last update, session update count, and time until the
+link expires. The menu offers Default and Minimalist
 map styles that follow the system light/dark theme. The map frames the first
-acquired location area, shows approximate regions without a precise-looking
-center dot until the region is too small to see, and can frame one or all
-received locations from Following. The first-run note, sharing dialog, and
-About sheet explain how the network works.
+acquired location area, shows approximate regions without a center dot, and
+switches your own area to a point when it becomes smaller than the marker at
+low zoom. It can frame one or all received locations from Following. The first-run
+note, sharing dialog, and About sheet explain how the network works.
+
+Android background sharing requests movement-triggered fixes with a five-second
+and five-metre minimum. When an authorized viewer joins after the last fix has
+aged, the source asks for one fresh fix, at most once per minute. An existing
+last position can appear as stale while waiting; locked-device power policy,
+GPS availability, or network conditions may delay or prevent a new fix.
 
 Live location updates are not uploaded to a central location-history service.
 Peers use encrypted libp2p connections; the current browser version needs a
@@ -44,6 +54,10 @@ appear in the browser DevTools console, not in the Vite terminal. Open the
 top-left menu and choose **Copy logs** to export the latest 2,000
 in-memory entries. The log has no viewer and resets when the UI reloads;
 Android service events while the UI is closed are not collected.
+The **P2P diagnostics** menu item shows foreground and Android-background
+connections, transport types, viewer counts, and last-fix age. Peer IDs and
+addresses are hidden unless you explicitly reveal them; they are never copied
+into session logs. Treat revealed details and screenshots as sensitive.
 
 ## Development
 
@@ -215,9 +229,10 @@ imports.
 
 Share capabilities stay in the URL fragment. The relay transports encrypted,
 capability-scoped streams and does not receive location history from the app.
-The application keeps only current observations in memory. Approximate sharing
-publishes a bounded area containing the real position rather than claiming a
-displaced point is exact.
+The application keeps only current observations in memory. Approximate and very
+coarse sharing publish a bounded area containing the reported uncertainty,
+rather than claiming a displaced point is exact. They reduce precision but do
+not make a viewer's observations anonymous; repeated areas can reveal movement.
 
 Browser grants, saved followed links, peer identity, and approximate-region
 control state are encrypted in IndexedDB and survive reload. Temporary previews

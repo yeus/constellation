@@ -85,16 +85,20 @@ const createRegion = (
   observation: LocationObservationV1,
   previous: ApproximationState | undefined,
   random: () => number,
+  minimumRadiusMeters: number,
 ): ApproximationState => {
+  const cityScale = minimumRadiusMeters > DEFAULT_RADIUS_METERS
   const baseRadius = Math.max(
-    DEFAULT_RADIUS_METERS,
+    minimumRadiusMeters,
     observation.accuracyMeters + 400,
-    previous?.radiusMeters ?? 0,
+    cityScale ? 0 : (previous?.radiusMeters ?? 0),
   )
   const safeOffset = baseRadius - observation.accuracyMeters - SAFETY_MARGIN_METERS
   const minimumOffset = Math.min(100, safeOffset * 0.25)
   const maximumOffset = Math.min(300, safeOffset * 0.6)
-  const offset = minimumOffset + (maximumOffset - minimumOffset) * randomUnit(random)
+  const offset = cityScale
+    ? Math.sqrt(randomUnit(random)) * safeOffset
+    : minimumOffset + (maximumOffset - minimumOffset) * randomUnit(random)
   const center = destination(
     observation.latitude,
     observation.longitude,
@@ -126,7 +130,11 @@ export const projectApproximateLocation = (
     if (value === undefined) throw new Error('Secure random generation failed.')
     return value / 2 ** 32
   },
+  minimumRadiusMeters = DEFAULT_RADIUS_METERS,
 ): { observation: LocationObservationV1; state: ApproximationState } => {
+  if (!Number.isFinite(minimumRadiusMeters) || minimumRadiusMeters < DEFAULT_RADIUS_METERS) {
+    throw new RangeError('Approximate area radius must be at least one kilometre.')
+  }
   const distance = previous
     ? distanceMeters(
         previous.latitude,
@@ -142,7 +150,7 @@ export const projectApproximateLocation = (
     previous && distance > previous.thresholdMeters ? previous.beyondThresholdCount + 1 : 0
   const state =
     !previous || containmentFailed || beyondCount >= 2
-      ? createRegion(observation, previous, random)
+      ? createRegion(observation, previous, random, minimumRadiusMeters)
       : { ...previous, beyondThresholdCount: beyondCount }
 
   return {

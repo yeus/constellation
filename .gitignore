@@ -22,3 +22,7 @@ test-results/
 .yarn/install-state.gz
 *.local
 *.log
+/error.txt
+/logs.txt
+/phonelogs.txt
+/cierror.txt

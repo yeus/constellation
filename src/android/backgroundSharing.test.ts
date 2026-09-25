@@ -18,6 +18,7 @@ const draft: ShareDraft = {
 
 const readyStatus: AndroidBackgroundStatus = {
   state: 'sharing',
+  peerStatus: 'online',
   share: {
     shareId: 'share-1',
     url: 'https://constellation.taskyon.space/#share=test',
@@ -81,11 +82,37 @@ test('Android start request contains policy but no location', async () => {
   assert.equal(JSON.stringify(calls).includes('latitude'), false)
 })
 
+test('Android forwards the very coarse preset to its background service', async () => {
+  let request: unknown
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 1_000,
+    invoke: async (_command, args) => {
+      request = args?.request
+      return readyStatus
+    },
+  })
+
+  await controller?.start({ ...draft, precision: 'very-coarse' }, 'https://example.test/')
+  assert.equal((request as { precision?: string }).precision, 'very-coarse')
+})
+
 test('Android status rejects malformed native responses', async () => {
   const controller = createAndroidBackgroundSharing({
     isAndroid: true,
     now: () => 0,
     invoke: async () => ({ state: 'sharing', share: { url: 'secret' } }),
+  })
+
+  assert.ok(controller)
+  await assert.rejects(controller.status(), /invalid background sharing status/i)
+})
+
+test('Android status rejects an unknown background peer state', async () => {
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, peerStatus: 'somewhere' }),
   })
 
   assert.ok(controller)

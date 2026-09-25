@@ -10,7 +10,12 @@ import {
   parseLocationObservationV1,
   type LocationObservationV1,
 } from '../location/locationObservation.ts'
-import { shareExpiryFor, type ShareDraft } from '../shareDraft.ts'
+import {
+  disclosedPrecisionFor,
+  shareExpiryFor,
+  VERY_COARSE_RADIUS_METERS,
+  type ShareDraft,
+} from '../shareDraft.ts'
 import {
   createConstellationMessagePort,
   dialShareStream,
@@ -38,7 +43,7 @@ export interface ShareSummary {
   readonly precision: ShareDraft['precision']
   readonly expiresAt: number | null
   readonly viewerCount: number
-  readonly viewers?: readonly { fingerprint: string; lastSeenAt: number }[]
+  readonly viewers?: readonly { fingerprint: string; lastSeenAt: number; localName?: string }[]
   readonly name?: string
   readonly publication?: ShareDraft['publication']
 }
@@ -50,6 +55,10 @@ export interface FollowSummary {
   readonly color: string
   readonly connected: boolean
   readonly saved: boolean
+  readonly followedAt?: number
+  readonly lastLocationAt?: number
+  readonly updatesReceived: number
+  readonly expiresAt: number | null
 }
 
 export const FOLLOW_COLORS = ['#438ec9', '#8a6fc9', '#289a82', '#c0709a'] as const
@@ -66,6 +75,27 @@ export interface SharingRuntimeState {
   readonly following: readonly FollowSummary[]
   readonly message: string
   readonly canSave: boolean
+}
+
+export interface NetworkDiagnostics {
+  readonly peerStatus: PeerStatus
+  readonly connections: readonly {
+    role: 'viewer' | 'source' | 'other peer'
+    transport: 'relay circuit' | 'WebRTC' | 'WebSocket' | 'WebTransport' | 'other'
+    direction: string
+    status: string
+    connectedAt?: number
+    peerId: string
+    remoteAddress: string
+  }[]
+}
+
+const transportFor = (address: string): NetworkDiagnostics['connections'][number]['transport'] => {
+  if (address.includes('/p2p-circuit')) return 'relay circuit'
+  if (address.includes('/webrtc')) return 'WebRTC'
+  if (address.includes('/webtransport')) return 'WebTransport'
+  if (address.includes('/ws')) return 'WebSocket'
+  return 'other'
 }
 
 interface SourceSession {
@@ -101,6 +131,9 @@ interface FollowEntry {
   color: string
   connected: boolean
   saved: boolean
+  followedAt?: number
+  updatesReceived: number
+  expiresAt: number | null
 }
 
 export const generatedFollowName = (shareId: string): string => {
@@ -112,11 +145,22 @@ export const generatedFollowName = (shareId: string): string => {
 }
 
 export const savedFollowRecords = (
-  entries: readonly { url: string; localName: string; color: string; saved: boolean }[],
+  entries: readonly {
+    url: string
+    localName: string
+    color: string
+    saved: boolean
+    followedAt?: number
+  }[],
 ): PrivateState['followed'] =>
   entries
     .filter((entry) => entry.saved)
-    .map(({ url, localName, color }) => ({ url, localName, color }))
+    .map(({ url, localName, color, followedAt }) => ({
+      url,
+      localName,
+      color,
+      ...(followedAt ? { followedAt } : {}),
+    }))
 
 const viewerFingerprint = async (shareId: string, peerId: string): Promise<string> => {
   const input = new TextEncoder().encode(`${shareId}:${peerId}`)
@@ -155,6 +199,9 @@ const requireAuthorized = (session: SourceSession, share: SourceShare | undefine
 }
 
 export interface SharingRuntime {
+  networkDiagnostics: () => NetworkDiagnostics
+  getViewerLabel: (shareId: string, fingerprint: string) => string | undefined
+  setViewerLabel: (shareId: string, fingerprint: string, name: string) => Promise<void>
   initialize: () => Promise<void>
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
   createShare: (draft: ShareDraft, expiresAt?: number | null) => Promise<ShareSummary>
@@ -177,6 +224,7 @@ export const createSharingRuntime = (
   const shares = new Map<string, SourceShare>()
   const received = new Map<string, LocationObservationV1>()
   const followed = new Map<string, FollowEntry>()
+  const viewerLabels = new Map<string, string>()
   const viewerClosers = new Map<string, () => Promise<void>>()
   const reconnecting = new Set<string>()
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
@@ -209,10 +257,14 @@ export const createSharingRuntime = (
         viewerCount: share.sessions.size,
         viewers: [...share.sessions]
           .filter((session) => session.fingerprint)
-          .map((session) => ({
-            fingerprint: session.fingerprint!,
-            lastSeenAt: session.lastHeartbeatAt,
-          })),
+          .map((session) => {
+            const localName = viewerLabels.get(`${share.capability.shareId}:${session.fingerprint}`)
+            return {
+              fingerprint: session.fingerprint!,
+              lastSeenAt: session.lastHeartbeatAt,
+              ...(localName ? { localName } : {}),
+            }
+          }),
         ...(share.name ? { name: share.name } : {}),
         publication: share.publication,
       })),
@@ -226,14 +278,21 @@ export const createSharingRuntime = (
               ? 'delayed'
               : 'live',
       })),
-      following: [...followed.entries()].map(([shareId, entry]) => ({
-        shareId,
-        sourceName: entry.sourceName,
-        localName: entry.localName,
-        color: entry.color,
-        connected: entry.connected,
-        saved: entry.saved,
-      })),
+      following: [...followed.entries()].map(([shareId, entry]) => {
+        const observation = received.get(shareId)
+        return {
+          shareId,
+          sourceName: entry.sourceName,
+          localName: entry.localName,
+          color: entry.color,
+          connected: entry.connected,
+          saved: entry.saved,
+          ...(entry.followedAt ? { followedAt: entry.followedAt } : {}),
+          ...(observation ? { lastLocationAt: observation.capturedAt } : {}),
+          updatesReceived: entry.updatesReceived,
+          expiresAt: entry.expiresAt,
+        }
+      }),
     }
     observers.forEach((observer) => observer(state))
   }
@@ -252,6 +311,10 @@ export const createSharingRuntime = (
         approximation: share.approximation,
       })),
       followed: savedFollowRecords([...followed.values()]),
+      viewerLabels: [...viewerLabels].map(([key, name]) => {
+        const separator = key.indexOf(':')
+        return { shareId: key.slice(0, separator), fingerprint: key.slice(separator + 1), name }
+      }),
     }
   }
 
@@ -324,9 +387,30 @@ export const createSharingRuntime = (
               color: record.color,
               connected: false,
               saved: true,
+              followedAt: record.followedAt,
+              updatesReceived: 0,
+              expiresAt: capability.expiresAt,
             })
           } catch {
             // Expired or invalid links are not reopened.
+          }
+        }
+        for (const record of saved?.viewerLabels ?? []) {
+          viewerLabels.set(`${record.shareId}:${record.fingerprint}`, record.name)
+        }
+        const currentLocation = locationSource.getState()
+        if (
+          (currentLocation.status === 'live' || currentLocation.status === 'delayed') &&
+          currentLocation.observation.expiresAt > Date.now()
+        ) {
+          let changed = false
+          for (const share of shares.values()) {
+            if (updateShareLocation(share, currentLocation.observation)) changed = true
+          }
+          if (changed) {
+            void persist().catch(() =>
+              publish({ message: 'Private share state could not be saved.' }),
+            )
           }
         }
         publish()
@@ -394,7 +478,7 @@ export const createSharingRuntime = (
             return {
               sessionId: session.sessionId,
               expiresAt: candidate.capability.expiresAt,
-              precision: candidate.precision,
+              precision: disclosedPrecisionFor(candidate.precision),
               ...(candidate.name ? { sourceName: candidate.name } : {}),
               heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
             }
@@ -444,6 +528,7 @@ export const createSharingRuntime = (
                 }),
               )
             }
+            locationSource.refresh()
             return { subscriptionId: session.subscriptionId }
           },
           unsubscribe: ({ subscriptionId }) => {
@@ -496,7 +581,12 @@ export const createSharingRuntime = (
       share.latest = exact
       return false
     }
-    const projected = projectApproximateLocation(exact, share.approximation)
+    const projected = projectApproximateLocation(
+      exact,
+      share.approximation,
+      undefined,
+      share.precision === 'very-coarse' ? VERY_COARSE_RADIUS_METERS : undefined,
+    )
     const changed =
       !share.approximation ||
       Object.entries(projected.state).some(
@@ -571,6 +661,51 @@ export const createSharingRuntime = (
   }, HEARTBEAT_INTERVAL_MS)
 
   const runtime: SharingRuntime = {
+    getViewerLabel: (shareId, fingerprint) => viewerLabels.get(`${shareId}:${fingerprint}`),
+    setViewerLabel: async (shareId, fingerprint, name) => {
+      await prepareState()
+      const key = `${shareId}:${fingerprint}`
+      const previous = viewerLabels.get(key)
+      const next = name.trim().slice(0, 32)
+      if (next) viewerLabels.set(key, next)
+      else viewerLabels.delete(key)
+      if (viewerLabels.size > 1_024) {
+        if (previous) viewerLabels.set(key, previous)
+        else viewerLabels.delete(key)
+        throw new Error('Too many saved device names.')
+      }
+      try {
+        await persist()
+      } catch (error) {
+        if (previous) viewerLabels.set(key, previous)
+        else viewerLabels.delete(key)
+        throw error
+      }
+      publish()
+    },
+    networkDiagnostics: () => ({
+      peerStatus: state.peerStatus,
+      connections: (handlerNode?.getConnections() ?? []).map((connection) => {
+        const peerId = connection.remotePeer.toString()
+        const address = connection.remoteAddr.toString()
+        const viewer = [...shares.values()].some((share) =>
+          [...share.sessions].some((session) => session.peerId === peerId),
+        )
+        const source = [...followed.values()].some((entry) => entry.sourcePeerId === peerId)
+        let role: NetworkDiagnostics['connections'][number]['role'] = 'other peer'
+        if (viewer) role = 'viewer'
+        else if (source) role = 'source'
+        return {
+          role,
+          transport: transportFor(address),
+          direction: connection.direction,
+          status: connection.status,
+          peerId,
+          remoteAddress: address,
+          ...(connection.timeline.open ? { connectedAt: connection.timeline.open } : {}),
+        }
+      }),
+    }),
     initialize: async () => {
       await prepareState()
       if (shares.size > 0) {
@@ -671,17 +806,24 @@ export const createSharingRuntime = (
             FOLLOW_COLORS[followed.size % FOLLOW_COLORS.length]!,
           connected: true,
           saved: existing?.saved ?? options.saved ?? true,
+          followedAt: existing ? existing.followedAt : Date.now(),
+          updatesReceived: existing?.updatesReceived ?? 0,
+          expiresAt: capability.expiresAt,
         })
-        received.delete(capability.shareId)
         await client.sensor.describe({ sensorId: LOCATION_SENSOR_ID })
         const activeSubscription: { id?: string } = {}
         let pendingObservation: unknown
+        let awaitingFirstObservation = true
         const receiveObservation = (payload: unknown): void => {
           try {
             const observation = parseLocationObservationV1(payload)
             const current = received.get(capability.shareId)
-            if (!acceptNewerLocationObservation(current, observation)) return
+            const newSource = awaitingFirstObservation && current?.sourceId !== observation.sourceId
+            if (!newSource && !acceptNewerLocationObservation(current, observation)) return
+            awaitingFirstObservation = false
             received.set(capability.shareId, observation)
+            const entry = followed.get(capability.shareId)
+            if (entry) entry.updatesReceived += 1
             publish({ message: '' })
           } catch {
             // Invalid location payloads are ignored without retaining their data.
@@ -758,7 +900,9 @@ export const createSharingRuntime = (
           }
           publish()
         })
-        publish({ message: 'Waiting for the first location…' })
+        publish({
+          message: received.has(capability.shareId) ? '' : 'Waiting for the first location…',
+        })
       } catch (error) {
         if (previousFollow) followed.set(capability.shareId, previousFollow)
         else followed.delete(capability.shareId)

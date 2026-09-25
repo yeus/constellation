@@ -61,7 +61,7 @@
 
       <fieldset>
         <legend>Precision</legend>
-        <div class="choice-grid choice-grid--two">
+        <div class="choice-grid choice-grid--three">
           <button
             type="button"
             class="choice"
@@ -70,7 +70,17 @@
             @click="emit('precision', 'approximate')"
           >
             <strong>Approximate</strong>
-            <span>Neighborhood area</span>
+            <span>1 km radius</span>
+          </button>
+          <button
+            type="button"
+            class="choice"
+            :class="{ 'choice--selected': draft.precision === 'very-coarse' }"
+            :aria-pressed="draft.precision === 'very-coarse'"
+            @click="emit('precision', 'very-coarse')"
+          >
+            <strong>Very coarse</strong>
+            <span>{{ VERY_COARSE_RADIUS_METERS / 1_000 }} km radius</span>
           </button>
           <button
             type="button"
@@ -148,6 +158,7 @@ import type {
   SharePublication,
   ViewerCapacity,
 } from '../shareDraft.ts'
+import { VERY_COARSE_RADIUS_METERS } from '../shareDraft.ts'
 
 defineProps<{
   draft: ShareDraft

@@ -25,6 +25,7 @@ type BackgroundCommand =
       }
     }
   | { readonly type: 'location'; readonly position: BrowserPosition }
+  | { readonly type: 'location-refresh-result'; readonly position: BrowserPosition }
   | { readonly type: 'location-error'; readonly code: number }
   | { readonly type: 'stop' }
 
@@ -49,6 +50,7 @@ const draftFor = (
 
 const start = (): void => {
   let positionObserver: ((position: BrowserPosition) => void) | undefined
+  let refreshObserver: ((position: BrowserPosition) => void) | undefined
   let errorObserver: ((error: { code: number }) => void) | undefined
   let runtime: ReturnType<typeof createSharingRuntime> | undefined
   let requestedExpiry: number | null = null
@@ -63,6 +65,10 @@ const start = (): void => {
         return 1
       },
       clearWatch: () => post({ type: 'location-watch-stop' }),
+      getCurrentPosition: (success) => {
+        refreshObserver = success
+        post({ type: 'location-refresh' })
+      },
     },
   })
   const report = (state: SharingRuntimeState): void => {
@@ -71,6 +77,8 @@ const start = (): void => {
       type: 'status',
       status: {
         state: share ? 'sharing' : state.peerStatus === 'error' ? 'error' : 'starting',
+        peerStatus: state.peerStatus,
+        diagnostics: runtime?.networkDiagnostics(),
         ...(share ? { share: { ...share, expiresAt: requestedExpiry } } : {}),
         location: state.location,
         message: state.message,
@@ -81,8 +89,14 @@ const start = (): void => {
   window.__constellationBackgroundCommand = (encoded) => {
     const command = JSON.parse(encoded) as BackgroundCommand
     if (command.type === 'location') return positionObserver?.(command.position)
+    if (command.type === 'location-refresh-result') {
+      refreshObserver?.(command.position)
+      refreshObserver = undefined
+      return
+    }
     if (command.type === 'location-error') return errorObserver?.({ code: command.code })
     if (command.type === 'stop') {
+      refreshObserver = undefined
       void runtime?.stop().finally(() => post({ type: 'stopped' }))
       runtime = undefined
       return

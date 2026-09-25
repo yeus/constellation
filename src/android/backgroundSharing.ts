@@ -1,9 +1,12 @@
 import type { BrowserLocationState } from '../location/browser.ts'
 import { shareExpiryFor, type ShareDraft } from '../shareDraft.ts'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
+import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
 
 export interface AndroidBackgroundStatus {
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
+  readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
+  readonly diagnostics?: NetworkDiagnostics
   readonly share?: ShareSummary
   readonly location: BrowserLocationState
   readonly message: string
@@ -38,7 +41,9 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
   if (
     !['starting', 'sharing', 'paused', 'stopped', 'error'].includes(String(candidate.state)) ||
     !isLocationState(candidate.location) ||
-    typeof candidate.message !== 'string'
+    typeof candidate.message !== 'string' ||
+    (candidate.peerStatus !== undefined &&
+      !['offline', 'connecting', 'online', 'error'].includes(candidate.peerStatus))
   ) {
     throw new Error('Invalid background sharing status.')
   }

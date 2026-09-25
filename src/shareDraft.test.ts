@@ -5,6 +5,7 @@ import {
   acknowledgeUntilRevoked,
   canCreateShare,
   createShareDraft,
+  disclosedPrecisionFor,
   setDuration,
   setName,
   setPublication,
@@ -44,6 +45,17 @@ test('share updates return new drafts without mutating the original', () => {
   assert.equal(expanded.viewerCapacity, 10)
   assert.notEqual(initial, exact)
   assert.notEqual(exact, expanded)
+})
+
+test('very coarse is an independent source choice and does not change the default', () => {
+  const initial = createShareDraft()
+  const broad = setPrecision(initial, 'very-coarse')
+
+  assert.equal(initial.precision, 'approximate')
+  assert.equal(broad.precision, 'very-coarse')
+  assert.equal(disclosedPrecisionFor(broad.precision), 'approximate')
+  assert.equal(disclosedPrecisionFor('exact'), 'exact')
+  assert.equal(canCreateShare(broad), true)
 })
 
 test('until-revoked sharing requires explicit acknowledgement every time', () => {

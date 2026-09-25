@@ -5,7 +5,7 @@ import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 
 const ShareRecord = z.object({
   url: z.string().url().max(4_096),
-  precision: z.enum(['exact', 'approximate']),
+  precision: z.enum(['exact', 'approximate', 'very-coarse']),
   capacity: z.number().int().min(1).max(128),
   name: z.string().max(32).optional(),
   publication: z.enum(['foreground', 'background']),
@@ -24,6 +24,13 @@ const FollowRecord = z.object({
   url: z.string().url().max(4_096),
   localName: z.string().max(32),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
+  followedAt: z.number().int().positive().optional(),
+})
+
+const ViewerLabelRecord = z.object({
+  shareId: z.string().min(16).max(64),
+  fingerprint: z.string().min(1).max(32),
+  name: z.string().min(1).max(32),
 })
 
 const PrivateStateSchema = z.object({
@@ -31,6 +38,7 @@ const PrivateStateSchema = z.object({
   privateKey: z.string().min(40).max(1_024),
   shares: z.array(ShareRecord).max(128),
   followed: z.array(FollowRecord).max(128),
+  viewerLabels: z.array(ViewerLabelRecord).max(1_024).optional(),
 })
 
 export type PrivateState = z.output<typeof PrivateStateSchema>

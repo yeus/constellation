@@ -136,6 +136,8 @@ test('frames the first acquired accuracy area without following later updates', 
   })
   await page.goto('/')
   await page.waitForFunction(() => 'deliverPosition' in window)
+  await page.getByRole('button', { name: 'Center on my location' }).click()
+  await expect(page.getByRole('status').last()).toContainText('Waiting for your location')
 
   await page.evaluate(async () => {
     const testWindow = window as typeof window & {
@@ -173,6 +175,7 @@ test('frames the first acquired accuracy area without following later updates', 
       ),
     )
     .toBe(1)
+  await expect(page.getByRole('status').last()).not.toContainText('Waiting for your location')
   const first = await page.evaluate(
     () =>
       (

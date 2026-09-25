@@ -21,11 +21,23 @@ test('bounds remembered redemption nonces and preserves recent entries', () => {
 
 test('temporary previews are excluded from the private saved-follow snapshot', () => {
   const records = savedFollowRecords([
-    { url: 'https://example.test/#one', localName: 'River', color: '#438ec9', saved: false },
-    { url: 'https://example.test/#two', localName: 'Forest', color: '#8a6fc9', saved: true },
+    {
+      url: 'https://example.test/#one',
+      localName: 'River',
+      color: '#438ec9',
+      saved: false,
+      followedAt: 1_000,
+    },
+    {
+      url: 'https://example.test/#two',
+      localName: 'Forest',
+      color: '#8a6fc9',
+      saved: true,
+      followedAt: 2_000,
+    },
   ])
   assert.deepEqual(records, [
-    { url: 'https://example.test/#two', localName: 'Forest', color: '#8a6fc9' },
+    { url: 'https://example.test/#two', localName: 'Forest', color: '#8a6fc9', followedAt: 2_000 },
   ])
 })
 

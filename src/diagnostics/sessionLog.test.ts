@@ -66,3 +66,24 @@ test('removes standalone share secrets, local addresses, paths, and line breaks'
   assert.equal(result.category, 'tile')
   assert.doesNotMatch(result.message, /synthetic-secret|192\.168|\/home\/example|\n/)
 })
+
+test('records follow connection changes without a peer identifier', () => {
+  const log = createSessionLog(() => 1_000)
+  log.record({ level: 'warning', event: 'sharing.follow.status', state: 'disconnected' })
+  log.record({ level: 'info', event: 'sharing.follow.status', state: 'connected' })
+
+  assert.match(log.format('browser'), /sharing\.follow\.status · disconnected/)
+  assert.match(log.format('browser'), /sharing\.follow\.status · connected/)
+})
+
+test('records transport-count changes without raw network addresses', () => {
+  const log = createSessionLog(() => 1_000)
+  log.record({
+    level: 'info',
+    event: 'sharing.network.connections',
+    message: '2 connections: WebRTC, relay circuit',
+  })
+
+  assert.match(log.format('android'), /2 connections: WebRTC, relay circuit/)
+  assert.doesNotMatch(log.format('android'), /\/ip4\//)
+})

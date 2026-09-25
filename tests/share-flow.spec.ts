@@ -84,10 +84,20 @@ test('configures a privacy-preserving location share', async ({ page }) => {
   await page.getByRole('button', { name: 'Share location' }).click()
 
   const approximate = page.getByRole('button', { name: /Approximate/ })
+  const veryCoarse = page.getByRole('button', { name: /Very coarse/ })
   const oneHour = page.getByRole('button', { name: '1 hour' })
   const oneViewer = page.getByRole('button', { name: '1', exact: true })
 
   await expect(approximate).toHaveAttribute('aria-pressed', 'true')
+  await expect(veryCoarse).toHaveAttribute('aria-pressed', 'false')
+  await veryCoarse.click()
+  await expect(veryCoarse).toHaveAttribute('aria-pressed', 'true')
+  await expect(approximate).toHaveAttribute('aria-pressed', 'false')
+  if (test.info().project.name === 'mobile') {
+    const action = await page.getByRole('button', { name: 'Create private link' }).boundingBox()
+    expect(action).not.toBeNull()
+    expect(action!.y + action!.height).toBeLessThanOrEqual(page.viewportSize()!.height)
+  }
   await expect(oneHour).toHaveAttribute('aria-pressed', 'true')
   await expect(oneViewer).toHaveAttribute('aria-pressed', 'true')
 

@@ -48,6 +48,7 @@ test('creates a nonzero stable region that contains the reported uncertainty', (
   )
 
   assert.ok(offset > 0)
+  assert.ok(offset < 300)
   assert.ok(offset + 12 <= first.observation.accuracyMeters)
   assert.equal(second.observation.latitude, first.observation.latitude)
   assert.equal(second.observation.longitude, first.observation.longitude)
@@ -77,4 +78,63 @@ test('transitions with overlap and enlarges for poor accuracy', () => {
       next.state.radiusMeters,
   )
   assert.ok(circleOverlapRatio(first.state.radiusMeters, next.state.radiusMeters, centers) >= 0.75)
+})
+
+test('city-sized areas keep their randomized centers far beyond the neighborhood offset', () => {
+  const first = projectApproximateLocation(
+    exactObservation(52.52, 13.405),
+    undefined,
+    randomValues(0.25, 0.5, 0.5),
+    20_000,
+  )
+  const offset = distanceMeters(first.state.latitude, first.state.longitude, 52.52, 13.405)
+  const nearby = projectApproximateLocation(
+    exactObservation(52.53, 13.405, 12, 2),
+    first.state,
+    randomValues(0.9, 0.2, 0.2),
+    20_000,
+  )
+
+  assert.equal(first.observation.precision, 'approximate')
+  assert.equal(first.state.radiusMeters, 20_000)
+  assert.ok(offset > 5_000 && offset < 15_000)
+  assert.ok(offset + 12 < first.state.radiusMeters)
+  assert.equal(nearby.state.latitude, first.state.latitude)
+  assert.equal(nearby.state.longitude, first.state.longitude)
+  assert.equal('speedMps' in first.observation, false)
+})
+
+test('city-sized areas return toward the preset after a temporary accuracy enlargement', () => {
+  const poorFix = projectApproximateLocation(
+    exactObservation(0, 0, 50_000),
+    undefined,
+    randomValues(0.25, 0.5, 0.5),
+    20_000,
+  )
+  const moved = exactObservation(0.25, 0, 12, 2)
+  const crossing = projectApproximateLocation(
+    moved,
+    poorFix.state,
+    randomValues(0.25, 0.5, 0.5),
+    20_000,
+  )
+  const next = projectApproximateLocation(
+    moved,
+    crossing.state,
+    randomValues(0.25, 0.5, 0.5),
+    20_000,
+  )
+  const centers = distanceMeters(
+    poorFix.state.latitude,
+    poorFix.state.longitude,
+    next.state.latitude,
+    next.state.longitude,
+  )
+
+  assert.ok(poorFix.state.radiusMeters > 50_000)
+  assert.equal(next.state.radiusMeters, 20_000)
+  assert.ok(next.state.radiusMeters < poorFix.state.radiusMeters)
+  assert.ok(
+    circleOverlapRatio(poorFix.state.radiusMeters, next.state.radiusMeters, centers) >= 0.75,
+  )
 })

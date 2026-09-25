@@ -1,7 +1,8 @@
-export type LocationPrecision = 'approximate' | 'exact'
+export type LocationPrecision = 'approximate' | 'very-coarse' | 'exact'
 export type ShareDuration = '1h' | '8h' | 'until-revoked'
 export type ViewerCapacity = 1 | 10 | 50 | 'unlimited'
 export type SharePublication = 'foreground' | 'background'
+export const VERY_COARSE_RADIUS_METERS = 20_000
 
 export interface ShareDraft {
   readonly precision: LocationPrecision
@@ -25,6 +26,9 @@ export const setPrecision = (draft: ShareDraft, precision: LocationPrecision): S
   ...draft,
   precision,
 })
+
+export const disclosedPrecisionFor = (precision: LocationPrecision): 'approximate' | 'exact' =>
+  precision === 'exact' ? 'exact' : 'approximate'
 
 export const setDuration = (draft: ShareDraft, duration: ShareDuration): ShareDraft => ({
   ...draft,

@@ -16,6 +16,8 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { describeDiagnosticError, type SessionLogInput } from '../diagnostics/sessionLog.ts'
 import {
   createLocationFeatureCollection,
+  LOCATION_MARKER_RADIUS_PX,
+  LOCATION_MARKER_STROKE_PX,
   locationAreaBounds,
   locationsBounds,
   type MapLocation,
@@ -54,7 +56,7 @@ const addLocationLayers = (target: maplibregl.Map): void => {
   if (target.getSource(LOCATION_SOURCE_ID)) return
   target.addSource(LOCATION_SOURCE_ID, {
     type: 'geojson',
-    data: createLocationFeatureCollection(props.locations),
+    data: createLocationFeatureCollection(props.locations, target.getZoom()),
   })
   target.addLayer({
     id: `${LOCATION_SOURCE_ID}-areas`,
@@ -86,9 +88,9 @@ const addLocationLayers = (target: maplibregl.Map): void => {
         '#7b8794',
         ['coalesce', ['get', 'color'], '#f78f3b'],
       ],
-      'circle-radius': 7,
+      'circle-radius': LOCATION_MARKER_RADIUS_PX,
       'circle-stroke-color': theme.value === 'dark' ? '#ffffff' : '#2a3548',
-      'circle-stroke-width': 2,
+      'circle-stroke-width': LOCATION_MARKER_STROKE_PX,
     },
   })
 }
@@ -139,6 +141,7 @@ const initialize = (): void => {
       if (map) addLocationLayers(map)
       emit('diagnostic', { level: 'info', event: 'map.style.loaded' })
     })
+    map.on('zoom', updateLocations)
     map.on('error', ({ error }) => {
       const detail = describeDiagnosticError(error)
       mapNotice.value = `Map error (${detail.category}): ${detail.message}`
@@ -164,7 +167,7 @@ const initialize = (): void => {
 
 const updateLocations = (): void => {
   const source = map?.getSource<GeoJSONSource>(LOCATION_SOURCE_ID)
-  if (source) source.setData(createLocationFeatureCollection(props.locations))
+  if (source && map) source.setData(createLocationFeatureCollection(props.locations, map.getZoom()))
 }
 
 const updateTheme = (event: MediaQueryListEvent): void => {

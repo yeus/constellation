@@ -73,6 +73,65 @@ test('represents approximate locations only with their uncertainty area', () => 
   assert.equal(feature?.properties?.shape, 'approximate')
 })
 
+test('switches an own approximate area to a point only when it is smaller than the marker', () => {
+  const location = {
+    id: 'synthetic-area',
+    isOwn: true,
+    latitude: 40,
+    longitude: 20,
+    precision: 'approximate' as const,
+    radiusMeters: 500,
+  }
+
+  const far = createLocationFeatureCollection([location], 8).features
+  const near = createLocationFeatureCollection([location], 13).features
+
+  assert.equal(far.length, 1)
+  assert.equal(far[0]?.geometry.type, 'Point')
+  assert.equal(far[0]?.properties?.shape, 'approximate')
+  assert.equal(near.length, 1)
+  assert.equal(near[0]?.geometry.type, 'Polygon')
+})
+
+test('uses the same zoom-dependent fallback for a GPS accuracy area', () => {
+  const location = {
+    id: 'synthetic-own-position',
+    isOwn: true,
+    latitude: 40,
+    longitude: 20,
+    precision: 'exact' as const,
+    accuracyMeters: 20,
+  }
+
+  const far = createLocationFeatureCollection([location], 8).features[0]
+  const near = createLocationFeatureCollection([location], 17).features[0]
+
+  assert.equal(far?.geometry.type, 'Point')
+  assert.equal(far?.properties?.shape, 'accuracy')
+  assert.equal(near?.geometry.type, 'Polygon')
+})
+
+test('keeps received areas unchanged when zooming out', () => {
+  const features = createLocationFeatureCollection(
+    [
+      {
+        id: 'peer-approximate',
+        latitude: 40,
+        longitude: 20,
+        precision: 'approximate',
+        radiusMeters: 500,
+      },
+      { id: 'peer-exact', latitude: 40, longitude: 20, precision: 'exact', accuracyMeters: 20 },
+    ],
+    8,
+  ).features
+
+  assert.deepEqual(
+    features.map(({ geometry }) => geometry.type),
+    ['Polygon', 'Polygon'],
+  )
+})
+
 test('provides bounds around the full uncertainty area', () => {
   const bounds = locationAreaBounds({
     id: 'synthetic-area',

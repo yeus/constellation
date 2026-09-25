@@ -9,6 +9,7 @@ const createFixture = () => {
   const cleared: number[] = []
   const timers = new Map<number, () => void>()
   let receivedOptions: PositionOptions | undefined
+  let refreshCount = 0
   let nextTimer = 1
   let now = 10_000
 
@@ -21,6 +22,9 @@ const createFixture = () => {
     },
     clearWatch: (id) => {
       cleared.push(id)
+    },
+    getCurrentPosition: () => {
+      refreshCount += 1
     },
   }
 
@@ -59,6 +63,7 @@ const createFixture = () => {
     deny: () => failure?.({ code: 1 }),
     runTimers: () => [...timers.values()].forEach((callback) => callback()),
     getPositionOptions: () => receivedOptions,
+    getRefreshCount: () => refreshCount,
   }
 }
 
@@ -93,6 +98,24 @@ test('owns geolocation start and stop with monotonic observations', () => {
   fixture.source.start()
   fixture.succeed()
   assert.deepEqual(observations, [1, 2, 3, 4])
+})
+
+test('requests one fresh fix for newly connected viewers only when the last fix is old', () => {
+  const fixture = createFixture()
+  fixture.source.start()
+  fixture.succeed()
+  fixture.setNow(20_000)
+  fixture.source.refresh()
+  assert.equal(fixture.getRefreshCount(), 0)
+
+  fixture.setNow(50_000)
+  fixture.source.refresh()
+  fixture.source.refresh()
+  assert.equal(fixture.getRefreshCount(), 1)
+
+  fixture.setNow(111_000)
+  fixture.source.refresh()
+  assert.equal(fixture.getRefreshCount(), 2)
 })
 
 test('moves observations through live, delayed, and stale states', () => {

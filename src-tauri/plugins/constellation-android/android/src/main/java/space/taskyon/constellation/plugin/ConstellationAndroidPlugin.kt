@@ -176,7 +176,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   private fun validateRequest(encoded: String): JSONObject {
     require(encoded.isNotBlank() && encoded.length <= 4096) { "Background share request is invalid." }
     val request = JSONObject(encoded)
-    require(request.optString("precision") in setOf("exact", "approximate")) {
+    require(request.optString("precision") in setOf("exact", "approximate", "very-coarse")) {
       "Background share precision is invalid."
     }
     val capacity = request.opt("viewerCapacity")
