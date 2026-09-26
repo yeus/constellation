@@ -8,6 +8,11 @@ export interface AndroidBackgroundStatus {
   readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
   readonly diagnostics?: NetworkDiagnostics
   readonly share?: ShareSummary
+  readonly returnOffers?: readonly {
+    shareId: string
+    viewerFingerprint: string
+    url: string
+  }[]
   readonly location: BrowserLocationState
   readonly message: string
 }
@@ -68,6 +73,7 @@ export const createAndroidBackgroundSharing = (
       start: (draft: ShareDraft, shareBaseUrl: string) => Promise<AndroidBackgroundStatus>
       status: () => Promise<AndroidBackgroundStatus>
       stop: () => Promise<AndroidBackgroundStatus>
+      blockViewer: (shareId: string, fingerprint: string) => Promise<AndroidBackgroundStatus>
     }
   | undefined => {
   if (!dependencies.isAndroid) return undefined
@@ -90,5 +96,9 @@ export const createAndroidBackgroundSharing = (
     },
     status,
     stop: async () => parseStatus(await dependencies.invoke('android_stop_background_share')),
+    blockViewer: async (shareId, fingerprint) =>
+      parseStatus(
+        await dependencies.invoke('android_block_background_viewer', { shareId, fingerprint }),
+      ),
   }
 }

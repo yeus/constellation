@@ -52,6 +52,24 @@ async fn android_stop_background_share(app: tauri::AppHandle) -> Result<serde_js
 }
 
 #[tauri::command]
+async fn android_block_background_viewer(
+    app: tauri::AppHandle,
+    share_id: String,
+    fingerprint: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .block_viewer(&share_id, &fingerprint)
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id, fingerprint);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_take_shared_text(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     return app
@@ -135,6 +153,7 @@ pub fn run() {
             android_start_background_share,
             android_background_share_status,
             android_stop_background_share,
+            android_block_background_viewer,
             android_take_shared_text,
             android_load_private_state,
             android_save_private_state,

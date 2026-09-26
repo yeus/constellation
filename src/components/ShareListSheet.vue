@@ -66,6 +66,14 @@
               </svg>
               Edit name
             </button>
+            <button
+              type="button"
+              class="viewer-row__button"
+              :aria-label="`Block device ${viewer.localName || `Connection ${viewer.fingerprint}`}`"
+              @click="emit('viewerBlock', share.shareId, viewer.fingerprint)"
+            >
+              Block device
+            </button>
           </div>
           <small>These fingerprints identify connections on this link, not people.</small>
         </details>
@@ -89,6 +97,7 @@ const emit = defineEmits<{
   show: [share: ShareSummary]
   stop: [shareId: string]
   viewerName: [shareId: string, fingerprint: string, name: string]
+  viewerBlock: [shareId: string, fingerprint: string]
 }>()
 const editingViewer = ref<string>()
 const nameDraft = ref('')

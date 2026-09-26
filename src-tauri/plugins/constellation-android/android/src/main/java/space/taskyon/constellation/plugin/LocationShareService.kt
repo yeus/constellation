@@ -48,6 +48,15 @@ class LocationShareService : Service(), LocationListener {
       requestStop()
       return START_NOT_STICKY
     }
+    if (intent?.action == ShareServiceContract.ACTION_BLOCK_VIEWER) {
+      if (pendingRequest != null && webView != null) {
+        send(JSONObject()
+          .put("type", "block-viewer")
+          .put("shareId", intent.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
+          .put("fingerprint", intent.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)))
+      }
+      return START_NOT_STICKY
+    }
     val request = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
     if (request == null) {
       failClosed("Background sharing stopped because its peer identity cannot be restored.")
@@ -278,7 +287,10 @@ class LocationShareService : Service(), LocationListener {
 
   private fun redactedStatus(status: JSONObject): String = JSONObject(status.toString())
     .put("location", JSONObject().put("status", "unavailable"))
-    .apply { remove("diagnostics") }
+    .apply {
+      remove("diagnostics")
+      remove("returnOffers")
+    }
     .toString()
 
   private fun failClosed(message: String) {

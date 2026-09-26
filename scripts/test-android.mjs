@@ -178,19 +178,26 @@ const runShareFlow = async (cdp, browser) => {
     'the Android foreground location service',
   )
 
-  const viewer = await browser.newPage()
+  const viewerContext = await browser.newContext({
+    geolocation: { latitude: 40.0002, longitude: -70.0002 },
+    permissions: ['geolocation'],
+  })
+  const viewer = await viewerContext.newPage()
   const invitation = new URL(shareUrl)
   await viewer.goto(`http://127.0.0.1:4173/${invitation.hash}`)
-  await viewer.getByRole('button', { name: 'View location' }).click()
   try {
-    await viewer.getByText('Viewing a shared location').waitFor({ timeout: 30_000 })
+    await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
+    await viewer.getByRole('button', { name: 'Open menu' }).click()
+    await viewer.getByRole('button', { name: 'Following (1)' }).click()
+    await viewer.getByRole('button', { name: 'Show on map' }).waitFor({ timeout: 30_000 })
   } catch (error) {
     const browserState = {
       p2pOnline: await viewer.getByText('P2P online').isVisible(),
       invitationVisible: await viewer
         .getByText('Someone shared their location with you')
         .isVisible(),
-      locationVisible: await viewer.getByText('Viewing a shared location').isVisible(),
+      previewVisible: await viewer.getByRole('button', { name: 'Keep following' }).isVisible(),
+      locationVisible: await viewer.getByRole('button', { name: 'Show on map' }).isVisible(),
     }
     const androidState = {
       p2pOnline: await androidTextIncludes(cdp, 'P2P online'),
@@ -202,11 +209,31 @@ const runShareFlow = async (cdp, browser) => {
       { cause: error },
     )
   }
+  await viewer.getByRole('button', { name: 'Show on map' }).click()
+  await viewer.getByRole('button', { name: 'Keep following' }).click()
+  await viewer.getByRole('button', { name: 'Save location' }).click()
+  await viewer.getByRole('button', { name: 'Share mine back' }).click()
+  await viewer.getByRole('button', { name: 'Create private link' }).click()
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+  await waitFor(
+    () => androidTextIncludes(cdp, 'A connected viewer offered a private location link'),
+    'the private return offer in Android',
+    30_000,
+  )
+  assert.equal(await clickButton(cdp, 'View return location'), true)
+  await waitFor(
+    () => androidTextIncludes(cdp, 'Someone shared their location with you'),
+    'the Android return-link approval',
+  )
+  assert.equal(await clickButton(cdp, 'View location'), true)
+  await waitFor(() => androidTextIncludes(cdp, 'Seeing 1'), 'Android return viewer', 30_000)
+  assert.equal(await clickButton(cdp, 'Seeing 1'), true)
+  await waitFor(() => androidTextIncludes(cdp, 'Show on map'), 'the return location', 30_000)
+  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
   await waitFor(() => androidTextIncludes(cdp, '1 connected'), 'Android viewer presence', 30_000)
-  assert.equal(await clickButton(cdp, 'Stop sharing'), true)
+  assert.equal(await clickButton(cdp, 'Revoke link'), true)
   await viewer.getByText('Location sharing ended.').waitFor({ timeout: 15_000 })
-  await viewer.close()
+  await viewerContext.close()
 }
 
 const main = async () => {

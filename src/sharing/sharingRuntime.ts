@@ -73,6 +73,7 @@ export interface SharingRuntimeState {
     state: 'live' | 'delayed' | 'stale'
   }[]
   readonly following: readonly FollowSummary[]
+  readonly returnOffers: readonly { shareId: string; viewerFingerprint: string; url: string }[]
   readonly message: string
   readonly canSave: boolean
 }
@@ -119,6 +120,7 @@ interface SourceShare {
   readonly publication: ShareDraft['publication']
   readonly sessions: Set<SourceSession>
   readonly redeemedNonces: Set<string>
+  readonly blockedPeerIds: Set<string>
   approximation?: ApproximationState
   latest?: LocationObservationV1
 }
@@ -202,6 +204,9 @@ export interface SharingRuntime {
   networkDiagnostics: () => NetworkDiagnostics
   getViewerLabel: (shareId: string, fingerprint: string) => string | undefined
   setViewerLabel: (shareId: string, fingerprint: string, name: string) => Promise<void>
+  blockViewer: (shareId: string, fingerprint: string) => Promise<void>
+  offerReturnShare: (followShareId: string, url: string) => Promise<void>
+  dismissReturnOffer: (shareId: string, fingerprint: string) => void
   initialize: () => Promise<void>
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
   createShare: (draft: ShareDraft, expiresAt?: number | null) => Promise<ShareSummary>
@@ -226,6 +231,11 @@ export const createSharingRuntime = (
   const followed = new Map<string, FollowEntry>()
   const viewerLabels = new Map<string, string>()
   const viewerClosers = new Map<string, () => Promise<void>>()
+  const returnSenders = new Map<string, (url: string) => Promise<void>>()
+  const returnOffers = new Map<
+    string,
+    { shareId: string; viewerFingerprint: string; url: string }
+  >()
   const reconnecting = new Set<string>()
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
@@ -240,6 +250,7 @@ export const createSharingRuntime = (
     shares: [],
     received: [],
     following: [],
+    returnOffers: [],
     message: '',
     canSave: Boolean(store),
   }
@@ -293,6 +304,7 @@ export const createSharingRuntime = (
           expiresAt: entry.expiresAt,
         }
       }),
+      returnOffers: [...returnOffers.values()],
     }
     observers.forEach((observer) => observer(state))
   }
@@ -308,6 +320,7 @@ export const createSharingRuntime = (
         capacity: share.capacity,
         name: share.name,
         publication: share.publication,
+        blockedPeerIds: [...share.blockedPeerIds],
         approximation: share.approximation,
       })),
       followed: savedFollowRecords([...followed.values()]),
@@ -371,6 +384,7 @@ export const createSharingRuntime = (
               publication: record.publication,
               sessions: new Set(),
               redeemedNonces: new Set(),
+              blockedPeerIds: new Set(record.blockedPeerIds ?? []),
               approximation: record.approximation,
             })
           } catch {
@@ -454,6 +468,7 @@ export const createSharingRuntime = (
             const permitted =
               candidate &&
               !candidate.redeemedNonces.has(viewerNonce) &&
+              !candidate.blockedPeerIds.has(session.peerId) &&
               candidate.sessions.size < candidate.capacity &&
               (candidate.capability.expiresAt === null ||
                 Date.now() < candidate.capability.expiresAt) &&
@@ -467,7 +482,9 @@ export const createSharingRuntime = (
                 },
                 proof,
               ))
-            if (!candidate || !permitted) throw new Error('Share access denied.')
+            if (!candidate || !permitted || candidate.blockedPeerIds.has(session.peerId)) {
+              throw new Error('Share access denied.')
+            }
             authorizedShare = candidate
             session.sessionId = randomToken()
             session.lastHeartbeatAt = Date.now()
@@ -495,6 +512,23 @@ export const createSharingRuntime = (
             requireAuthorized(session, authorizedShare)
             if (session.sessionId !== sessionId) throw new Error('Share access denied.')
             removeSession(session)
+          },
+          offerReturn: ({ sessionId, url }) => {
+            const share = requireAuthorized(session, authorizedShare)
+            if (session.sessionId !== sessionId || !share.sessions.has(session)) {
+              throw new Error('Share access denied.')
+            }
+            const offered = parseShareInvitation(url)
+            if (!session.fingerprint || offered.shareId === share.capability.shareId) {
+              throw new Error('Invalid return share.')
+            }
+            const key = `${share.capability.shareId}:${session.fingerprint}`
+            returnOffers.set(key, {
+              shareId: share.capability.shareId,
+              viewerFingerprint: session.fingerprint,
+              url,
+            })
+            publish()
           },
         },
         sensor: {
@@ -641,6 +675,9 @@ export const createSharingRuntime = (
       }
       if (expired) {
         shares.delete(share.capability.shareId)
+        for (const key of returnOffers.keys()) {
+          if (key.startsWith(`${share.capability.shareId}:`)) returnOffers.delete(key)
+        }
         void persist().catch(() => publish({ message: 'Expired share state could not be saved.' }))
       }
     }
@@ -661,6 +698,16 @@ export const createSharingRuntime = (
   }, HEARTBEAT_INTERVAL_MS)
 
   const runtime: SharingRuntime = {
+    offerReturnShare: async (followShareId, url) => {
+      const send = returnSenders.get(followShareId)
+      if (!send) throw new Error('The original sender is not connected. Send the link manually.')
+      parseShareInvitation(url)
+      await send(url)
+    },
+    dismissReturnOffer: (shareId, fingerprint) => {
+      returnOffers.delete(`${shareId}:${fingerprint}`)
+      publish()
+    },
     getViewerLabel: (shareId, fingerprint) => viewerLabels.get(`${shareId}:${fingerprint}`),
     setViewerLabel: async (shareId, fingerprint, name) => {
       await prepareState()
@@ -682,6 +729,38 @@ export const createSharingRuntime = (
         throw error
       }
       publish()
+    },
+    blockViewer: async (shareId, fingerprint) => {
+      await prepareState()
+      const share = shares.get(shareId)
+      if (!share) throw new Error('This share is no longer available.')
+      const sessions = [...share.sessions].filter((session) => session.fingerprint === fingerprint)
+      if (sessions.length === 0) throw new Error('This device is no longer connected.')
+      const peerIds = [...new Set(sessions.map((session) => session.peerId))]
+      if (share.blockedPeerIds.size + peerIds.length > 128) {
+        throw new Error('Too many blocked devices on this link; revoke the link instead.')
+      }
+      for (const peerId of peerIds) share.blockedPeerIds.add(peerId)
+      try {
+        await persist()
+      } catch (error) {
+        for (const peerId of peerIds) share.blockedPeerIds.delete(peerId)
+        throw error
+      }
+      for (const session of sessions) {
+        share.sessions.delete(session)
+        if (session.sessionId) {
+          session.send(
+            constellationProtocolV1.streams['share.sessions'].closed.parse({
+              type: 'closed',
+              sessionId: session.sessionId,
+              reason: 'revoked',
+            }),
+          )
+        }
+      }
+      publish()
+      await Promise.all(sessions.map((session) => session.closeAfterFlush()))
     },
     networkDiagnostics: () => ({
       peerStatus: state.peerStatus,
@@ -742,6 +821,7 @@ export const createSharingRuntime = (
         publication: draft.publication,
         sessions: new Set(),
         redeemedNonces: new Set(),
+        blockedPeerIds: new Set(),
       }
       shares.set(share.capability.shareId, share)
       const currentLocation = locationSource.getState()
@@ -770,7 +850,19 @@ export const createSharingRuntime = (
         throw new Error('Already following this link.')
       }
       const { node } = await ensurePeer()
-      const stream = await dialShareStream(node, capability.addresses, SHARE_STREAM_PROTOCOL)
+      const existingConnections = node
+        .getConnections()
+        .filter(
+          (connection) =>
+            connection.status === 'open' &&
+            connection.remotePeer.toString() === capability.sourcePeerId,
+        )
+      const stream = await dialShareStream(
+        node,
+        capability.addresses,
+        SHARE_STREAM_PROTOCOL,
+        existingConnections,
+      )
       const messagePort = createConstellationMessagePort(stream)
       const client = createPortClient(messagePort.port, constellationProtocolV1)
       const previousFollow = followed.get(capability.shareId)
@@ -879,10 +971,14 @@ export const createSharingRuntime = (
           await messagePort.close()
         }
         viewerClosers.set(capability.shareId, close)
+        returnSenders.set(capability.shareId, (url) =>
+          client.share.offerReturn({ sessionId: session.sessionId, url }),
+        )
         try {
           if (followed.get(capability.shareId)?.saved) await persist()
         } catch (error) {
           viewerClosers.delete(capability.shareId)
+          returnSenders.delete(capability.shareId)
           if (existing) followed.set(capability.shareId, existing)
           else followed.delete(capability.shareId)
           await close()
@@ -893,6 +989,7 @@ export const createSharingRuntime = (
           unsubscribe()
           if (viewerClosers.get(capability.shareId) !== close) return
           viewerClosers.delete(capability.shareId)
+          returnSenders.delete(capability.shareId)
           const entry = followed.get(capability.shareId)
           if (entry) entry.connected = false
           if (result.reason !== 'local') {
@@ -925,6 +1022,7 @@ export const createSharingRuntime = (
         throw error
       }
       viewerClosers.delete(shareId)
+      returnSenders.delete(shareId)
       if (close) await close()
       publish()
     },
@@ -988,6 +1086,9 @@ export const createSharingRuntime = (
       } catch (error) {
         shares.set(shareId, share)
         throw error
+      }
+      for (const key of returnOffers.keys()) {
+        if (key.startsWith(`${shareId}:`)) returnOffers.delete(key)
       }
       for (const session of share.sessions) {
         if (session.sessionId) {

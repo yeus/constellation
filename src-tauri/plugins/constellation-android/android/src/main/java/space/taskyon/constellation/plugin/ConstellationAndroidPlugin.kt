@@ -28,6 +28,12 @@ class PrivateStateArgs {
   var state: String = ""
 }
 
+@InvokeArg
+class BlockViewerArgs {
+  var shareId: String = ""
+  var fingerprint: String = ""
+}
+
 @TauriPlugin
 class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activity) {
   private val store by lazy { EncryptedShareStore(activity.applicationContext) }
@@ -126,6 +132,27 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       invoke.resolve(JSObject(STOPPED_STATUS))
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not stop background location sharing.")
+    }
+  }
+
+  @Command
+  fun blockBackgroundViewer(invoke: Invoke) {
+    try {
+      check(serviceRunning()) { "No background share is running." }
+      val args = invoke.parseArgs(BlockViewerArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      check(args.fingerprint.matches(Regex("[A-Za-z0-9_-]{1,32}"))) {
+        "Invalid device fingerprint."
+      }
+      activity.startService(
+        Intent(activity, LocationShareService::class.java)
+          .setAction(ShareServiceContract.ACTION_BLOCK_VIEWER)
+          .putExtra(ShareServiceContract.EXTRA_SHARE_ID, args.shareId)
+          .putExtra(ShareServiceContract.EXTRA_FINGERPRINT, args.fingerprint),
+      )
+      invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not block this device.")
     }
   }
 

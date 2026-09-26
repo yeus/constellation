@@ -97,6 +97,26 @@ test('Android forwards the very coarse preset to its background service', async 
   assert.equal((request as { precision?: string }).precision, 'very-coarse')
 })
 
+test('Android forwards a device block to its running background share', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return readyStatus
+    },
+  })
+
+  assert.deepEqual(await controller?.blockViewer('share-1', 'device-a'), readyStatus)
+  assert.deepEqual(calls, [
+    {
+      command: 'android_block_background_viewer',
+      args: { shareId: 'share-1', fingerprint: 'device-a' },
+    },
+  ])
+})
+
 test('Android status rejects malformed native responses', async () => {
   const controller = createAndroidBackgroundSharing({
     isAndroid: true,
@@ -117,4 +137,20 @@ test('Android status rejects an unknown background peer state', async () => {
 
   assert.ok(controller)
   await assert.rejects(controller.status(), /invalid background sharing status/i)
+})
+
+test('Android status carries an in-memory private return offer', async () => {
+  const offer = {
+    shareId: 'synthetic-share-id',
+    viewerFingerprint: 'synthetic-device',
+    url: 'https://example.invalid/#share=synthetic-return-link',
+  }
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, returnOffers: [offer] }),
+  })
+
+  assert.ok(controller)
+  assert.deepEqual((await controller.status()).returnOffers, [offer])
 })

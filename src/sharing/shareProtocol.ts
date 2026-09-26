@@ -34,6 +34,13 @@ export const shareProtocolV1 = defineFrpServiceProtocol({
       request: z.object({ sessionId: z.string().min(16).max(64) }),
       defaultTimeoutMs: 5_000,
     },
+    offerReturn: {
+      request: z.object({
+        sessionId: z.string().min(16).max(64),
+        url: z.string().url().max(4_096),
+      }),
+      defaultTimeoutMs: 10_000,
+    },
   },
   streams: {
     sessions: {

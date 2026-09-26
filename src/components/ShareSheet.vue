@@ -122,7 +122,7 @@
       </label>
 
       <fieldset>
-        <legend>Viewers</legend>
+        <legend>Star viewers</legend>
         <div class="viewer-options">
           <button
             v-for="option in viewerOptions"
@@ -138,7 +138,7 @@
             {{ option.label }}
           </button>
         </div>
-        <p class="field-help">Anyone with the link can view it. Revoke it any time.</p>
+        <p class="field-help">Viewers see you, not each other. Return shares come only to you.</p>
       </fieldset>
 
       <p class="runtime-note">{{ runtimeNote }}</p>

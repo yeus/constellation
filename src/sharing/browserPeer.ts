@@ -5,7 +5,7 @@ import {
 } from '@taskyon/p2p-core/browser'
 import { PRIMARY_RELAY_WS_MULTIADDR } from '@taskyon/p2p-core/constants'
 import { createLibp2pMessagePort } from '@taskyon/p2p-core/messagePort'
-import type { PrivateKey, Stream } from '@libp2p/interface'
+import type { Connection, PrivateKey, Stream } from '@libp2p/interface'
 import { multiaddr } from '@multiformats/multiaddr'
 import type { ProtocolMessage } from '@taskyon/protocol'
 
@@ -97,7 +97,7 @@ export const startPrivateBrowserPeer = async (
 export const orderShareAddresses = (addresses: readonly string[]): string[] =>
   [...addresses].sort((left, right) => {
     const rank = (address: string) =>
-      address.includes('/p2p-circuit/webrtc') ? 2 : address.includes('/p2p-circuit') ? 0 : 1
+      address.includes('/p2p-circuit/webrtc') ? 2 : address.includes('/p2p-circuit') ? 1 : 0
     return rank(left) - rank(right)
   })
 
@@ -105,9 +105,19 @@ export const dialShareStream = async (
   node: Pick<BrowserLibp2pNode, 'dialProtocol'>,
   addresses: readonly string[],
   protocol: string,
+  connections: readonly Connection[] = [],
 ): Promise<Stream> => {
   const ordered = orderShareAddresses(addresses)
   let lastError: unknown
+  for (const connection of [...connections].sort(
+    (left, right) => Number(right.direct) - Number(left.direct),
+  )) {
+    try {
+      return await connection.newStream(protocol, { runOnLimitedConnection: true })
+    } catch (error) {
+      lastError = error
+    }
+  }
   for (const address of ordered) {
     try {
       return await node.dialProtocol(multiaddr(address), protocol, {

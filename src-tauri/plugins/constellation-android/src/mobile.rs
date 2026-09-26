@@ -42,6 +42,15 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub fn block_viewer(&self, share_id: &str, fingerprint: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin(
+                "blockBackgroundViewer",
+                json!({ "shareId": share_id, "fingerprint": fingerprint }),
+            )
+            .map_err(Into::into)
+    }
+
     pub fn take_shared_text(&self) -> crate::Result<Value> {
         self.0
             .run_mobile_plugin("takeSharedText", json!({}))

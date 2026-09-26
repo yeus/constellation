@@ -24,6 +24,15 @@ test('combines share authorization and Taskyon sensor operations on one versione
     true,
   )
   assert.equal(
+    constellationProtocolV1.message.safeParse({
+      type: 'share.offerReturnRequest',
+      requestId: 'request-3',
+      sessionId: 'synthetic-session-id',
+      url: 'https://example.invalid/#share=synthetic-return-capability',
+    }).success,
+    true,
+  )
+  assert.equal(
     constellationProtocolV1.message.safeParse({ type: 'location.dumpAll' }).success,
     false,
   )

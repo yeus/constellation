@@ -13,7 +13,10 @@ internal object ShareServiceContract {
   @Volatile var currentStatus: String? = null
   const val ACTION_START = "space.taskyon.constellation.START_LOCATION_SHARE"
   const val ACTION_STOP = "space.taskyon.constellation.STOP_LOCATION_SHARE"
+  const val ACTION_BLOCK_VIEWER = "space.taskyon.constellation.BLOCK_LOCATION_VIEWER"
   const val EXTRA_REQUEST = "space.taskyon.constellation.SHARE_REQUEST"
+  const val EXTRA_SHARE_ID = "space.taskyon.constellation.SHARE_ID"
+  const val EXTRA_FINGERPRINT = "space.taskyon.constellation.VIEWER_FINGERPRINT"
   const val CHANNEL_ID = "constellation-location-share-v1"
   const val NOTIFICATION_ID = 4107
 }

@@ -19,6 +19,16 @@ const locationService = fs.readFileSync(
   'src-tauri/plugins/constellation-android/android/src/main/java/space/taskyon/constellation/plugin/LocationShareService.kt',
   'utf8',
 )
+const shareNotification = fs.readFileSync(
+  'src-tauri/plugins/constellation-android/android/src/main/java/space/taskyon/constellation/plugin/ShareNotification.kt',
+  'utf8',
+)
+const backgroundEntry = fs.readFileSync('src/android/backgroundEntry.ts', 'utf8')
+const mobileBridge = fs.readFileSync(
+  'src-tauri/plugins/constellation-android/src/mobile.rs',
+  'utf8',
+)
+const tauriCommands = fs.readFileSync('src-tauri/src/lib.rs', 'utf8')
 
 assert.equal(tauri.identifier, 'space.taskyon.constellation')
 assert.equal(tauri.bundle.android.minSdkVersion, 29)
@@ -59,6 +69,12 @@ assert.match(manifest, /android:mimeType="text\/plain"/)
 assert.match(androidPlugin, /fun takeSharedText\(invoke: Invoke\)/)
 assert.match(androidPlugin, /fun loadPrivateState\(invoke: Invoke\)/)
 assert.match(androidPlugin, /fun savePrivateState\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun blockBackgroundViewer\(invoke: Invoke\)/)
+assert.match(shareNotification, /ACTION_BLOCK_VIEWER/)
+assert.match(locationService, /"block-viewer"/)
+assert.match(backgroundEntry, /runtime\?\.blockViewer\(command\.shareId, command\.fingerprint\)/)
+assert.match(mobileBridge, /"blockBackgroundViewer"/)
+assert.match(tauriCommands, /android_block_background_viewer/)
 assert.doesNotMatch(manifest, /FOREGROUND_SERVICE_DATA_SYNC/)
 assert.match(serviceManifest, /android:stopWithTask="false"/)
 assert.match(androidPlugin, /requireNotificationPermission\(\)/)
@@ -69,5 +85,7 @@ assert.match(locationService, /LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f/)
 assert.equal(/\?: store\.loadRequest\(\)/.test(locationService), false)
 assert.equal(/store\.saveStatus\(status\.toString\(\)\)/.test(locationService), false)
 assert.match(locationService, /store\.saveStatus\(redactedStatus\(status\)\)/)
+assert.match(locationService, /remove\("returnOffers"\)/)
+assert.match(backgroundEntry, /returnOffers: state\.returnOffers/)
 
 console.log('Android configuration checks passed.')

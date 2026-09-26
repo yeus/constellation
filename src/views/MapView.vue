@@ -147,10 +147,10 @@
       aria-label="Share back invitation"
     >
       <p class="eyebrow">Optional return share</p>
-      <strong>Share yours back with {{ shareBackPrompt }}?</strong>
+      <strong>Share yours back with {{ shareBackPrompt.name }}?</strong>
       <p>
-        Create a separate timed link with your own precision settings, then send it to them
-        yourself. Nothing is shared automatically.
+        Choose your own duration and precision. Your private return link goes only to the original
+        sender over the encrypted connection. Nothing is shared until you create it.
       </p>
       <div class="preview-actions">
         <button class="primary-action" type="button" @click="openReturnShare">
@@ -159,6 +159,26 @@
         <button class="secondary-action" type="button" @click="shareBackPrompt = undefined">
           Not now
         </button>
+      </div>
+    </section>
+
+    <section
+      v-if="pendingReturnOffer"
+      class="accept-card"
+      role="region"
+      aria-label="Return location offered"
+    >
+      <p class="eyebrow">Private return share</p>
+      <strong>A connected viewer offered a private location link</strong>
+      <p>
+        Open it only if you expect this return share. The link does not prove who owns the location;
+        other viewers cannot see it.
+      </p>
+      <div class="preview-actions">
+        <button class="primary-action" type="button" @click="acceptReturnOffer">
+          View return location
+        </button>
+        <button class="secondary-action" type="button" @click="dismissReturnOffer">Dismiss</button>
       </div>
     </section>
 
@@ -239,7 +259,7 @@
             : 'Android needs all-the-time location permission and shows a persistent notification.'
           : 'Sharing pauses when this app is hidden and stops when it is closed.'
       "
-      @close="shareSheetOpen = false"
+      @close="closeShareSheet"
       @submit="createShare"
       @precision="updatePrecision"
       @duration="updateDuration"
@@ -256,6 +276,7 @@
       @show="showExistingShare"
       @stop="revokeShare"
       @viewer-name="setViewerName"
+      @viewer-block="blockViewer"
     />
 
     <div v-if="followInputOpen" class="sheet-backdrop" @click.self="followInputOpen = false">
@@ -415,14 +436,24 @@ const backgroundSharing = createAndroidBackgroundSharing({
     ensureTauriLocationPermission(await import('@tauri-apps/plugin-geolocation')),
 })
 const backgroundStatus = ref<AndroidBackgroundStatus>()
+const dismissedBackgroundOffers = ref(new Map<string, string>())
 const runtimeState = ref<SharingRuntimeState>({
   peerStatus: 'offline',
   location: locationSource.getState(),
   shares: [],
   received: [],
   following: [],
+  returnOffers: [],
   message: '',
   canSave: true,
+})
+const pendingReturnOffer = computed(() => {
+  const foreground = runtimeState.value.returnOffers[0]
+  if (foreground) return foreground
+  return backgroundStatus.value?.returnOffers?.find(
+    ({ shareId, viewerFingerprint, url }) =>
+      dismissedBackgroundOffers.value.get(`${shareId}:${viewerFingerprint}`) !== url,
+  )
 })
 const networkDiagnostics = ref(runtime.networkDiagnostics())
 const shareSheetOpen = ref(false)
@@ -455,7 +486,8 @@ const invitationPending = ref(false)
 const invitationUrl = ref<string>()
 const browserLocationDeferred = ref(!isNative && window.location.hash.startsWith('#share='))
 const nicknamePrompt = ref<{ shareId: string; name: string }>()
-const shareBackPrompt = ref<string>()
+const shareBackPrompt = ref<{ shareId: string; name: string }>()
+const returnTarget = ref<string>()
 const localError = ref('')
 const copyNotice = ref('')
 let copyNoticeTimeout: number | undefined
@@ -797,6 +829,15 @@ const createShare = async (): Promise<void> => {
       }
       readyShare.value = backgroundStatus.value.share
     }
+    if (returnTarget.value && readyShare.value) {
+      try {
+        await runtime.offerReturnShare(returnTarget.value, readyShare.value.url)
+      } catch (error) {
+        localError.value =
+          error instanceof Error ? error.message : 'Send this return link to the sender manually.'
+      }
+      returnTarget.value = undefined
+    }
     shareSheetOpen.value = false
     shareDraft.value = createShareDraft()
     collapseActions()
@@ -873,9 +914,12 @@ const saveNickname = async (): Promise<void> => {
   try {
     const { shareId, name } = nicknamePrompt.value
     await runtime.saveFollowing(shareId, name)
-    shareBackPrompt.value =
-      runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
-      'this person'
+    shareBackPrompt.value = {
+      shareId,
+      name:
+        runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
+        'this person',
+    }
     nicknamePrompt.value = undefined
     browserLocationDeferred.value = false
     updateVisibility()
@@ -885,9 +929,32 @@ const saveNickname = async (): Promise<void> => {
 }
 
 const openReturnShare = (): void => {
+  returnTarget.value = shareBackPrompt.value?.shareId
   shareBackPrompt.value = undefined
   shareDraft.value = createShareDraft()
   shareSheetOpen.value = true
+}
+
+const closeShareSheet = (): void => {
+  shareSheetOpen.value = false
+  returnTarget.value = undefined
+}
+
+const dismissReturnOffer = (): void => {
+  const offer = pendingReturnOffer.value
+  if (!offer) return
+  if (runtimeState.value.returnOffers.includes(offer)) {
+    runtime.dismissReturnOffer(offer.shareId, offer.viewerFingerprint)
+  } else {
+    dismissedBackgroundOffers.value.set(`${offer.shareId}:${offer.viewerFingerprint}`, offer.url)
+  }
+}
+
+const acceptReturnOffer = (): void => {
+  const offer = pendingReturnOffer.value
+  if (!offer) return
+  dismissReturnOffer()
+  offerInvitation(offer.url)
 }
 
 const stopReadyShare = async (): Promise<void> => {
@@ -909,6 +976,17 @@ const setViewerName = async (shareId: string, fingerprint: string, name: string)
     await runtime.setViewerLabel(shareId, fingerprint, name)
   } catch {
     localError.value = 'Device name could not be saved in protected storage.'
+  }
+}
+const blockViewer = async (shareId: string, fingerprint: string): Promise<void> => {
+  try {
+    if (backgroundStatus.value?.share?.shareId === shareId) {
+      backgroundStatus.value = await backgroundSharing?.blockViewer(shareId, fingerprint)
+    } else {
+      await runtime.blockViewer(shareId, fingerprint)
+    }
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not block this device.'
   }
 }
 const revokeShare = async (shareId: string): Promise<void> => {

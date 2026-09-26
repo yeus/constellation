@@ -28,6 +28,7 @@ type BackgroundCommand =
   | { readonly type: 'location-refresh-result'; readonly position: BrowserPosition }
   | { readonly type: 'location-error'; readonly code: number }
   | { readonly type: 'stop' }
+  | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
 
 const post = (value: unknown): void =>
   window.ConstellationNative?.postMessage(JSON.stringify(value))
@@ -80,6 +81,7 @@ const start = (): void => {
         peerStatus: state.peerStatus,
         diagnostics: runtime?.networkDiagnostics(),
         ...(share ? { share: { ...share, expiresAt: requestedExpiry } } : {}),
+        returnOffers: state.returnOffers,
         location: state.location,
         message: state.message,
       },
@@ -95,6 +97,19 @@ const start = (): void => {
       return
     }
     if (command.type === 'location-error') return errorObserver?.({ code: command.code })
+    if (command.type === 'block-viewer') {
+      void runtime?.blockViewer(command.shareId, command.fingerprint).catch((error) =>
+        post({
+          type: 'status',
+          status: {
+            state: 'error',
+            location: location.getState(),
+            message: error instanceof Error ? error.message : 'Could not block this device.',
+          },
+        }),
+      )
+      return
+    }
     if (command.type === 'stop') {
       refreshObserver = undefined
       void runtime?.stop().finally(() => post({ type: 'stopped' }))

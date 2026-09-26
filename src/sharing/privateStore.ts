@@ -9,6 +9,7 @@ const ShareRecord = z.object({
   capacity: z.number().int().min(1).max(128),
   name: z.string().max(32).optional(),
   publication: z.enum(['foreground', 'background']),
+  blockedPeerIds: z.array(z.string().min(10).max(200)).max(128).optional(),
   approximation: z
     .object({
       latitude: z.number().min(-90).max(90),
