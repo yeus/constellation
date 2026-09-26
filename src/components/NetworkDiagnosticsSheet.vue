@@ -46,7 +46,8 @@
       <template v-if="background">
         <h3>Android background peer · {{ background.peerStatus || background.state }}</h3>
         <p class="field-help">
-          {{ background.share?.viewerCount ?? 0 }} connected viewer sessions · location
+          {{ backgroundViewerCount }} connected sessions across {{ background.shares.length }} links
+          · location
           {{ background.location.status }}
           <span v-if="'observation' in background.location">
             · last fix {{ elapsed(background.location.observation.capturedAt) }} ago</span
@@ -76,17 +77,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { AndroidBackgroundStatus } from '../android/backgroundSharing.ts'
 import type { BrowserLocationState } from '../location/browser.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
 import CloseIcon from './icons/CloseIcon.vue'
 
-defineProps<{
+const props = defineProps<{
   foreground: NetworkDiagnostics
   location: BrowserLocationState
   background?: AndroidBackgroundStatus
 }>()
+const backgroundViewerCount = computed(
+  () => props.background?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0,
+)
 const emit = defineEmits<{ close: [] }>()
 const revealed = ref(false)
 

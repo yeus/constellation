@@ -44,6 +44,16 @@ const PrivateStateSchema = z.object({
 
 export type PrivateState = z.output<typeof PrivateStateSchema>
 
+export interface PrivateStateStore {
+  load: () => Promise<PrivateState | undefined>
+  save: (state: PrivateState) => Promise<void>
+}
+
+export const parsePrivateState = (value: unknown): PrivateState => PrivateStateSchema.parse(value)
+
+export const parsePrivateStateJson = (value: string): PrivateState =>
+  parsePrivateState(JSON.parse(value))
+
 const requestResult = <T>(request: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)

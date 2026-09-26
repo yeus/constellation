@@ -24,56 +24,110 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.app.ActivityCompat
 import java.io.ByteArrayInputStream
+import java.util.UUID
+import java.util.concurrent.Executors
 import org.json.JSONObject
 
 class LocationShareService : Service(), LocationListener {
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val ioExecutor = Executors.newSingleThreadExecutor()
   private lateinit var store: EncryptedShareStore
   private var webView: WebView? = null
-  private var pendingRequest: String? = null
+  private val pendingCommands = mutableListOf<JSONObject>()
+  private val pendingCreateIds = mutableSetOf<String>()
+  private var runtimeReady = false
+  private var runtimeError = false
   private var locationManager: LocationManager? = null
   private var refreshCancellation: CancellationSignal? = null
   private var refreshListener: LocationListener? = null
   private var refreshTimeout: Runnable? = null
-  private var expiryTask: Runnable? = null
-  private var stopTask: Runnable? = null
 
   override fun onCreate() {
     super.onCreate()
-    store = EncryptedShareStore(applicationContext)
+    store = EncryptedShareStore(applicationContext, discardUnreadable = false)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ShareServiceContract.ACTION_STOP) {
-      requestStop()
-      return START_NOT_STICKY
-    }
-    if (intent?.action == ShareServiceContract.ACTION_BLOCK_VIEWER) {
-      if (pendingRequest != null && webView != null) {
-        send(JSONObject()
-          .put("type", "block-viewer")
-          .put("shareId", intent.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
-          .put("fingerprint", intent.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)))
+    val action = intent?.action
+    return try {
+      when (action) {
+        ShareServiceContract.ACTION_STOP -> {
+          queueCommand(JSONObject().put("type", "stop-all"))
+          if (webView == null && !store.hasSavedShares()) finishStop()
+          else startRuntime()
+          START_NOT_STICKY
+        }
+        ShareServiceContract.ACTION_STOP_SHARE -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "stop-share")
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_SET_VISIBLE -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "set-visible")
+              .put("visible", intent?.getBooleanExtra(ShareServiceContract.EXTRA_VISIBLE, false) ?: false),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_BLOCK_VIEWER -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "block-viewer")
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
+              .put("fingerprint", intent?.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_SET_VIEWER_NAME -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "set-viewer-name")
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
+              .put("fingerprint", intent?.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT))
+              .put("name", intent?.getStringExtra(ShareServiceContract.EXTRA_NAME)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_START -> {
+          val request = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
+            ?: throw IllegalArgumentException("Background share request is missing.")
+          val requestId = UUID.randomUUID().toString()
+          pendingCreateIds.add(requestId)
+          queueCommand(
+            JSONObject()
+              .put("type", "create-share")
+              .put("requestId", requestId)
+              .put("request", JSONObject(request)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_RESTORE, null -> {
+          if (!store.hasSavedShares() || (action == null && !store.hasBackgroundShares())) {
+            finishStop()
+            START_NOT_STICKY
+          } else {
+            startRuntime()
+            START_STICKY
+          }
+        }
+        else -> {
+          finishStop()
+          START_NOT_STICKY
+        }
       }
-      return START_NOT_STICKY
+    } catch (error: Exception) {
+      failClosed(error.message ?: "Protected location sharing could not be restored.")
+      START_NOT_STICKY
     }
-    val request = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
-    if (request == null) {
-      failClosed("Background sharing stopped because its peer identity cannot be restored.")
-      return START_NOT_STICKY
-    }
-    if (expired(request)) {
-      finishStop()
-      return START_NOT_STICKY
-    }
-    pendingRequest = request
-    startForeground(
-      ShareServiceContract.NOTIFICATION_ID,
-      ShareNotification.build(this, "Starting private P2P sharing…"),
-    )
-    scheduleExpiry(request)
-    if (webView == null) createRuntime()
-    return START_NOT_STICKY
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -103,12 +157,16 @@ class LocationShareService : Service(), LocationListener {
 
   override fun onDestroy() {
     stopLocationUpdates()
-    expiryTask?.let(mainHandler::removeCallbacks)
-    stopTask?.let(mainHandler::removeCallbacks)
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
     ShareServiceContract.currentStatus = null
+    ioExecutor.shutdown()
     super.onDestroy()
+  }
+
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    queueCommand(JSONObject().put("type", "stop-foreground-only"))
+    super.onTaskRemoved(rootIntent)
   }
 
   private fun createRuntime() {
@@ -163,15 +221,49 @@ class LocationShareService : Service(), LocationListener {
   private inner class RuntimeBridge {
     @JavascriptInterface
     fun postMessage(message: String) {
-      mainHandler.post { handleRuntimeMessage(message) }
+      val parsed = runCatching { JSONObject(message) }.getOrNull() ?: return
+      if (parsed.optString("type") == "private-state") {
+        handlePrivateStateRequest(parsed)
+      } else {
+        mainHandler.post { handleRuntimeMessage(parsed) }
+      }
     }
   }
 
-  private fun handleRuntimeMessage(message: String) {
-    val parsed = runCatching { JSONObject(message) }.getOrNull() ?: return
+  private fun handlePrivateStateRequest(request: JSONObject) {
+    val requestId = request.optString("requestId")
+    ioExecutor.execute {
+      val response = JSONObject()
+        .put("type", "private-state-result")
+        .put("requestId", requestId)
+      try {
+        when (request.optString("action")) {
+          "load" -> response.put("state", store.loadPrivateState() ?: JSONObject.NULL)
+          "save" -> {
+            val state = request.optString("state")
+            store.savePrivateState(state)
+            response.put("state", JSONObject.NULL)
+          }
+          else -> throw IllegalArgumentException("Unsupported protected-state operation.")
+        }
+      } catch (_: Exception) {
+        response.put("error", "Protected source state could not be opened or saved.")
+      }
+      send(response)
+    }
+  }
+
+  private fun handleRuntimeMessage(parsed: JSONObject) {
     when (parsed.optString("type")) {
-      "ready" -> pendingRequest?.let { request ->
-        send(JSONObject().put("type", "start").put("request", JSONObject(request)))
+      "ready" -> {
+        runtimeReady = true
+        pendingCommands.toList().forEach(::send)
+        pendingCommands.clear()
+        stopWhenIdle()
+      }
+      "create-complete" -> {
+        pendingCreateIds.remove(parsed.optString("requestId"))
+        stopWhenIdle()
       }
       "location-watch-start" -> startLocationUpdates()
       "location-watch-stop" -> stopLocationUpdates()
@@ -180,13 +272,20 @@ class LocationShareService : Service(), LocationListener {
         val status = parsed.optJSONObject("status") ?: return
         ShareServiceContract.currentStatus = status.toString()
         store.saveStatus(redactedStatus(status))
-        val viewers = status.optJSONObject("share")?.optInt("viewerCount", 0) ?: 0
+        val shares = status.optJSONArray("shares")
+        var viewers = 0
+        for (index in 0 until (shares?.length() ?: 0)) {
+          viewers += shares?.optJSONObject(index)?.optInt("viewerCount", 0) ?: 0
+        }
+        runtimeError = status.optString("state") == "error" && (shares?.length() ?: 0) == 0
         ShareNotification.update(
           this,
-          if (viewers == 1) "1 connected viewer" else "$viewers connected viewers",
+          "$viewers connected across ${shares?.length() ?: 0} links",
         )
+        stopWhenIdle()
       }
-      "expired", "stopped" -> finishStop()
+      "idle", "stopped" -> finishStop()
+      "paused" -> finishPause()
     }
   }
 
@@ -271,59 +370,68 @@ class LocationShareService : Service(), LocationListener {
     }
   }
 
-  private fun scheduleExpiry(request: String) {
-    expiryTask?.let(mainHandler::removeCallbacks)
-    val expiresAt = JSONObject(request).optLong("expiresAt", -1L)
-    if (expiresAt < 0) return
-    val task = Runnable { requestStop() }
-    expiryTask = task
-    mainHandler.postDelayed(task, (expiresAt - System.currentTimeMillis()).coerceAtLeast(0L))
+  private fun startRuntime() {
+    startForeground(
+      ShareServiceContract.NOTIFICATION_ID,
+      ShareNotification.build(this, "Restoring private P2P sharing…"),
+    )
+    if (webView == null) createRuntime()
   }
 
-  private fun expired(request: String): Boolean {
-    val expiresAt = runCatching { JSONObject(request).optLong("expiresAt", -1L) }.getOrDefault(0L)
-    return expiresAt >= 0 && System.currentTimeMillis() >= expiresAt
+  private fun queueCommand(command: JSONObject) {
+    if (runtimeReady) send(command) else pendingCommands.add(command)
+  }
+
+  private fun stopWhenIdle() {
+    if (!runtimeReady || pendingCreateIds.isNotEmpty()) return
+    val status = ShareServiceContract.currentStatus?.let { runCatching { JSONObject(it) }.getOrNull() }
+      ?: return
+    if ((status.optJSONArray("shares")?.length() ?: 0) > 0) return
+    if (runtimeError) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      stopSelf()
+    } else {
+      finishStop()
+    }
   }
 
   private fun redactedStatus(status: JSONObject): String = JSONObject(status.toString())
-    .put("location", JSONObject().put("status", "unavailable"))
     .apply {
+      put("location", JSONObject().put("status", "unavailable"))
       remove("diagnostics")
       remove("returnOffers")
+      remove("shares")
+      remove("share")
+      remove("message")
     }
     .toString()
 
   private fun failClosed(message: String) {
     val status = JSONObject()
       .put("state", "error")
+      .put("shares", org.json.JSONArray())
       .put("location", JSONObject().put("status", "unavailable"))
       .put("message", message)
       .toString()
     ShareServiceContract.currentStatus = status
-    store.saveStatus(status)
+    runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }
 
-  private fun requestStop() {
-    if (webView == null) {
-      finishStop()
-      return
-    }
-    send(JSONObject().put("type", "stop"))
-    stopTask?.let(mainHandler::removeCallbacks)
-    val task = Runnable { finishStop() }
-    stopTask = task
-    mainHandler.postDelayed(task, 3_000L)
+  private fun finishStop() {
+    stopLocationUpdates()
+    runCatching { store.saveStatus(STOPPED_STATUS) }
+    ShareServiceContract.currentStatus = STOPPED_STATUS
+    stopForeground(STOP_FOREGROUND_REMOVE)
+    stopSelf()
   }
 
-  private fun finishStop() {
-    stopTask?.let(mainHandler::removeCallbacks)
-    stopTask = null
+  private fun finishPause() {
     stopLocationUpdates()
-    store.clear()
-    store.saveStatus(STOPPED_STATUS)
-    ShareServiceContract.currentStatus = STOPPED_STATUS
+    val status = "{\"state\":\"paused\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"Foreground-only links are paused until Constellation is reopened.\"}"
+    runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
+    ShareServiceContract.currentStatus = status
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }

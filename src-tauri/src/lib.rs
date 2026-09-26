@@ -38,15 +38,71 @@ async fn android_background_share_status(
 }
 
 #[tauri::command]
-async fn android_stop_background_share(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+async fn android_stop_background_share(
+    app: tauri::AppHandle,
+    share_id: String,
+) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     return app
         .constellation_android()
-        .stop()
+        .stop(&share_id)
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
-        let _ = app;
+        let _ = (app, share_id);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_set_background_visibility(
+    app: tauri::AppHandle,
+    visible: bool,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .set_visible(visible)
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, visible);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_import_source_state(
+    app: tauri::AppHandle,
+    state: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .import_source_state(&state)
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, state);
+        Err("Android protected storage is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_set_background_viewer_name(
+    app: tauri::AppHandle,
+    share_id: String,
+    fingerprint: String,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .set_viewer_name(&share_id, &fingerprint, &name)
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id, fingerprint, name);
         Err("Android background sharing is unavailable.".into())
     }
 }
@@ -153,6 +209,9 @@ pub fn run() {
             android_start_background_share,
             android_background_share_status,
             android_stop_background_share,
+            android_set_background_visibility,
+            android_import_source_state,
+            android_set_background_viewer_name,
             android_block_background_viewer,
             android_take_shared_text,
             android_load_private_state,

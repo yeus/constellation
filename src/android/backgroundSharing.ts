@@ -1,5 +1,6 @@
 import type { BrowserLocationState } from '../location/browser.ts'
 import { shareExpiryFor, type ShareDraft } from '../shareDraft.ts'
+import type { PrivateState } from '../sharing/privateStore.ts'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
 
@@ -7,7 +8,7 @@ export interface AndroidBackgroundStatus {
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
   readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
   readonly diagnostics?: NetworkDiagnostics
-  readonly share?: ShareSummary
+  readonly shares: readonly ShareSummary[]
   readonly returnOffers?: readonly {
     shareId: string
     viewerFingerprint: string
@@ -20,7 +21,7 @@ export interface AndroidBackgroundStatus {
 interface AndroidBackgroundSharingDependencies {
   readonly isAndroid: boolean
   readonly now: () => number
-  readonly preparePermissions?: () => Promise<void>
+  readonly preparePermissions?: (publication: ShareDraft['publication']) => Promise<void>
   readonly invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>
 }
 
@@ -46,22 +47,21 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
   if (
     !['starting', 'sharing', 'paused', 'stopped', 'error'].includes(String(candidate.state)) ||
     !isLocationState(candidate.location) ||
+    !Array.isArray(candidate.shares) ||
+    candidate.shares.some(
+      (share) =>
+        !share ||
+        typeof share.shareId !== 'string' ||
+        typeof share.url !== 'string' ||
+        !['exact', 'approximate', 'very-coarse'].includes(share.precision) ||
+        (share.expiresAt !== null && typeof share.expiresAt !== 'number') ||
+        typeof share.viewerCount !== 'number',
+    ) ||
     typeof candidate.message !== 'string' ||
     (candidate.peerStatus !== undefined &&
       !['offline', 'connecting', 'online', 'error'].includes(candidate.peerStatus))
   ) {
     throw new Error('Invalid background sharing status.')
-  }
-  if (candidate.state === 'sharing') {
-    const share = candidate.share
-    if (
-      !share ||
-      typeof share.shareId !== 'string' ||
-      typeof share.url !== 'string' ||
-      typeof share.viewerCount !== 'number'
-    ) {
-      throw new Error('Invalid background sharing status.')
-    }
   }
   return candidate as AndroidBackgroundStatus
 }
@@ -70,9 +70,20 @@ export const createAndroidBackgroundSharing = (
   dependencies: AndroidBackgroundSharingDependencies,
 ):
   | {
-      start: (draft: ShareDraft, shareBaseUrl: string) => Promise<AndroidBackgroundStatus>
+      start: (
+        draft: ShareDraft,
+        shareBaseUrl: string,
+        visible: boolean,
+      ) => Promise<AndroidBackgroundStatus>
       status: () => Promise<AndroidBackgroundStatus>
-      stop: () => Promise<AndroidBackgroundStatus>
+      stop: (shareId: string) => Promise<AndroidBackgroundStatus>
+      setVisible: (visible: boolean) => Promise<void>
+      importSourceState: (state: PrivateState) => Promise<void>
+      setViewerName: (
+        shareId: string,
+        fingerprint: string,
+        name: string,
+      ) => Promise<AndroidBackgroundStatus>
       blockViewer: (shareId: string, fingerprint: string) => Promise<AndroidBackgroundStatus>
     }
   | undefined => {
@@ -80,14 +91,16 @@ export const createAndroidBackgroundSharing = (
   const status = async () =>
     parseStatus(await dependencies.invoke('android_background_share_status'))
   return {
-    start: async (draft, shareBaseUrl) => {
-      await dependencies.preparePermissions?.()
+    start: async (draft, shareBaseUrl, visible) => {
+      await dependencies.preparePermissions?.(draft.publication)
       return parseStatus(
         await dependencies.invoke('android_start_background_share', {
           request: {
             precision: draft.precision,
             viewerCapacity: draft.viewerCapacity,
             name: draft.name,
+            publication: draft.publication,
+            visible,
             expiresAt: shareExpiryFor(draft, dependencies.now()),
             shareBaseUrl,
           },
@@ -95,7 +108,24 @@ export const createAndroidBackgroundSharing = (
       )
     },
     status,
-    stop: async () => parseStatus(await dependencies.invoke('android_stop_background_share')),
+    stop: async (shareId) =>
+      parseStatus(await dependencies.invoke('android_stop_background_share', { shareId })),
+    setVisible: async (visible) => {
+      await dependencies.invoke('android_set_background_visibility', { visible })
+    },
+    importSourceState: async (state) => {
+      await dependencies.invoke('android_import_source_state', {
+        state: JSON.stringify(state),
+      })
+    },
+    setViewerName: async (shareId, fingerprint, name) =>
+      parseStatus(
+        await dependencies.invoke('android_set_background_viewer_name', {
+          shareId,
+          fingerprint,
+          name,
+        }),
+      ),
     blockViewer: async (shareId, fingerprint) =>
       parseStatus(
         await dependencies.invoke('android_block_background_viewer', { shareId, fingerprint }),

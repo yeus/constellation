@@ -19,13 +19,15 @@ const draft: ShareDraft = {
 const readyStatus: AndroidBackgroundStatus = {
   state: 'sharing',
   peerStatus: 'online',
-  share: {
-    shareId: 'share-1',
-    url: 'https://constellation.taskyon.space/#share=test',
-    precision: 'approximate',
-    expiresAt: 3_600_000,
-    viewerCount: 0,
-  },
+  shares: [
+    {
+      shareId: 'share-1',
+      url: 'https://constellation.taskyon.space/#share=test',
+      precision: 'approximate',
+      expiresAt: 3_600_000,
+      viewerCount: 0,
+    },
+  ],
   location: { status: 'acquiring' },
   message: '',
 }
@@ -62,7 +64,7 @@ test('Android start request contains policy but no location', async () => {
   })
 
   assert.deepEqual(
-    await controller?.start(draft, 'https://constellation.taskyon.space/'),
+    await controller?.start(draft, 'https://constellation.taskyon.space/', true),
     readyStatus,
   )
   assert.deepEqual(calls, [
@@ -73,6 +75,8 @@ test('Android start request contains policy but no location', async () => {
           precision: 'approximate',
           viewerCapacity: 10,
           name: 'River',
+          publication: 'background',
+          visible: true,
           expiresAt: 3_601_000,
           shareBaseUrl: 'https://constellation.taskyon.space/',
         },
@@ -93,7 +97,7 @@ test('Android forwards the very coarse preset to its background service', async 
     },
   })
 
-  await controller?.start({ ...draft, precision: 'very-coarse' }, 'https://example.test/')
+  await controller?.start({ ...draft, precision: 'very-coarse' }, 'https://example.test/', true)
   assert.equal((request as { precision?: string }).precision, 'very-coarse')
 })
 

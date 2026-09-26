@@ -1,5 +1,10 @@
 import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
 import type { ShareDraft } from '../shareDraft.ts'
+import {
+  parsePrivateStateJson,
+  type PrivateState,
+  type PrivateStateStore,
+} from '../sharing/privateStore.ts'
 import { createSharingRuntime, type SharingRuntimeState } from '../sharing/sharingRuntime.ts'
 
 interface NativeBridge {
@@ -13,22 +18,38 @@ declare global {
   }
 }
 
+type CreateRequest = {
+  readonly precision: ShareDraft['precision']
+  readonly viewerCapacity: ShareDraft['viewerCapacity']
+  readonly name: string
+  readonly publication: ShareDraft['publication']
+  readonly visible: boolean
+  readonly expiresAt: number | null
+  readonly shareBaseUrl: string
+}
+
 type BackgroundCommand =
-  | {
-      readonly type: 'start'
-      readonly request: {
-        readonly precision: ShareDraft['precision']
-        readonly viewerCapacity: ShareDraft['viewerCapacity']
-        readonly name: string
-        readonly expiresAt: number | null
-        readonly shareBaseUrl: string
-      }
-    }
+  | { readonly type: 'create-share'; readonly requestId: string; readonly request: CreateRequest }
   | { readonly type: 'location'; readonly position: BrowserPosition }
   | { readonly type: 'location-refresh-result'; readonly position: BrowserPosition }
   | { readonly type: 'location-error'; readonly code: number }
-  | { readonly type: 'stop' }
+  | { readonly type: 'stop-share'; readonly shareId: string }
+  | { readonly type: 'stop-all' }
+  | { readonly type: 'stop-foreground-only' }
+  | { readonly type: 'set-visible'; readonly visible: boolean }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
+  | {
+      readonly type: 'set-viewer-name'
+      readonly shareId: string
+      readonly fingerprint: string
+      readonly name: string
+    }
+  | {
+      readonly type: 'private-state-result'
+      readonly requestId: string
+      readonly state?: string | null
+      readonly error?: string
+    }
 
 const post = (value: unknown): void =>
   window.ConstellationNative?.postMessage(JSON.stringify(value))
@@ -38,23 +59,48 @@ const durationFor = (expiresAt: number | null): ShareDraft['duration'] => {
   return expiresAt - Date.now() > 60 * 60 * 1_000 ? '8h' : '1h'
 }
 
-const draftFor = (
-  request: Extract<BackgroundCommand, { type: 'start' }>['request'],
-): ShareDraft => ({
+const draftFor = (request: CreateRequest): ShareDraft => ({
   precision: request.precision,
   duration: durationFor(request.expiresAt),
   viewerCapacity: request.viewerCapacity,
   untilRevokedAcknowledged: request.expiresAt === null,
   name: request.name,
-  publication: 'background',
+  publication: request.publication,
 })
 
 const start = (): void => {
   let positionObserver: ((position: BrowserPosition) => void) | undefined
   let refreshObserver: ((position: BrowserPosition) => void) | undefined
   let errorObserver: ((error: { code: number }) => void) | undefined
-  let runtime: ReturnType<typeof createSharingRuntime> | undefined
-  let requestedExpiry: number | null = null
+  let latestState: SharingRuntimeState | undefined
+  let requestCounter = 0
+  let commandQueue = Promise.resolve()
+  const pendingStoreRequests = new Map<
+    string,
+    { resolve: (state: string | null | undefined) => void; reject: (error: Error) => void }
+  >()
+
+  const storeRequest = (action: 'load' | 'save', state?: PrivateState) =>
+    new Promise<string | null | undefined>((resolve, reject) => {
+      const requestId = `${Date.now()}-${++requestCounter}`
+      pendingStoreRequests.set(requestId, { resolve, reject })
+      post({
+        type: 'private-state',
+        action,
+        requestId,
+        ...(state ? { state: JSON.stringify(state) } : {}),
+      })
+    })
+
+  const privateStore: PrivateStateStore = {
+    load: async () => {
+      const encoded = await storeRequest('load')
+      return encoded ? parsePrivateStateJson(encoded) : undefined
+    },
+    save: async (state) => {
+      await storeRequest('save', state)
+    },
+  }
 
   const location = createBrowserLocationSource({
     sourceId: crypto.randomUUID(),
@@ -72,15 +118,22 @@ const start = (): void => {
       },
     },
   })
+  const runtime = createSharingRuntime(location, undefined, privateStore)
+  runtime.setVisible(false, false)
+
   const report = (state: SharingRuntimeState): void => {
-    const share = state.shares[0]
+    latestState = state
     post({
       type: 'status',
       status: {
-        state: share ? 'sharing' : state.peerStatus === 'error' ? 'error' : 'starting',
+        state: state.shares.length
+          ? 'sharing'
+          : state.peerStatus === 'error'
+            ? 'error'
+            : 'starting',
         peerStatus: state.peerStatus,
-        diagnostics: runtime?.networkDiagnostics(),
-        ...(share ? { share: { ...share, expiresAt: requestedExpiry } } : {}),
+        diagnostics: runtime.networkDiagnostics(),
+        shares: state.shares,
         returnOffers: state.returnOffers,
         location: state.location,
         message: state.message,
@@ -88,8 +141,26 @@ const start = (): void => {
     })
   }
 
-  window.__constellationBackgroundCommand = (encoded) => {
-    const command = JSON.parse(encoded) as BackgroundCommand
+  const sendError = (error: unknown, fallback: string): void =>
+    post({
+      type: 'status',
+      status: {
+        state: 'error',
+        shares: latestState?.shares ?? [],
+        location: location.getState(),
+        message: error instanceof Error ? error.message : fallback,
+      },
+    })
+
+  const runCommand = async (command: BackgroundCommand): Promise<void> => {
+    if (command.type === 'private-state-result') {
+      const pending = pendingStoreRequests.get(command.requestId)
+      if (!pending) return
+      pendingStoreRequests.delete(command.requestId)
+      if (command.error) pending.reject(new Error(command.error))
+      else pending.resolve(command.state)
+      return
+    }
     if (command.type === 'location') return positionObserver?.(command.position)
     if (command.type === 'location-refresh-result') {
       refreshObserver?.(command.position)
@@ -97,45 +168,92 @@ const start = (): void => {
       return
     }
     if (command.type === 'location-error') return errorObserver?.({ code: command.code })
+    if (command.type === 'create-share') {
+      try {
+        runtime.setVisible(command.request.visible, command.request.visible)
+        await runtime.createShare(
+          draftFor(command.request),
+          command.request.expiresAt,
+          command.request.shareBaseUrl,
+        )
+        post({ type: 'create-complete', requestId: command.requestId })
+      } catch (error) {
+        sendError(error, 'P2P sharing failed.')
+        post({ type: 'create-complete', requestId: command.requestId })
+      }
+      return
+    }
+    if (command.type === 'stop-share') {
+      try {
+        await runtime.stopShare(command.shareId)
+      } catch (error) {
+        sendError(error, 'Could not revoke this location link.')
+      }
+      return
+    }
+    if (command.type === 'stop-all') {
+      try {
+        const shares = latestState?.shares ?? []
+        await Promise.all(shares.map(({ shareId }) => runtime.stopShare(shareId)))
+      } catch (error) {
+        sendError(error, 'Could not stop all location links.')
+      }
+      if (!latestState?.shares.length) post({ type: 'idle' })
+      return
+    }
+    const pauseForegroundOnly = async (): Promise<void> => {
+      if (latestState?.shares.some((share) => share.publication === 'background')) return
+      await runtime.stop()
+      post({ type: 'paused' })
+    }
+    if (command.type === 'stop-foreground-only') {
+      runtime.setVisible(false, false)
+      await pauseForegroundOnly()
+      return
+    }
+    if (command.type === 'set-visible') {
+      runtime.setVisible(command.visible, command.visible)
+      if (!command.visible) await pauseForegroundOnly()
+      return
+    }
     if (command.type === 'block-viewer') {
-      void runtime?.blockViewer(command.shareId, command.fingerprint).catch((error) =>
-        post({
-          type: 'status',
-          status: {
-            state: 'error',
-            location: location.getState(),
-            message: error instanceof Error ? error.message : 'Could not block this device.',
-          },
-        }),
-      )
+      try {
+        await runtime.blockViewer(command.shareId, command.fingerprint)
+      } catch (error) {
+        sendError(error, 'Could not block this device.')
+      }
       return
     }
-    if (command.type === 'stop') {
-      refreshObserver = undefined
-      void runtime?.stop().finally(() => post({ type: 'stopped' }))
-      runtime = undefined
-      return
+    try {
+      await runtime.setViewerLabel(command.shareId, command.fingerprint, command.name)
+    } catch (error) {
+      sendError(error, 'Could not save this device name.')
     }
-    if (runtime) return
-    requestedExpiry = command.request.expiresAt
-    if (requestedExpiry !== null && Date.now() >= requestedExpiry) {
-      post({ type: 'expired' })
-      return
-    }
-    runtime = createSharingRuntime(location, command.request.shareBaseUrl)
-    runtime.subscribe(report)
-    void runtime.createShare(draftFor(command.request), command.request.expiresAt).catch((error) =>
-      post({
-        type: 'status',
-        status: {
-          state: 'error',
-          location: location.getState(),
-          message: error instanceof Error ? error.message : 'P2P sharing failed.',
-        },
-      }),
-    )
   }
-  post({ type: 'ready' })
+
+  window.__constellationBackgroundCommand = (encoded) => {
+    const command = JSON.parse(encoded) as BackgroundCommand
+    if (
+      command.type === 'private-state-result' ||
+      command.type === 'location' ||
+      command.type === 'location-refresh-result' ||
+      command.type === 'location-error'
+    ) {
+      void runCommand(command)
+      return
+    }
+    commandQueue = commandQueue
+      .then(() => runCommand(command))
+      .catch((error) => {
+        sendError(error, 'The background sharing command failed.')
+      })
+  }
+
+  runtime.subscribe(report)
+  void runtime
+    .initialize()
+    .catch((error) => sendError(error, 'Could not restore protected sharing state.'))
+    .finally(() => post({ type: 'ready' }))
 }
 
 start()

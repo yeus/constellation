@@ -26,7 +26,7 @@ import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { createRedemptionProof, verifyRedemptionProof } from './shareAuth.ts'
 import { createShareInvitation, parseShareInvitation, type ShareCapability } from './shareLink.ts'
 import { constellationProtocolV1, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
-import type { createBrowserPrivateStore, PrivateState } from './privateStore.ts'
+import type { PrivateState, PrivateStateStore } from './privateStore.ts'
 
 const LOCATION_SENSOR_ID = 'location'
 const DESCRIPTOR_REVISION = 'constellation-location-v1'
@@ -209,7 +209,11 @@ export interface SharingRuntime {
   dismissReturnOffer: (shareId: string, fingerprint: string) => void
   initialize: () => Promise<void>
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
-  createShare: (draft: ShareDraft, expiresAt?: number | null) => Promise<ShareSummary>
+  createShare: (
+    draft: ShareDraft,
+    expiresAt?: number | null,
+    linkBaseUrl?: string,
+  ) => Promise<ShareSummary>
   acceptShare: (url: string, options?: { localName?: string; saved?: boolean }) => Promise<void>
   saveFollowing: (shareId: string, localName: string) => Promise<void>
   stopFollowing: (shareId: string) => Promise<void>
@@ -223,7 +227,7 @@ export interface SharingRuntime {
 export const createSharingRuntime = (
   locationSource: BrowserLocationSource,
   shareBaseUrl = window.location.origin + window.location.pathname,
-  store?: ReturnType<typeof createBrowserPrivateStore>,
+  store?: PrivateStateStore,
 ): SharingRuntime => {
   const observers = new Set<(state: SharingRuntimeState) => void>()
   const shares = new Map<string, SourceShare>()
@@ -371,6 +375,7 @@ export const createSharingRuntime = (
             return
           }
         }
+        let discardedShare = false
         for (const record of saved?.shares ?? []) {
           try {
             const capability = parseShareInvitation(record.url)
@@ -388,7 +393,7 @@ export const createSharingRuntime = (
               approximation: record.approximation,
             })
           } catch {
-            // Expired or invalid grants are never restored.
+            discardedShare = true
           }
         }
         for (const record of saved?.followed ?? []) {
@@ -412,6 +417,7 @@ export const createSharingRuntime = (
         for (const record of saved?.viewerLabels ?? []) {
           viewerLabels.set(`${record.shareId}:${record.fingerprint}`, record.name)
         }
+        if (saved && discardedShare) await persist()
         const currentLocation = locationSource.getState()
         if (
           (currentLocation.status === 'live' || currentLocation.status === 'delayed') &&
@@ -562,7 +568,7 @@ export const createSharingRuntime = (
                 }),
               )
             }
-            locationSource.refresh()
+            if (visible || share.publication === 'background') locationSource.refresh()
             return { subscriptionId: session.subscriptionId }
           },
           unsubscribe: ({ subscriptionId }) => {
@@ -789,7 +795,9 @@ export const createSharingRuntime = (
       await prepareState()
       if (shares.size > 0) {
         await startPeer()
-        if (visible) locationSource.start()
+        if (visible || [...shares.values()].some((share) => share.publication === 'background')) {
+          locationSource.start()
+        }
       }
       const pending = [...followed.values()].filter((entry) => !entry.connected)
       void Promise.allSettled(
@@ -803,10 +811,14 @@ export const createSharingRuntime = (
       observer(state)
       return () => observers.delete(observer)
     },
-    createShare: async (draft, expiresAt = shareExpiryFor(draft, Date.now())) => {
+    createShare: async (
+      draft,
+      expiresAt = shareExpiryFor(draft, Date.now()),
+      linkBaseUrl = shareBaseUrl,
+    ) => {
       const { node, addresses } = await ensurePeer()
       const invitation = createShareInvitation({
-        baseUrl: shareBaseUrl,
+        baseUrl: linkBaseUrl,
         sourcePeerId: node.peerId.toString(),
         addresses,
         expiresAt,

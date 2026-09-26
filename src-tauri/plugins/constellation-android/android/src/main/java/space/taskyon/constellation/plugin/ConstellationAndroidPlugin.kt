@@ -34,9 +34,28 @@ class BlockViewerArgs {
   var fingerprint: String = ""
 }
 
+@InvokeArg
+class ShareIdArgs {
+  var shareId: String = ""
+}
+
+@InvokeArg
+class ViewerNameArgs {
+  var shareId: String = ""
+  var fingerprint: String = ""
+  var name: String = ""
+}
+
+@InvokeArg
+class VisibilityArgs {
+  var visible: Boolean = false
+}
+
 @TauriPlugin
 class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activity) {
-  private val store by lazy { EncryptedShareStore(activity.applicationContext) }
+  private val store by lazy {
+    EncryptedShareStore(activity.applicationContext, discardUnreadable = false)
+  }
   private val privateStore by lazy {
     EncryptedShareStore(
       activity.applicationContext,
@@ -87,18 +106,17 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   @Command
   fun startBackgroundShare(invoke: Invoke) {
     try {
-      requireLocationPermission()
-      requireNotificationPermission()
-      check(!serviceRunning()) { "Stop the current Android share before creating another." }
       val args = invoke.parseArgs(BackgroundShareArgs::class.java)
       val request = validateRequest(args.request)
-      store.saveStatus(STARTING_STATUS)
-      ShareServiceContract.currentStatus = STARTING_STATUS
-      val intent = Intent(activity, LocationShareService::class.java)
-        .setAction(ShareServiceContract.ACTION_START)
-        .putExtra(ShareServiceContract.EXTRA_REQUEST, request.toString())
-      ContextCompat.startForegroundService(activity, intent)
-      invoke.resolve(JSObject(STARTING_STATUS))
+      requireLocationPermission(request.optString("publication") == "background")
+      requireNotificationPermission()
+      val initial = if (serviceRunning()) {
+        ShareServiceContract.currentStatus ?: store.loadStatus() ?: STARTING_STATUS
+      } else {
+        STARTING_STATUS
+      }
+      ensureService(ShareServiceContract.ACTION_START, request = request.toString())
+      invoke.resolve(JSObject(initial))
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not start background location sharing.")
     }
@@ -108,14 +126,25 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun backgroundShareStatus(invoke: Invoke) {
     try {
       val stored = ShareServiceContract.currentStatus ?: store.loadStatus() ?: STOPPED_STATUS
-      val state = runCatching { JSONObject(stored).optString("state") }.getOrDefault("error")
-      if (state in setOf("sharing", "paused") && !serviceRunning()) {
-        store.clear()
-        store.saveStatus(INTERRUPTED_STATUS)
-        ShareServiceContract.currentStatus = INTERRUPTED_STATUS
-        invoke.resolve(JSObject(INTERRUPTED_STATUS))
+      if (!serviceRunning() && store.hasBackgroundShares()) {
+        store.saveStatus(STARTING_STATUS)
+        ShareServiceContract.currentStatus = STARTING_STATUS
+        ensureService(ShareServiceContract.ACTION_RESTORE)
+        invoke.resolve(JSObject(STARTING_STATUS))
       } else {
-        invoke.resolve(JSObject(stored))
+        val state = runCatching { JSONObject(stored).optString("state") }.getOrDefault("error")
+        if (serviceRunning() && ShareServiceContract.currentStatus == null) {
+          invoke.resolve(JSObject(STARTING_STATUS))
+        } else if (!serviceRunning() && state in setOf("sharing", "starting")) {
+          invoke.resolve(JSObject(INTERRUPTED_STATUS))
+        } else if (!serviceRunning()) {
+          val normalized = JSONObject(stored)
+          if (!normalized.has("shares")) normalized.put("shares", org.json.JSONArray())
+          normalized.remove("share")
+          invoke.resolve(JSObject(normalized))
+        } else {
+          invoke.resolve(JSObject(stored))
+        }
       }
     } catch (_: Exception) {
       invoke.reject("Could not read background sharing status.")
@@ -125,30 +154,58 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   @Command
   fun stopBackgroundShare(invoke: Invoke) {
     try {
-      activity.startService(
-        Intent(activity, LocationShareService::class.java)
-          .setAction(ShareServiceContract.ACTION_STOP),
-      )
-      invoke.resolve(JSObject(STOPPED_STATUS))
+      val args = invoke.parseArgs(ShareIdArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      ensureService(ShareServiceContract.ACTION_STOP_SHARE, shareId = args.shareId)
+      invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
     } catch (error: Exception) {
-      invoke.reject(error.message ?: "Could not stop background location sharing.")
+      invoke.reject(error.message ?: "Could not revoke this location link.")
+    }
+  }
+
+  @Command
+  fun setBackgroundVisibility(invoke: Invoke) {
+    try {
+      val visible = invoke.parseArgs(VisibilityArgs::class.java).visible
+      if (!serviceRunning() && visible && store.hasSavedShares()) {
+        ensureService(ShareServiceContract.ACTION_RESTORE)
+        ensureService(ShareServiceContract.ACTION_SET_VISIBLE, visible = true)
+      } else if (serviceRunning()) {
+        activity.startService(
+          Intent(activity, LocationShareService::class.java)
+            .setAction(ShareServiceContract.ACTION_SET_VISIBLE)
+            .putExtra(ShareServiceContract.EXTRA_VISIBLE, visible),
+        )
+      }
+      invoke.resolve(JSObject())
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not update sharing visibility.")
+    }
+  }
+
+  @Command
+  fun importSourceState(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(PrivateStateArgs::class.java)
+      importSourceState(args.state)
+      invoke.resolve(JSObject())
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not move Android source links to protected storage.")
     }
   }
 
   @Command
   fun blockBackgroundViewer(invoke: Invoke) {
     try {
-      check(serviceRunning()) { "No background share is running." }
       val args = invoke.parseArgs(BlockViewerArgs::class.java)
       check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
       check(args.fingerprint.matches(Regex("[A-Za-z0-9_-]{1,32}"))) {
         "Invalid device fingerprint."
       }
-      activity.startService(
-        Intent(activity, LocationShareService::class.java)
-          .setAction(ShareServiceContract.ACTION_BLOCK_VIEWER)
-          .putExtra(ShareServiceContract.EXTRA_SHARE_ID, args.shareId)
-          .putExtra(ShareServiceContract.EXTRA_FINGERPRINT, args.fingerprint),
+      ensureService(
+        ShareServiceContract.ACTION_BLOCK_VIEWER,
+        shareId = args.shareId,
+        fingerprint = args.fingerprint,
       )
       invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
     } catch (error: Exception) {
@@ -156,12 +213,71 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     }
   }
 
-  private fun requireLocationPermission() {
+  @Command
+  fun setBackgroundViewerName(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(ViewerNameArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      check(args.fingerprint.matches(Regex("[A-Za-z0-9_-]{1,32}"))) {
+        "Invalid device fingerprint."
+      }
+      check(args.name.length <= 32) { "Device name is invalid." }
+      ensureService(
+        ShareServiceContract.ACTION_SET_VIEWER_NAME,
+        shareId = args.shareId,
+        fingerprint = args.fingerprint,
+        name = args.name,
+      )
+      invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not save this device name.")
+    }
+  }
+
+  private fun ensureService(
+    action: String,
+    request: String? = null,
+    shareId: String? = null,
+    fingerprint: String? = null,
+    name: String? = null,
+    visible: Boolean? = null,
+  ) {
+    val intent = Intent(activity, LocationShareService::class.java).setAction(action)
+    request?.let { intent.putExtra(ShareServiceContract.EXTRA_REQUEST, it) }
+    shareId?.let { intent.putExtra(ShareServiceContract.EXTRA_SHARE_ID, it) }
+    fingerprint?.let { intent.putExtra(ShareServiceContract.EXTRA_FINGERPRINT, it) }
+    name?.let { intent.putExtra(ShareServiceContract.EXTRA_NAME, it) }
+    visible?.let { intent.putExtra(ShareServiceContract.EXTRA_VISIBLE, it) }
+    ContextCompat.startForegroundService(activity, intent)
+  }
+
+  private fun importSourceState(encoded: String) {
+    require(encoded.isNotBlank() && encoded.length <= 131_072) { "Protected source state is invalid." }
+    val incoming = JSONObject(encoded)
+    require(incoming.optInt("version") == 1) { "Protected source state version is unsupported." }
+    require(incoming.optString("privateKey").length in 40..1_024) {
+      "Protected source identity is invalid."
+    }
+    val incomingShares = incoming.optJSONArray("shares")
+      ?: throw IllegalArgumentException("Protected source links are invalid.")
+    require(incomingShares.length() <= 128) { "Too many source links to migrate." }
+    val existing = store.loadPrivateState()?.let(::JSONObject)
+    val existingShares = existing?.optJSONArray("shares")?.length() ?: 0
+    if (existingShares > 0) {
+      check(existing?.optString("privateKey") == incoming.optString("privateKey")) {
+        "Android source links already use a different protected identity."
+      }
+      return
+    }
+    store.savePrivateState(incoming.toString())
+  }
+
+  private fun requireLocationPermission(background: Boolean) {
     check(ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) ==
       PackageManager.PERMISSION_GRANTED) {
       "Allow precise location before starting a share."
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    if (background && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
         PackageManager.PERMISSION_GRANTED) {
         activity.startActivity(
@@ -206,6 +322,10 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     require(request.optString("precision") in setOf("exact", "approximate", "very-coarse")) {
       "Background share precision is invalid."
     }
+    require(request.optString("publication") in setOf("foreground", "background")) {
+      "Location publication mode is invalid."
+    }
+    require(request.opt("visible") is Boolean) { "Location sharing visibility is invalid." }
     val capacity = request.opt("viewerCapacity")
     require(capacity == "unlimited" || capacity is Number && capacity.toInt() in 1..128) {
       "Background share capacity is invalid."
@@ -223,9 +343,9 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   private companion object {
-    const val STARTING_STATUS = "{\"state\":\"starting\",\"location\":{\"status\":\"acquiring\"},\"message\":\"Starting private P2P sharing…\"}"
-    const val STOPPED_STATUS = "{\"state\":\"stopped\",\"location\":{\"status\":\"unavailable\"},\"message\":\"\"}"
-    const val INTERRUPTED_STATUS = "{\"state\":\"error\",\"location\":{\"status\":\"unavailable\"},\"message\":\"Background sharing was interrupted and stopped. Create a new link to resume.\"}"
+    const val STARTING_STATUS = "{\"state\":\"starting\",\"shares\":[],\"location\":{\"status\":\"acquiring\"},\"message\":\"Restoring private P2P sharing…\"}"
+    const val STOPPED_STATUS = "{\"state\":\"stopped\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"\"}"
+    const val INTERRUPTED_STATUS = "{\"state\":\"error\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"Background sharing could not be restored from protected state.\"}"
     const val NOTIFICATION_PERMISSION_REQUEST = 4108
   }
 }

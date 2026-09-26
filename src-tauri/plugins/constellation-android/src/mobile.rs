@@ -36,9 +36,35 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
-    pub fn stop(&self) -> crate::Result<Value> {
+    pub fn stop(&self, share_id: &str) -> crate::Result<Value> {
         self.0
-            .run_mobile_plugin("stopBackgroundShare", json!({}))
+            .run_mobile_plugin("stopBackgroundShare", json!({ "shareId": share_id }))
+            .map_err(Into::into)
+    }
+
+    pub fn set_visible(&self, visible: bool) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin("setBackgroundVisibility", json!({ "visible": visible }))
+            .map_err(Into::into)
+    }
+
+    pub fn import_source_state(&self, state: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin("importSourceState", json!({ "state": state }))
+            .map_err(Into::into)
+    }
+
+    pub fn set_viewer_name(
+        &self,
+        share_id: &str,
+        fingerprint: &str,
+        name: &str,
+    ) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin(
+                "setBackgroundViewerName",
+                json!({ "shareId": share_id, "fingerprint": fingerprint, "name": name }),
+            )
             .map_err(Into::into)
     }
 

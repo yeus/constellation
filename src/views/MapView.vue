@@ -246,18 +246,14 @@
     <ShareSheet
       v-if="shareSheetOpen"
       :draft="shareDraft"
-      :can-submit="
-        canCreateShare(shareDraft) &&
-        !creatingShare &&
-        !(shareDraft.publication === 'background' && backgroundStatus?.share)
-      "
+      :can-submit="canCreateShare(shareDraft) && !creatingShare"
       :background-available="Boolean(backgroundSharing)"
       :runtime-note="
         shareDraft.publication === 'background'
-          ? backgroundStatus?.share
-            ? 'Only one Android background link is supported for now. Revoke the existing link to make another.'
-            : 'Android needs all-the-time location permission and shows a persistent notification.'
-          : 'Sharing pauses when this app is hidden and stops when it is closed.'
+          ? 'Android keeps this link active in a protected foreground service and requires all-the-time location permission.'
+          : isAndroid
+            ? 'This link pauses while Constellation is hidden and resumes when you reopen it.'
+            : 'Sharing pauses when this app is hidden and stops when it is closed.'
       "
       @close="closeShareSheet"
       @submit="createShare"
@@ -347,6 +343,7 @@
 </template>
 
 <script setup lang="ts">
+import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 import { invoke } from '@tauri-apps/api/core'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -421,13 +418,10 @@ const shareBaseUrl = resolveShareBaseUrl(
 )
 const isNative = '__TAURI_INTERNALS__' in window
 const isAndroid = '__TAURI_INTERNALS__' in window && /Android/i.test(navigator.userAgent)
-const runtime = createSharingRuntime(
-  locationSource,
-  shareBaseUrl,
-  isNative
-    ? createNativePrivateStore(isAndroid ? 'android' : 'desktop')
-    : createBrowserPrivateStore(),
-)
+const privateStore = isNative
+  ? createNativePrivateStore(isAndroid ? 'android' : 'desktop')
+  : createBrowserPrivateStore()
+const runtime = createSharingRuntime(locationSource, shareBaseUrl, privateStore)
 const backgroundSharing = createAndroidBackgroundSharing({
   isAndroid,
   now: Date.now,
@@ -435,6 +429,23 @@ const backgroundSharing = createAndroidBackgroundSharing({
   preparePermissions: async () =>
     ensureTauriLocationPermission(await import('@tauri-apps/plugin-geolocation')),
 })
+const migrateAndroidSourceShares = async (): Promise<void> => {
+  if (!isAndroid || !backgroundSharing) return
+  const saved = await privateStore.load()
+  if (!saved?.shares.length) return
+  await backgroundSharing.importSourceState({
+    ...saved,
+    followed: [],
+    viewerLabels: saved.viewerLabels ?? [],
+  })
+  const viewerKey = await generateKeyPair('Ed25519')
+  await privateStore.save({
+    ...saved,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(viewerKey)),
+    shares: [],
+    viewerLabels: [],
+  })
+}
 const backgroundStatus = ref<AndroidBackgroundStatus>()
 const dismissedBackgroundOffers = ref(new Map<string, string>())
 const runtimeState = ref<SharingRuntimeState>({
@@ -568,11 +579,14 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   if (next.peerStatus && backgroundStatus.value?.peerStatus !== next.peerStatus) {
     sessionLog.record({ level: 'info', event: 'sharing.background.peer', state: next.peerStatus })
   }
-  if (backgroundStatus.value?.share?.viewerCount !== next.share?.viewerCount) {
+  const previousViewers =
+    backgroundStatus.value?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0
+  const nextViewers = next.shares.reduce((count, share) => count + share.viewerCount, 0)
+  if (previousViewers !== nextViewers) {
     sessionLog.record({
       level: 'info',
       event: 'sharing.background.viewers',
-      message: `${next.share?.viewerCount ?? 0} connected sessions`,
+      message: `${nextViewers} connected sessions across ${next.shares.length} links`,
     })
   }
   if (backgroundStatus.value?.location.status !== next.location.status) {
@@ -595,19 +609,9 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   }
   backgroundStatus.value = next
 }
-if (backgroundSharing) {
-  void refreshBackgroundStatus().catch(() => undefined)
-  backgroundPoll = window.setInterval(
-    () => void refreshBackgroundStatus().catch(() => undefined),
-    1_000,
-  )
-}
 
 const activeShares = computed(() =>
-  [
-    ...runtimeState.value.shares,
-    ...(backgroundStatus.value?.share ? [backgroundStatus.value.share] : []),
-  ].map((share) => ({
+  [...runtimeState.value.shares, ...(backgroundStatus.value?.shares ?? [])].map((share) => ({
     ...share,
     viewers: share.viewers?.map((viewer) => ({
       ...viewer,
@@ -618,7 +622,7 @@ const activeShares = computed(() =>
 const previewFollow = computed(() => runtimeState.value.following.find((entry) => !entry.saved))
 
 const locations = computed(() => {
-  const own = backgroundStatus.value?.share
+  const own = backgroundStatus.value?.shares.length
     ? backgroundStatus.value.location
     : runtimeState.value.location
   const ownLocations =
@@ -748,7 +752,7 @@ const updatePublication = (publication: SharePublication) => {
 }
 
 const ownObservation = computed(() => {
-  const location = backgroundStatus.value?.share
+  const location = backgroundStatus.value?.shares.length
     ? backgroundStatus.value.location
     : runtimeState.value.location
   return location.status === 'live' || location.status === 'delayed' || location.status === 'stale'
@@ -814,20 +818,36 @@ const createShare = async (): Promise<void> => {
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.share.create.started' })
   try {
-    if (shareDraft.value.publication === 'foreground') {
-      readyShare.value = await runtime.createShare(shareDraft.value)
-    } else {
-      if (!backgroundSharing) throw new Error('Background sharing is available only on Android.')
-      backgroundStatus.value = await backgroundSharing.start(shareDraft.value, shareBaseUrl)
-      const deadline = Date.now() + 30_000
-      while (backgroundStatus.value.state === 'starting' && Date.now() < deadline) {
+    if (backgroundSharing) {
+      await refreshBackgroundStatus()
+      let deadline = Date.now() + 30_000
+      while (backgroundStatus.value?.state === 'starting' && Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 250))
         await refreshBackgroundStatus()
       }
-      if (!backgroundStatus.value.share) {
-        throw new Error(backgroundStatus.value.message || 'Could not start background sharing.')
+      const existingShareIds = new Set(backgroundStatus.value?.shares.map(({ shareId }) => shareId))
+      backgroundStatus.value = await backgroundSharing.start(
+        shareDraft.value,
+        shareBaseUrl,
+        document.visibilityState === 'visible',
+      )
+      deadline = Date.now() + 30_000
+      while (
+        !backgroundStatus.value.shares.some(({ shareId }) => !existingShareIds.has(shareId)) &&
+        backgroundStatus.value.state !== 'error' &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250))
+        await refreshBackgroundStatus()
       }
-      readyShare.value = backgroundStatus.value.share
+      readyShare.value = backgroundStatus.value.shares.find(
+        ({ shareId }) => !existingShareIds.has(shareId),
+      )
+      if (!readyShare.value) {
+        throw new Error(backgroundStatus.value.message || 'Could not create the location link.')
+      }
+    } else {
+      readyShare.value = await runtime.createShare(shareDraft.value)
     }
     if (returnTarget.value && readyShare.value) {
       try {
@@ -959,8 +979,8 @@ const acceptReturnOffer = (): void => {
 
 const stopReadyShare = async (): Promise<void> => {
   if (!readyShare.value) return
-  if (backgroundStatus.value?.share?.shareId === readyShare.value.shareId) {
-    backgroundStatus.value = await backgroundSharing?.stop()
+  if (backgroundStatus.value?.shares.some(({ shareId }) => shareId === readyShare.value?.shareId)) {
+    backgroundStatus.value = await backgroundSharing?.stop(readyShare.value.shareId)
   } else {
     await runtime.stopShare(readyShare.value.shareId)
   }
@@ -973,14 +993,18 @@ const showExistingShare = (share: ShareSummary): void => {
 }
 const setViewerName = async (shareId: string, fingerprint: string, name: string): Promise<void> => {
   try {
-    await runtime.setViewerLabel(shareId, fingerprint, name)
+    if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
+      backgroundStatus.value = await backgroundSharing?.setViewerName(shareId, fingerprint, name)
+    } else {
+      await runtime.setViewerLabel(shareId, fingerprint, name)
+    }
   } catch {
     localError.value = 'Device name could not be saved in protected storage.'
   }
 }
 const blockViewer = async (shareId: string, fingerprint: string): Promise<void> => {
   try {
-    if (backgroundStatus.value?.share?.shareId === shareId) {
+    if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
       backgroundStatus.value = await backgroundSharing?.blockViewer(shareId, fingerprint)
     } else {
       await runtime.blockViewer(shareId, fingerprint)
@@ -990,8 +1014,8 @@ const blockViewer = async (shareId: string, fingerprint: string): Promise<void> 
   }
 }
 const revokeShare = async (shareId: string): Promise<void> => {
-  if (backgroundStatus.value?.share?.shareId === shareId) {
-    backgroundStatus.value = await backgroundSharing?.stop()
+  if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
+    backgroundStatus.value = await backgroundSharing?.stop(shareId)
   } else {
     await runtime.stopShare(shareId)
   }
@@ -1002,10 +1026,12 @@ const stopFollowing = async (shareId: string): Promise<void> => {
   if (selectedFollowId.value === shareId) followingOpen.value = false
 }
 
-const updateVisibility = (): void =>
-  runtime.setVisible(document.visibilityState === 'visible', !browserLocationDeferred.value)
+const updateVisibility = (): void => {
+  const visible = document.visibilityState === 'visible'
+  runtime.setVisible(visible, !browserLocationDeferred.value)
+  void backgroundSharing?.setVisible(visible).catch(() => undefined)
+}
 onMounted(() => {
-  updateVisibility()
   document.addEventListener('visibilitychange', updateVisibility)
   if (isAndroid) {
     void receiveSharedText().catch(() => undefined)
@@ -1014,13 +1040,23 @@ onMounted(() => {
       1_000,
     )
   }
-  void runtime
-    .initialize()
-    .then(() => offerInvitation(window.location.href))
-    .catch((error) => {
-      localError.value =
-        error instanceof Error ? error.message : 'Protected shares could not be opened.'
-    })
+  void (async () => {
+    updateVisibility()
+    await migrateAndroidSourceShares()
+    await runtime.initialize()
+    if (backgroundSharing) {
+      await refreshBackgroundStatus().catch(() => undefined)
+      updateVisibility()
+      backgroundPoll = window.setInterval(
+        () => void refreshBackgroundStatus().catch(() => undefined),
+        1_000,
+      )
+    }
+    offerInvitation(window.location.href)
+  })().catch((error) => {
+    localError.value =
+      error instanceof Error ? error.message : 'Protected shares could not be opened.'
+  })
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', updateVisibility)

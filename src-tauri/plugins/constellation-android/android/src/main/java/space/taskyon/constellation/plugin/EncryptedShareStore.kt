@@ -32,8 +32,16 @@ internal class EncryptedShareStore(
   fun loadPrivateState(): String? = load("private-state")
 
   @Synchronized
-  fun clear() {
-    preferences.edit().clear().apply()
+  fun hasSavedShares(): Boolean =
+    (loadPrivateState()?.let { state -> JSONObject(state).optJSONArray("shares")?.length() } ?: 0) > 0
+
+  @Synchronized
+  fun hasBackgroundShares(): Boolean {
+    val shares = loadPrivateState()?.let { state -> JSONObject(state).optJSONArray("shares") }
+      ?: return false
+    return (0 until shares.length()).any { index ->
+      shares.optJSONObject(index)?.optString("publication") == "background"
+    }
   }
 
   private fun save(name: String, value: String, maximumLength: Int) {
