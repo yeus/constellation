@@ -178,10 +178,20 @@ yarn test:android:managed
 
 On Linux, the release command uses Secret Service (`secret-tool`) for Android
 signing. The desktop session must provide a working, unlocked Secret Service;
-the Nix shell provides its `secret-tool` client. If no signing entries exist
-yet, the build creates random passwords and a keystore, then stores the signing
-values and a keystore backup in Secret Service. Keep that keyring backed up:
-losing the keystore means this signing identity cannot produce updates for
+the Nix shell provides its `secret-tool` client. Run `nix develop` from
+Constellation itself before building: the Taskyon root shell may not provide
+the JDK 17 `keytool`. The release command checks for it before looking up
+signing secrets and reports a missing tool separately from an incorrect
+password. A normal release build reads existing signing values and validates
+a temporary copy of the stored keystore backup (or of the local file when no
+backup exists). It does not replace the
+local file or stored values. If Secret Service is unavailable or locked, an
+interactive build asks you to unlock/start it and retry; a noninteractive build
+stops. When the store is reachable and no Constellation signing entries or
+local keystore exist, the CLI asks you to type `CREATE` before generating a new
+signing identity. A new key cannot update APKs signed with an earlier key.
+Keep that keyring backed up: losing the keystore means this signing identity
+cannot produce updates for
 already-installed copies of the app.
 
 The five Secret Service entries are `android_keystore_path` (local file path),
@@ -201,8 +211,8 @@ yarn build:android:release:arm64-device
 Signing values and the temporary Gradle properties file remain outside Git.
 The resulting artifact is
 `dist/constellation-android-release-arm64-v8a.apk`.
-On systems without Linux Secret Service, provide all four `ANDROID_*` signing
-variables and an existing keystore file instead.
+On systems without Linux Secret Service, provide the three signing credentials
+and either `ANDROID_KEYSTORE_BASE64` or `ANDROID_KEYSTORE_PATH`.
 Before Gradle starts, the release command checks that both the keystore
 password and the key password unlock the configured alias. If the key password
 check fails, restore the original `android_key_password` entry in Secret
@@ -213,6 +223,22 @@ already exists, the script stops instead of generating a replacement. A locked
 or slow KeePassXC database can make a lookup appear missing; unlock it before
 retrying, and check the key password entry's history if a previous build
 updated it.
+
+If the local keystore is missing or does not match, the release build leaves it
+alone and signs from the validated backup. If both files validate but differ
+in bytes, the build stops: identify which certificate signed the
+published app before choosing either identity. To restore a matching backup
+to the local path for other tools, explicitly run:
+
+```sh
+yarn android:signing:restore
+```
+
+The restore command validates the backup before writing the local keystore. If
+it replaces an existing file, it reports the path of a preserved copy. A
+failed validation leaves the local file unchanged. If both local and stored
+backup fail with the same password, investigate the stored password and backup
+first; copying that backup over the local file cannot fix the mismatch.
 
 The Gradle build generates the background-service bundle automatically through
 `build:android:background-runtime`; you can invoke that script directly for the

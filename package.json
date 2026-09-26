@@ -28,6 +28,7 @@
     "build:android:debug:arm64-device": "bash scripts/with-android-build-tools.sh tauri android build --debug --apk --target aarch64 && node scripts/copy-android-apk.mjs debug aarch64",
     "build:android:release": "yarn build:android:release:arm64-device",
     "build:android:release:arm64-device": "bash scripts/build-android-release.sh",
+    "android:signing:restore": "bash scripts/restore-android-keystore.sh",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "vue-tsc --noEmit && eslint .",

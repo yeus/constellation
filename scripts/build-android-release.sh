@@ -39,7 +39,15 @@ fi
 prepare_constellation_android_signing
 
 temporary_keystore="$(mktemp "${TMPDIR:-/tmp}/constellation-android-release.XXXXXX.jks")"
-install -m 600 "$ANDROID_KEYSTORE_PATH" "$temporary_keystore"
+if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+  if ! constellation_decode_android_keystore "$ANDROID_KEYSTORE_BASE64" "$temporary_keystore"; then
+    echo "Stored Android release keystore is not valid base64." >&2
+    exit 1
+  fi
+  chmod 600 "$temporary_keystore"
+else
+  install -m 600 "$ANDROID_KEYSTORE_PATH" "$temporary_keystore"
+fi
 umask 077
 temporary_properties="$(mktemp "$properties_file.XXXXXX")"
 cat >"$temporary_properties" <<EOF
