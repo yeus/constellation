@@ -23,12 +23,17 @@ modules:
         - --share=network
       env:
         HOME: /run/build/constellation
+        COREPACK_HOME: /tmp/constellation-corepack
         CARGO_HOME: /run/build/constellation/cargo
         npm_config_cache: /run/build/constellation/npm-cache
+      prepend-path: /tmp/constellation-corepack-bin
       append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
     build-commands:
       - corepack yarn install --immutable
-      - corepack yarn tauri build --no-bundle
+      - >-
+        install -d /tmp/constellation-corepack-bin &&
+        corepack enable --install-directory /tmp/constellation-corepack-bin yarn &&
+        corepack yarn tauri build --no-bundle
       - install -Dm755 src-tauri/target/release/constellation /app/bin/constellation
       - install -Dm644 packaging/flatpak/space.taskyon.constellation.desktop /app/share/applications/space.taskyon.constellation.desktop
       - install -Dm644 packaging/flatpak/space.taskyon.constellation.metainfo.xml /app/share/metainfo/space.taskyon.constellation.metainfo.xml
