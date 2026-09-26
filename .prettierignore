@@ -8,5 +8,6 @@ src-tauri/plugins/**/android/build/
 src-tauri/plugins/**/permissions/schemas/
 src-tauri/target/
 vendor/taskyon/
+public/map-assets/sprites/v4/
 test-results/
 yarn.lock

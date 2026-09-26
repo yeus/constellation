@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+test('builds the stable Flatpak bundle with a Flathub remote', (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-flatpak-test-'))
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }))
+
+  const scriptsDir = path.join(fixtureRoot, 'scripts')
+  const fakeBin = path.join(fixtureRoot, 'bin')
+  const callLog = path.join(fixtureRoot, 'flatpak-calls')
+  fs.mkdirSync(scriptsDir)
+  fs.mkdirSync(fakeBin)
+  fs.copyFileSync(
+    path.join(projectRoot, 'scripts/build-flatpak.sh'),
+    path.join(scriptsDir, 'build-flatpak.sh'),
+  )
+  fs.writeFileSync(path.join(fixtureRoot, 'package.json'), JSON.stringify({ version: '0.1.0' }))
+  fs.writeFileSync(
+    path.join(fakeBin, 'flatpak'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf 'flatpak %s\n' "$*" >> "$FLATPAK_CALL_LOG"
+case "$1" in
+  remotes) exit 0 ;;
+  --default-arch) printf 'x86_64\n' ;;
+esac
+`,
+  )
+  fs.writeFileSync(
+    path.join(fakeBin, 'flatpak-builder'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf 'flatpak-builder %s\n' "$*" >> "$FLATPAK_CALL_LOG"
+`,
+  )
+  fs.chmodSync(path.join(fakeBin, 'flatpak'), 0o755)
+  fs.chmodSync(path.join(fakeBin, 'flatpak-builder'), 0o755)
+
+  const result = spawnSync('bash', [path.join(scriptsDir, 'build-flatpak.sh')], {
+    cwd: fixtureRoot,
+    encoding: 'utf8',
+    env: {
+      PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      FLATPAK_CALL_LOG: callLog,
+    },
+  })
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  const calls = fs.readFileSync(callLog, 'utf8')
+  assert.match(calls, /flatpak remote-add --user --if-not-exists flathub /)
+  assert.match(calls, /flatpak-builder .*--default-branch=stable /)
+  assert.match(
+    calls,
+    /flatpak build-bundle .*constellation-desktop-0\.1\.0-x86_64\.flatpak space\.taskyon\.constellation stable /,
+  )
+})

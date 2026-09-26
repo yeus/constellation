@@ -132,12 +132,17 @@ temporary Cargo target and copies the artifact to
 `dist/constellation-desktop-<version>-x86_64.AppImage`. You can also run the
 same builder directly with `nix run .#build-desktop-release-appimage`.
 
-The Flatpak manifest is in `packaging/flatpak`. With Flatpak Builder and the
-Flathub remote installed, build a local bundle in `dist/`:
+The Flatpak manifest is in `packaging/flatpak`. Build the `stable` branch as a
+local bundle in `dist/` using the Nix development shell or its dedicated app:
 
 ```sh
 yarn build:desktop:release:flatpak
 ```
+
+`nix run .#build-flatpak` provides the build tools directly. Both commands
+add the Flathub user remote if needed. Flatpak Builder needs permission to
+create its own build sandbox, which may be unavailable inside an outer
+container.
 
 The current manifest uses network access to resolve Yarn and Cargo dependencies
 during a local build. A source-pinned, offline manifest is still required

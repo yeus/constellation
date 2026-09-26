@@ -406,6 +406,12 @@ EOF
             ${pkgs.nix}/bin/nix develop --no-write-lock-file "$repo_root" --command \
             ${appimageFhs}/bin/constellation-appimage-fhs -lc "cd \"$repo_root\" && ln -sfn \"$tmp_dir/os-release\" /etc/os-release && PATH=\"$shim_dir:\$PATH\" HOME=\"$home_dir\" RUSTUP_HOME=\"$rustup_home\" CARGO_HOME=\"$cargo_home\" CARGO_TARGET_DIR=\"$cargo_target_dir\" TMPDIR=\"$tmp_dir\" XDG_CACHE_HOME=\"$cache_dir\" CONSTELLATION_APPIMAGE_SCHEMAS_DIR=\"$schemas_dir\" CONSTELLATION_APPIMAGE_GTK_STAGE_DIR=\"$gtk_stage_dir\" CONSTELLATION_APPIMAGE_GDK_STAGE_DIR=\"$gdk_stage_dir\" XDG_DATA_DIRS=\"/usr/share:${pkgs.gsettings-desktop-schemas}/share:${pkgs.gtk3}/share:${pkgs.adwaita-icon-theme}/share\" WINIT_WAYLAND_CSD_THEME=light LIBDECOR_PLUGIN_DIR=\"${pkgs.libdecor}/lib/libdecor/plugins-1\" RUST_BACKTRACE=1 APPIMAGE_EXTRACT_AND_RUN=1 /bin/bash scripts/build-appimage.sh --verbose"
         '';
+        buildFlatpakScript = pkgs.writeShellScriptBin "constellation-build-flatpak" ''
+          set -euo pipefail
+          repo_root="$PWD"
+          export PATH="${pkgs.appstream}/bin:${pkgs.flatpak}/bin:${pkgs.flatpak-builder}/bin:${pkgs.nodejs_22}/bin:$PATH"
+          exec "$repo_root/scripts/build-flatpak.sh"
+        '';
       in
       {
         devShells.default = pkgs.mkShell {
@@ -469,6 +475,9 @@ EOF
         apps = pkgs.lib.optionalAttrs (system == "x86_64-linux") {
           build-desktop-release-appimage = flake-utils.lib.mkApp {
             drv = buildAppImageScript;
+          };
+          build-flatpak = flake-utils.lib.mkApp {
+            drv = buildFlatpakScript;
           };
         };
       }
