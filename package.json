@@ -36,6 +36,7 @@
     "test:android:config": "node scripts/check-android-config.mjs",
     "test:android:e2e": "node scripts/test-android.mjs",
     "test:android:managed": "node scripts/test-android-managed.mjs",
+    "test:android:three-way": "node scripts/test-android-managed.mjs --three-way",
     "test:scripts": "node --test scripts/*.test.mjs",
     "test:unit": "node --experimental-strip-types --test 'src/**/*.test.ts'",
     "test:vendor": "yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test",

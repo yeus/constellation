@@ -5,9 +5,12 @@ import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
 import { androidTool, create, emulatorArguments, profile } from './android-emulator.mjs'
+import { androidApkCandidates } from './copy-android-apk.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const apk = 'dist/constellation-android-debug-x86_64.apk'
+const threeWayApk = 'dist/constellation-android-e2e-local-x86_64.apk'
+const localRelayAddress = '/ip4/127.0.0.1/tcp/9111/ws'
 
 const run = (executable, args, options = {}) =>
   execFileSync(executable, args, {
@@ -61,7 +64,12 @@ const waitForBoot = async (child, avdName, previousSerials) => {
         serial &&
         adb(['shell', 'getprop', 'sys.boot_completed'], { timeout: 10_000 }, serial).trim() === '1'
       ) {
-        return serial
+        const packageService = adb(
+          ['shell', 'cmd', 'package', 'list', 'packages', 'android'],
+          { timeout: 10_000 },
+          serial,
+        )
+        if (packageService.includes('package:android')) return serial
       }
     } catch {
       // ADB is expected to be unavailable briefly while the emulator starts.
@@ -130,8 +138,7 @@ const uninstallIfPresent = (serial) => {
   }
 }
 
-const runProfile = async (name, prepare) => {
-  const selected = profile(name)
+const startProfile = async (selected, prepare) => {
   create(selected)
   const previousSerials = new Set(onlineSerials())
   const child = spawn(emulatorPath, emulatorArguments(selected, ['-no-window', '-no-boot-anim']), {
@@ -142,18 +149,113 @@ const runProfile = async (name, prepare) => {
     serial = await waitForBoot(child, selected.avdName, previousSerials)
     uninstallIfPresent(serial)
     await prepare?.(serial)
-    run(adbPath, ['-s', serial, 'install', '-r', apk])
-    run(process.execPath, ['scripts/test-android.mjs'], {
-      env: { ...process.env, ANDROID_SERIAL: serial },
-    })
-  } finally {
+    return { child, serial }
+  } catch (error) {
     await stopEmulator(child, serial)
+    throw error
   }
 }
 
+const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
+  const device = await startProfile(profile(name), prepare)
+  try {
+    run(adbPath, ['-s', device.serial, 'install', '-r', selectedApk])
+    run(process.execPath, ['scripts/test-android.mjs', ...testArgs], {
+      env: { ...process.env, ANDROID_SERIAL: device.serial },
+    })
+  } finally {
+    await stopEmulator(device.child, device.serial)
+  }
+}
+
+const runThreeWay = async () => {
+  let first
+  let second
+  try {
+    first = await startProfile(profile('modern'))
+    second = await startProfile({
+      ...profile('modern'),
+      avdName: 'constellation-api36-play-peer',
+    })
+    for (const device of [first, second]) {
+      run(adbPath, ['-s', device.serial, 'install', '-r', threeWayApk])
+    }
+    run(
+      process.execPath,
+      [
+        'scripts/test-android.mjs',
+        ...(process.argv.includes('--preview-second-link') ? ['--preview-second-link'] : []),
+      ],
+      {
+        env: {
+          ...process.env,
+          ANDROID_SERIALS: `${first.serial},${second.serial}`,
+          ANDROID_SERIAL: '',
+        },
+      },
+    )
+  } finally {
+    if (second) await stopEmulator(second.child, second.serial)
+    if (first) await stopEmulator(first.child, first.serial)
+  }
+}
+
+const buildThreeWayApk = () => {
+  run(
+    'bash',
+    [
+      'scripts/with-android-build-tools.sh',
+      'yarn',
+      'tauri',
+      'android',
+      'build',
+      '--debug',
+      '--apk',
+      '--target',
+      'x86_64',
+    ],
+    {
+      env: { ...process.env, VITE_CONSTELLATION_RELAY_ADDRS: localRelayAddress },
+    },
+  )
+  const source = androidApkCandidates(process.cwd(), 'debug').find((candidate) =>
+    fs.existsSync(candidate),
+  )
+  if (!source) throw new Error('The local-relay Android build did not produce a debug APK.')
+  fs.mkdirSync(path.dirname(threeWayApk), { recursive: true })
+  fs.copyFileSync(source, threeWayApk)
+}
+
 const main = async () => {
+  if (process.argv.includes('--native-location-smoke')) {
+    if (!fs.existsSync(apk)) throw new Error('Build the Android debug APK first.')
+    await runProfile('modern', undefined, ['--native-location-smoke'])
+    console.log('Owned Android location bridge returned a synthetic fix.')
+    return
+  }
+  if (process.argv.includes('--native-store-smoke')) {
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile('modern', undefined, ['--native-store-smoke'], threeWayApk)
+    console.log('Two sequential Android protected-state saves completed.')
+    return
+  }
+  if (process.argv.includes('--three-way')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay three-way APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runThreeWay()
+    console.log('Two Android API 36 peers and one desktop browser passed the three-way test.')
+    return
+  }
   if (!process.argv.includes('--skip-build')) {
     run('yarn', ['build:android:debug:x86_64-emulator'])
+  }
+  if (process.argv.includes('--modern-only')) {
+    await runProfile('modern')
+    console.log('Android API 36 location-sharing tests passed.')
+    return
   }
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-webview-'))
   try {

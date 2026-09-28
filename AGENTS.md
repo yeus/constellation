@@ -34,6 +34,13 @@ clarify the relevant requirement instead of inventing semantics.
   side-effect boundaries. Keep runtime state out of module scope by default.
 - Write or update the focused test before implementation when behavior changes. Use synthetic,
   redacted identities, coordinates, addresses, and paths in tests and diagnostics.
+- For each reported issue, reproduce it through the simplest relevant path first (unit test,
+  desktop dev app, or Android dev app), add a focused regression test, fix the owning cause, and
+  rerun that test before claiming it is resolved. Record what remains unproved on real devices.
+- If a test or dev-app run fails without enough evidence to identify the cause, add focused logging
+  at the owning boundary, reproduce the failure, and use the resulting evidence to fix the root
+  cause. Keep logs bounded and redacted; remove temporary instrumentation or retain only useful
+  privacy-safe diagnostics.
 - Never write raw coordinates, bearer capabilities, private peer addresses, keys, or personal
   identifiers to logs, filenames, crash reports, fixtures, or repository artifacts.
 - Preserve unrelated worktree and index changes. Do not use destructive Git commands without an
