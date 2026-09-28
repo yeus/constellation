@@ -1,4 +1,10 @@
 import type { BrowserGeolocation, BrowserPosition, BrowserPositionError } from './browser.ts'
+import {
+  createAndroidGeolocationAdapter,
+  createTauriAndroidLocationApi,
+  type AndroidLocationApi,
+} from './android.ts'
+import { createFailoverGeolocation } from './failover.ts'
 
 type PermissionState = 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale'
 
@@ -59,11 +65,32 @@ export const createTauriGeolocationAdapter = (
   },
 })
 
-export const createPlatformGeolocation = (
-  browserGeolocation: BrowserGeolocation | undefined,
-  tauri = '__TAURI_INTERNALS__' in window,
-  mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent),
-): BrowserGeolocation | undefined =>
-  tauri && mobile
-    ? createTauriGeolocationAdapter(() => import('@tauri-apps/plugin-geolocation'))
-    : browserGeolocation
+export const createPlatformGeolocation = ({
+  browserGeolocation,
+  platform = !('__TAURI_INTERNALS__' in window)
+    ? 'web'
+    : /Android/i.test(navigator.userAgent)
+      ? 'android'
+      : /iPhone|iPad|iPod/i.test(navigator.userAgent)
+        ? 'ios'
+        : 'desktop',
+  androidApi,
+  onFallback,
+}: {
+  readonly browserGeolocation: BrowserGeolocation | undefined
+  readonly platform?: 'web' | 'desktop' | 'android' | 'ios'
+  readonly androidApi?: AndroidLocationApi
+  readonly onFallback?: (reason: 'error' | 'timeout') => void
+}): BrowserGeolocation | undefined => {
+  if (platform === 'ios') {
+    return createTauriGeolocationAdapter(() => import('@tauri-apps/plugin-geolocation'))
+  }
+  if (platform === 'android') {
+    return createFailoverGeolocation(
+      createAndroidGeolocationAdapter(androidApi ?? createTauriAndroidLocationApi()),
+      browserGeolocation,
+      { onFallback },
+    )
+  }
+  return browserGeolocation
+}

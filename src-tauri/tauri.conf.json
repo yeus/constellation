@@ -11,7 +11,7 @@
   },
   "app": {
     "security": {
-      "capabilities": ["desktop", "mobile"]
+      "capabilities": ["desktop", "mobile", "ios"]
     },
     "windows": [
       {

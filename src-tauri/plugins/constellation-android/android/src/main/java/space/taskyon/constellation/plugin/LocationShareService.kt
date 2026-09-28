@@ -1,9 +1,7 @@
 package space.taskyon.constellation.plugin
 
-import android.Manifest
 import android.app.Service
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Location
 import android.location.LocationListener
@@ -15,6 +13,7 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -22,7 +21,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.core.app.ActivityCompat
 import java.io.ByteArrayInputStream
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -33,10 +31,12 @@ class LocationShareService : Service(), LocationListener {
   private val ioExecutor = Executors.newSingleThreadExecutor()
   private lateinit var store: EncryptedShareStore
   private var webView: WebView? = null
+  private var runtimeStarting = false
   private val pendingCommands = mutableListOf<JSONObject>()
   private val pendingCreateIds = mutableSetOf<String>()
   private var runtimeReady = false
   private var runtimeError = false
+  private var lastPersistedStatus: String? = null
   private var locationManager: LocationManager? = null
   private var refreshCancellation: CancellationSignal? = null
   private var refreshListener: LocationListener? = null
@@ -137,20 +137,16 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun sendPosition(location: Location, type: String) {
-    val coords = JSONObject()
-      .put("latitude", location.latitude)
-      .put("longitude", location.longitude)
-      .put("accuracy", location.accuracy.toDouble())
-      .put("altitude", if (location.hasAltitude()) location.altitude else JSONObject.NULL)
-      .put("heading", if (location.hasBearing()) location.bearing.toDouble() else JSONObject.NULL)
-      .put("speed", if (location.hasSpeed()) location.speed.toDouble() else JSONObject.NULL)
     send(JSONObject()
       .put("type", type)
-      .put("position", JSONObject().put("timestamp", location.time).put("coords", coords)))
+      .put("position", locationPositionJson(location)))
   }
 
   override fun onProviderDisabled(provider: String) {
-    send(JSONObject().put("type", "location-error").put("code", 2))
+    val manager = locationManager ?: return
+    if (availableLocationProviders(manager).isEmpty()) {
+      send(JSONObject().put("type", "location-error").put("code", 2))
+    }
   }
 
   override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
@@ -159,6 +155,7 @@ class LocationShareService : Service(), LocationListener {
     stopLocationUpdates()
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
+    runtimeStarting = false
     ShareServiceContract.currentStatus = null
     ioExecutor.shutdown()
     super.onDestroy()
@@ -170,7 +167,9 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun createRuntime() {
+    runtimeStarting = true
     mainHandler.post {
+      if (!runtimeStarting) return@post
       val view = WebView(applicationContext)
       view.settings.apply {
         javaScriptEnabled = true
@@ -185,6 +184,8 @@ class LocationShareService : Service(), LocationListener {
       view.addJavascriptInterface(RuntimeBridge(), "ConstellationNative")
       view.webViewClient = runtimeClient()
       webView = view
+      runtimeStarting = false
+      Log.i("ConstellationRuntime", "background-runtime-created")
       view.loadUrl(PAGE_URL)
     }
   }
@@ -271,7 +272,7 @@ class LocationShareService : Service(), LocationListener {
       "status" -> {
         val status = parsed.optJSONObject("status") ?: return
         ShareServiceContract.currentStatus = status.toString()
-        store.saveStatus(redactedStatus(status))
+        persistStatusIfChanged(status)
         val shares = status.optJSONArray("shares")
         var viewers = 0
         for (index in 0 until (shares?.length() ?: 0)) {
@@ -290,25 +291,19 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun startLocationUpdates() {
-    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
-      PackageManager.PERMISSION_GRANTED) {
+    if (locationGrant(this) == "none") {
       send(JSONObject().put("type", "location-error").put("code", 1))
       return
     }
     val manager = getSystemService(LocationManager::class.java)
     locationManager = manager
-    for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-      if (runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)) {
-        runCatching {
-          manager.requestLocationUpdates(
-            provider,
-            LOCATION_UPDATE_INTERVAL_MS,
-            LOCATION_UPDATE_MINIMUM_DISTANCE_METRES,
-            this,
-            Looper.getMainLooper(),
-          )
-        }
-      }
+    if (!watchAndroidLocation(
+      manager,
+      this,
+      LOCATION_UPDATE_INTERVAL_MS,
+      LOCATION_UPDATE_MINIMUM_DISTANCE_METRES,
+    )) {
+      send(JSONObject().put("type", "location-error").put("code", 2))
     }
   }
 
@@ -328,8 +323,7 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun requestFreshLocation() {
-    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
-      PackageManager.PERMISSION_GRANTED) return
+    if (locationGrant(this) == "none") return
     val manager = locationManager ?: getSystemService(LocationManager::class.java)
     val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
       .firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) } ?: return
@@ -375,7 +369,7 @@ class LocationShareService : Service(), LocationListener {
       ShareServiceContract.NOTIFICATION_ID,
       ShareNotification.build(this, "Restoring private P2P sharing…"),
     )
-    if (webView == null) createRuntime()
+    if (webView == null && !runtimeStarting) createRuntime()
   }
 
   private fun queueCommand(command: JSONObject) {
@@ -405,6 +399,13 @@ class LocationShareService : Service(), LocationListener {
       remove("message")
     }
     .toString()
+
+  private fun persistStatusIfChanged(status: JSONObject) {
+    val redacted = redactedStatus(status)
+    if (redacted == lastPersistedStatus) return
+    store.saveStatus(redacted)
+    lastPersistedStatus = redacted
+  }
 
   private fun failClosed(message: String) {
     val status = JSONObject()

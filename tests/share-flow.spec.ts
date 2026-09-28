@@ -1,5 +1,24 @@
 import { expect, test } from '@playwright/test'
 
+import { createShareInvitation } from '../src/sharing/shareLink.ts'
+
+test('rejects an expired pasted link before opening a viewer session', async ({ page }) => {
+  const expired = createShareInvitation({
+    baseUrl: 'http://127.0.0.1:4173/',
+    sourcePeerId: 'synthetic-source',
+    addresses: ['/dns4/relay.example/tcp/443/wss/p2p/synthetic'],
+    expiresAt: 1,
+    randomBytes: (length) => Uint8Array.from({ length }, (_, index) => index + 1),
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.getByRole('button', { name: 'Follow a link' }).click()
+  await page.getByLabel('Paste location link').fill(expired.url)
+  await page.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
+  await expect(page.locator('.toast')).toContainText(/not a valid location link|expired/i)
+  await expect(page.getByText('Seeing 1')).toHaveCount(0)
+})
+
 test('introduces encrypted P2P sharing and keeps the note dismissed', async ({ page }) => {
   await page.goto('/')
 

@@ -78,5 +78,37 @@ test('uses browser geolocation in a desktop Tauri webview', () => {
     clearWatch: () => undefined,
   }
 
-  assert.equal(createPlatformGeolocation(browserGeolocation, true, false), browserGeolocation)
+  assert.equal(
+    createPlatformGeolocation({ browserGeolocation, platform: 'desktop' }),
+    browserGeolocation,
+  )
+})
+
+test('Android uses its owned native provider before the WebView fallback', async () => {
+  const calls: string[] = []
+  const browserGeolocation = {
+    watchPosition: () => {
+      calls.push('webview')
+      return 2
+    },
+    clearWatch: () => undefined,
+  }
+  const geolocation = createPlatformGeolocation({
+    browserGeolocation,
+    platform: 'android',
+    androidApi: {
+      permission: async () => ({ grant: 'fine', servicesEnabled: true }),
+      requestPermission: async () => ({ grant: 'fine', servicesEnabled: true }),
+      watch: async () => {
+        calls.push('native')
+        return 1
+      },
+      clearWatch: async () => undefined,
+      current: async () => position,
+    },
+  })
+  const id = await geolocation?.watchPosition(() => undefined)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(calls, ['native'])
+  if (id !== undefined) await geolocation?.clearWatch(id)
 })

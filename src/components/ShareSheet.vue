@@ -89,8 +89,8 @@
             :aria-pressed="draft.precision === 'exact'"
             @click="emit('precision', 'exact')"
           >
-            <strong>Exact</strong>
-            <span>Precise position</span>
+            <strong>Device accuracy</strong>
+            <span>No added blurring</span>
           </button>
         </div>
       </fieldset>

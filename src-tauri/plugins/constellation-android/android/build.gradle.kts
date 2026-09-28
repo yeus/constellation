@@ -23,6 +23,7 @@ val buildBackgroundRuntime by tasks.registering(Exec::class) {
     inputs.files(fileTree(workspaceRoot.resolve("src")))
     inputs.files(fileTree(workspaceRoot.resolve("vendor/taskyon")))
     inputs.file(workspaceRoot.resolve("vite.background.config.ts"))
+    inputs.property("relayAddresses", providers.environmentVariable("VITE_CONSTELLATION_RELAY_ADDRS").orElse(""))
     outputs.dir(layout.buildDirectory.dir("generated/background-runtime"))
     doLast {
         copy {

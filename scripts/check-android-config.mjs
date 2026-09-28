@@ -4,6 +4,7 @@ import fs from 'node:fs'
 const readJson = (path) => JSON.parse(fs.readFileSync(path, 'utf8'))
 const tauri = readJson('src-tauri/tauri.conf.json')
 const capability = readJson('src-tauri/capabilities/mobile.json')
+const iosCapability = readJson('src-tauri/capabilities/ios.json')
 const desktopCapability = readJson('src-tauri/capabilities/desktop.json')
 const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8')
 const manifest = fs.readFileSync('src-tauri/gen/android/app/src/main/AndroidManifest.xml', 'utf8')
@@ -24,6 +25,10 @@ const shareNotification = fs.readFileSync(
   'utf8',
 )
 const backgroundEntry = fs.readFileSync('src/android/backgroundEntry.ts', 'utf8')
+const backgroundGradle = fs.readFileSync(
+  'src-tauri/plugins/constellation-android/android/build.gradle.kts',
+  'utf8',
+)
 const mobileBridge = fs.readFileSync(
   'src-tauri/plugins/constellation-android/src/mobile.rs',
   'utf8',
@@ -41,20 +46,16 @@ assert.deepEqual(tauri.plugins['deep-link'].mobile, [
   },
 ])
 assert.equal(capability.platforms.includes('android'), true)
+assert.deepEqual(iosCapability.platforms, ['iOS'])
 assert.equal(tauri.app.security.capabilities.includes('desktop'), true)
 assert.equal(desktopCapability.platforms.includes('linux'), true)
 assert.equal(desktopCapability.permissions.includes('core:default'), true)
-for (const permission of [
-  'deep-link:default',
-  'geolocation:allow-check-permissions',
-  'geolocation:allow-request-permissions',
-  'geolocation:allow-watch-position',
-  'geolocation:allow-clear-watch',
-]) {
-  assert.equal(capability.permissions.includes(permission), true, permission)
-}
+assert.equal(capability.permissions.includes('deep-link:default'), true)
+assert.equal(capability.permissions.some((permission) => permission.startsWith('geolocation:')), false)
+assert.equal(iosCapability.permissions.includes('geolocation:allow-watch-position'), true)
 assert.match(cargo, /tauri-plugin-deep-link = "=2\.4\.10"/)
-assert.match(cargo, /tauri-plugin-geolocation = "=2\.3\.3"/)
+assert.match(cargo, /\[target\.'cfg\(target_os = "ios"\)'\.dependencies\]\s+tauri-plugin-geolocation = "=2\.3\.3"/)
+assert.doesNotMatch(cargo, /\[patch\.crates-io\]/)
 assert.match(cargo, /tauri-plugin-constellation-android/)
 for (const permission of [
   'android.permission.ACCESS_BACKGROUND_LOCATION',
@@ -70,10 +71,25 @@ assert.match(androidPlugin, /fun takeSharedText\(invoke: Invoke\)/)
 assert.match(androidPlugin, /fun loadPrivateState\(invoke: Invoke\)/)
 assert.match(androidPlugin, /fun savePrivateState\(invoke: Invoke\)/)
 assert.match(androidPlugin, /fun blockBackgroundViewer\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun locationPermission\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun requestLocationPermission\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun startLocationWatch\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun stopLocationWatch\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun currentLocation\(invoke: Invoke\)/)
+assert.match(androidPlugin, /invoke\.resolve\(JSObject\(\)\.put\("watchId",/)
 assert.match(shareNotification, /ACTION_BLOCK_VIEWER/)
 assert.match(locationService, /"block-viewer"/)
-assert.match(backgroundEntry, /runtime\?\.blockViewer\(command\.shareId, command\.fingerprint\)/)
+assert.match(backgroundEntry, /runtime\.blockViewer\(command\.shareId, command\.fingerprint\)/)
+assert.match(
+  backgroundGradle,
+  /inputs\.property\("relayAddresses", providers\.environmentVariable\("VITE_CONSTELLATION_RELAY_ADDRS"\)/,
+)
 assert.match(mobileBridge, /"blockBackgroundViewer"/)
+assert.ok(
+  mobileBridge.includes('run_mobile_plugin_async'),
+  'Android plugin calls must use the asynchronous Tauri bridge',
+)
+assert.ok(!tauriCommands.includes('run_blocking_native'), 'Android commands must not block workers')
 assert.match(tauriCommands, /android_block_background_viewer/)
 assert.doesNotMatch(manifest, /FOREGROUND_SERVICE_DATA_SYNC/)
 assert.match(serviceManifest, /android:stopWithTask="false"/)
@@ -82,9 +98,19 @@ assert.match(androidPlugin, /Allow notifications, then create the share again\./
 assert.doesNotMatch(androidPlugin, /requestNotificationPermission\(\)/)
 assert.match(locationService, /LOCATION_UPDATE_INTERVAL_MS = 5_000L/)
 assert.match(locationService, /LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f/)
+assert.doesNotMatch(locationService, /checkSelfPermission\(this, Manifest\.permission\.ACCESS_FINE_LOCATION\)/)
 assert.equal(/\?: store\.loadRequest\(\)/.test(locationService), false)
 assert.equal(/store\.saveStatus\(status\.toString\(\)\)/.test(locationService), false)
-assert.match(locationService, /store\.saveStatus\(redactedStatus\(status\)\)/)
+assert.ok(
+  /private fun persistStatusIfChanged\(status: JSONObject\)/.test(locationService),
+  'Android service must persist only changed recovery status',
+)
+assert.ok(/if \(redacted == lastPersistedStatus\) return/.test(locationService))
+assert.ok(/persistStatusIfChanged\(status\)/.test(locationService))
+assert.ok(
+  /if \(webView == null && !runtimeStarting\) createRuntime\(\)/.test(locationService),
+  'Android service must schedule only one hidden P2P runtime',
+)
 assert.match(locationService, /remove\("returnOffers"\)/)
 assert.match(backgroundEntry, /returnOffers: state\.returnOffers/)
 

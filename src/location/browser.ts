@@ -107,6 +107,7 @@ export const createBrowserLocationSource = (
   let sequence = 0
   let lastRefreshRequestedAt = -Infinity
   let watchId: number | undefined
+  let watchStarting = false
   let watchGeneration = 0
   let freshnessTimers: number[] = []
 
@@ -148,6 +149,7 @@ export const createBrowserLocationSource = (
   }
   const stopWatching = (): void => {
     watchGeneration += 1
+    watchStarting = false
     if (watchId !== undefined) void options.geolocation?.clearWatch(watchId)
     watchId = undefined
     clearFreshnessTimers()
@@ -186,8 +188,9 @@ export const createBrowserLocationSource = (
     subscribeObservation: observationSubscriptions.subscribe,
     getState: () => state,
     start: () => {
-      if (!options.geolocation || watchId !== undefined) return
+      if (!options.geolocation || watchId !== undefined || watchStarting) return
       const generation = ++watchGeneration
+      watchStarting = true
       let errorReported = false
       emitState({ status: 'acquiring' })
       const reportError = (error: BrowserPositionError): void => {
@@ -201,6 +204,7 @@ export const createBrowserLocationSource = (
           positionOptions,
         )
         if (typeof pendingWatch === 'number') {
+          watchStarting = false
           watchId = pendingWatch
           return
         }
@@ -210,10 +214,13 @@ export const createBrowserLocationSource = (
               void options.geolocation?.clearWatch(startedWatchId)
               return
             }
+            watchStarting = false
             watchId = startedWatchId
           })
           .catch((error: unknown) => {
-            if (generation !== watchGeneration || errorReported) return
+            if (generation !== watchGeneration) return
+            watchStarting = false
+            if (errorReported) return
             receiveError(
               typeof error === 'object' && error !== null && 'code' in error
                 ? { code: Number(error.code) }
@@ -221,6 +228,7 @@ export const createBrowserLocationSource = (
             )
           })
       } catch (error) {
+        watchStarting = false
         if (errorReported) return
         receiveError(
           typeof error === 'object' && error !== null && 'code' in error

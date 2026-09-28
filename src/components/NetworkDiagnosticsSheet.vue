@@ -43,6 +43,15 @@
           >
         </li>
       </ul>
+      <p v-if="foreground.sessionEvents?.length" class="field-help">
+        Recent sessions:
+        {{
+          foreground.sessionEvents
+            .slice(-5)
+            .map((event) => `${event.event} (${event.activeSessions} active)`)
+            .join(' · ')
+        }}
+      </p>
       <template v-if="background">
         <h3>Android background peer · {{ background.peerStatus || background.state }}</h3>
         <p class="field-help">
@@ -71,6 +80,15 @@
             >
           </li>
         </ul>
+        <p v-if="background.diagnostics?.sessionEvents?.length" class="field-help">
+          Recent background sessions:
+          {{
+            background.diagnostics.sessionEvents
+              .slice(-5)
+              .map((event) => `${event.event} (${event.activeSessions} active)`)
+              .join(' · ')
+          }}
+        </p>
       </template>
     </section>
   </div>

@@ -88,8 +88,18 @@ export const createAndroidBackgroundSharing = (
     }
   | undefined => {
   if (!dependencies.isAndroid) return undefined
-  const status = async () =>
-    parseStatus(await dependencies.invoke('android_background_share_status'))
+  let pendingStatus: Promise<AndroidBackgroundStatus> | undefined
+  const status = (): Promise<AndroidBackgroundStatus> => {
+    if (!pendingStatus) {
+      pendingStatus = dependencies
+        .invoke('android_background_share_status')
+        .then(parseStatus)
+        .finally(() => {
+          pendingStatus = undefined
+        })
+    }
+    return pendingStatus
+  }
   return {
     start: async (draft, shareBaseUrl, visible) => {
       await dependencies.preparePermissions?.(draft.publication)

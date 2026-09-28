@@ -87,3 +87,15 @@ test('records transport-count changes without raw network addresses', () => {
   assert.match(log.format('android'), /2 connections: WebRTC, relay circuit/)
   assert.doesNotMatch(log.format('android'), /\/ip4\//)
 })
+
+test('exports bounded session lifecycle reasons without a peer identity', () => {
+  const log = createSessionLog(() => 1_000)
+  log.record({
+    level: 'warning',
+    event: 'sharing.session.lifecycle',
+    message: 'heartbeat-timeout; 1 active sessions',
+  })
+
+  assert.match(log.format('android'), /heartbeat-timeout; 1 active sessions/)
+  assert.doesNotMatch(log.format('android'), /peer|\/ip4\/|#share=/i)
+})

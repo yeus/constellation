@@ -3,11 +3,38 @@ import test from 'node:test'
 
 import { createBrowserLocationSource } from '../location/browser.ts'
 import {
+  appendSessionEvent,
   createSharingRuntime,
   generatedFollowName,
   rememberRedeemedNonce,
   savedFollowRecords,
 } from './sharingRuntime.ts'
+
+test('session diagnostics are bounded and contain only safe lifecycle details', () => {
+  let events: ReturnType<typeof appendSessionEvent> = []
+  events = appendSessionEvent(events, {
+    sequence: 0,
+    at: 999,
+    event: 'stream-open',
+    activeSessions: 0,
+  })
+  for (let index = 0; index < 40; index += 1) {
+    events = appendSessionEvent(events, {
+      sequence: index + 1,
+      at: 1_000 + index,
+      event: 'heartbeat-timeout',
+      activeSessions: 1,
+    })
+  }
+  assert.equal(events.length, 32)
+  assert.equal(events[0]?.sequence, 9)
+  assert.deepEqual(Object.keys(events[0] ?? {}).sort(), [
+    'activeSessions',
+    'at',
+    'event',
+    'sequence',
+  ])
+})
 
 test('bounds remembered redemption nonces and preserves recent entries', () => {
   const nonces = new Set<string>()

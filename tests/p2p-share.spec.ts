@@ -175,6 +175,14 @@ test('browser link previews immediately and saves only after Keep following', as
       .toBe(1)
     await viewer.reload()
     await expect(viewer.getByText('Seeing 1')).toBeVisible({ timeout: 30_000 })
+    await viewer.getByRole('button', { name: 'Seeing 1' }).click()
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('My friend')
+    await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Saved')
+    await expect(
+      viewer
+        .getByRole('dialog', { name: 'Following' })
+        .getByRole('button', { name: 'Show on map' }),
+    ).toBeVisible({ timeout: 30_000 })
   } finally {
     await viewerContext.close()
     await sourceContext.close()

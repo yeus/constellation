@@ -80,6 +80,7 @@ export interface SharingRuntimeState {
 
 export interface NetworkDiagnostics {
   readonly peerStatus: PeerStatus
+  readonly sessionEvents: readonly SessionEvent[]
   readonly connections: readonly {
     role: 'viewer' | 'source' | 'other peer'
     transport: 'relay circuit' | 'WebRTC' | 'WebSocket' | 'WebTransport' | 'other'
@@ -90,6 +91,28 @@ export interface NetworkDiagnostics {
     remoteAddress: string
   }[]
 }
+
+export interface SessionEvent {
+  readonly sequence: number
+  readonly at: number
+  readonly event:
+    | 'stream-open'
+    | 'redeem-denied'
+    | 'admitted'
+    | 'left'
+    | 'transport-closed'
+    | 'heartbeat-timeout'
+    | 'heartbeat-failed'
+    | 'expired'
+    | 'blocked'
+    | 'stopped'
+  readonly activeSessions: number
+}
+
+export const appendSessionEvent = (
+  events: readonly SessionEvent[],
+  event: SessionEvent,
+): readonly SessionEvent[] => [...events, event].slice(-32)
 
 const transportFor = (address: string): NetworkDiagnostics['connections'][number]['transport'] => {
   if (address.includes('/p2p-circuit')) return 'relay circuit'
@@ -248,6 +271,8 @@ export const createSharingRuntime = (
   let preparation: Promise<void> | undefined
   let persistence = Promise.resolve()
   let privateStateAvailable = true
+  let sessionEvents: readonly SessionEvent[] = []
+  let sessionEventSequence = 0
   let state: SharingRuntimeState = {
     peerStatus: 'offline',
     location: locationSource.getState(),
@@ -335,7 +360,7 @@ export const createSharingRuntime = (
     }
   }
 
-  const persist = (): Promise<void> => {
+  const persist = (traceFollow = false): Promise<void> => {
     if (!store) return Promise.resolve()
     if (!privateStateAvailable) {
       return Promise.reject(
@@ -343,7 +368,13 @@ export const createSharingRuntime = (
       )
     }
     const saved = snapshot()
-    persistence = persistence.catch(() => undefined).then(() => store.save(saved))
+    persistence = persistence
+      .catch(() => undefined)
+      .then(async () => {
+        if (traceFollow) console.info('[constellation-persist] native-save-start')
+        await store.save(saved)
+        if (traceFollow) console.info('[constellation-persist] native-save-complete')
+      })
     return persistence
   }
 
@@ -446,8 +477,21 @@ export const createSharingRuntime = (
     return preparation
   }
 
-  const removeSession = (session: SourceSession): void => {
-    for (const share of shares.values()) share.sessions.delete(session)
+  const recordSessionEvent = (event: SessionEvent['event']): void => {
+    sessionEvents = appendSessionEvent(sessionEvents, {
+      sequence: ++sessionEventSequence,
+      at: Date.now(),
+      event,
+      activeSessions: [...shares.values()].reduce((count, share) => count + share.sessions.size, 0),
+    })
+  }
+
+  const removeSession = (session: SourceSession, reason: SessionEvent['event']): void => {
+    let removed = false
+    for (const share of shares.values()) {
+      if (share.sessions.delete(session)) removed = true
+    }
+    if (removed) recordSessionEvent(reason)
     publish()
   }
 
@@ -455,6 +499,7 @@ export const createSharingRuntime = (
     stream: Parameters<typeof createConstellationMessagePort>[0],
     connection: { remotePeer: { toString: () => string } },
   ): void => {
+    recordSessionEvent('stream-open')
     const messagePort = createConstellationMessagePort(stream)
     const session: SourceSession = {
       peerId: connection.remotePeer.toString(),
@@ -489,6 +534,7 @@ export const createSharingRuntime = (
                 proof,
               ))
             if (!candidate || !permitted || candidate.blockedPeerIds.has(session.peerId)) {
+              recordSessionEvent('redeem-denied')
               throw new Error('Share access denied.')
             }
             authorizedShare = candidate
@@ -497,6 +543,7 @@ export const createSharingRuntime = (
             session.fingerprint = await viewerFingerprint(shareId, session.peerId)
             rememberRedeemedNonce(candidate.redeemedNonces, viewerNonce)
             candidate.sessions.add(session)
+            recordSessionEvent('admitted')
             publish()
             return {
               sessionId: session.sessionId,
@@ -517,7 +564,7 @@ export const createSharingRuntime = (
           leave: ({ sessionId }) => {
             requireAuthorized(session, authorizedShare)
             if (session.sessionId !== sessionId) throw new Error('Share access denied.')
-            removeSession(session)
+            removeSession(session, 'left')
           },
           offerReturn: ({ sessionId, url }) => {
             const share = requireAuthorized(session, authorizedShare)
@@ -584,7 +631,7 @@ export const createSharingRuntime = (
     )
     void messagePort.closed.then(() => {
       stopServer()
-      removeSession(session)
+      removeSession(session, 'transport-closed')
     })
   }
 
@@ -675,7 +722,7 @@ export const createSharingRuntime = (
       const expired = share.capability.expiresAt !== null && now >= share.capability.expiresAt
       for (const session of share.sessions) {
         if (expired || now - session.lastHeartbeatAt > HEARTBEAT_TIMEOUT_MS) {
-          removeSession(session)
+          removeSession(session, expired ? 'expired' : 'heartbeat-timeout')
           void session.close()
         }
       }
@@ -765,11 +812,13 @@ export const createSharingRuntime = (
           )
         }
       }
+      recordSessionEvent('blocked')
       publish()
       await Promise.all(sessions.map((session) => session.closeAfterFlush()))
     },
     networkDiagnostics: () => ({
       peerStatus: state.peerStatus,
+      sessionEvents,
       connections: (handlerNode?.getConnections() ?? []).map((connection) => {
         const peerId = connection.remotePeer.toString()
         const address = connection.remoteAddr.toString()
@@ -966,6 +1015,7 @@ export const createSharingRuntime = (
         }
         const heartbeat = window.setInterval(() => {
           void client.share.heartbeat({ sessionId: session.sessionId }).catch(() => {
+            recordSessionEvent('heartbeat-failed')
             const entry = followed.get(capability.shareId)
             if (entry) entry.connected = false
             publish({ message: 'The location connection was lost.' })
@@ -1005,6 +1055,7 @@ export const createSharingRuntime = (
           const entry = followed.get(capability.shareId)
           if (entry) entry.connected = false
           if (result.reason !== 'local') {
+            recordSessionEvent('transport-closed')
             publish({ message: 'Location sharing ended.' })
           }
           publish()
@@ -1049,7 +1100,8 @@ export const createSharingRuntime = (
       entry.localName = localName.trim().slice(0, 32) || generatedFollowName(shareId)
       entry.saved = true
       try {
-        await persist()
+        console.info('[constellation-persist] follow-save-queued')
+        await persist(true)
       } catch (error) {
         entry.localName = previousName
         entry.saved = wasSaved

@@ -20,6 +20,8 @@ const EVENT_CODES = [
   'sharing.background.viewers',
   'sharing.background.location',
   'sharing.background.connections',
+  'location.provider.fallback',
+  'sharing.session.lifecycle',
 ] as const
 
 const CATEGORIES = [

@@ -363,7 +363,11 @@ import { createSessionLog } from '../diagnostics/sessionLog.ts'
 import { createBrowserLocationSource } from '../location/browser.ts'
 import { locationObservationToMapLocation } from '../location/mapModel.ts'
 import type { MapFamily } from '../map/pmtiles.ts'
-import { createPlatformGeolocation, ensureTauriLocationPermission } from '../location/platform.ts'
+import { createPlatformGeolocation } from '../location/platform.ts'
+import {
+  createTauriAndroidLocationApi,
+  ensureAndroidLocationPermission,
+} from '../location/android.ts'
 import { subscribeTauriDeepLinks } from '../platform/deepLinks.ts'
 import { invitationFromSharedText } from '../platform/sharedText.ts'
 import {
@@ -396,6 +400,24 @@ const transportSummary = (diagnostics: NetworkDiagnostics): string => {
   return `${diagnostics.connections.length} connections${transports.length ? `: ${transports.join(', ')}` : ''}`
 }
 
+const recordSessionEvents = (
+  previous: NetworkDiagnostics | undefined,
+  next: NetworkDiagnostics,
+): void => {
+  const lastSequence = previous?.sessionEvents?.at(-1)?.sequence ?? 0
+  for (const event of next.sessionEvents ?? []) {
+    if (event.sequence <= lastSequence) continue
+    sessionLog.record({
+      level:
+        event.event === 'heartbeat-timeout' || event.event === 'heartbeat-failed'
+          ? 'warning'
+          : 'info',
+      event: 'sharing.session.lifecycle',
+      message: `${event.event}; ${event.activeSessions} active sessions`,
+    })
+  }
+}
+
 const sessionLog = createSessionLog(
   Date.now,
   import.meta.env.DEV
@@ -408,16 +430,26 @@ const sessionLog = createSessionLog(
 )
 sessionLog.record({ level: 'info', event: 'app.started' })
 
+const isNative = '__TAURI_INTERNALS__' in window
+const isAndroid = isNative && /Android/i.test(navigator.userAgent)
+const androidLocationApi = isAndroid ? createTauriAndroidLocationApi() : undefined
 const locationSource = createBrowserLocationSource({
   sourceId: bytesToBase64Url(crypto.getRandomValues(new Uint8Array(16))),
-  geolocation: createPlatformGeolocation(navigator.geolocation),
+  geolocation: createPlatformGeolocation({
+    browserGeolocation: navigator.geolocation,
+    androidApi: androidLocationApi,
+    onFallback: (reason) =>
+      sessionLog.record({
+        level: 'warning',
+        event: 'location.provider.fallback',
+        message: `Native Android location ${reason}; trying WebView location.`,
+      }),
+  }),
 })
 const shareBaseUrl = resolveShareBaseUrl(
   import.meta.env.VITE_CONSTELLATION_PUBLIC_URL,
   new URL(window.location.href),
 )
-const isNative = '__TAURI_INTERNALS__' in window
-const isAndroid = '__TAURI_INTERNALS__' in window && /Android/i.test(navigator.userAgent)
 const privateStore = isNative
   ? createNativePrivateStore(isAndroid ? 'android' : 'desktop')
   : createBrowserPrivateStore()
@@ -426,8 +458,9 @@ const backgroundSharing = createAndroidBackgroundSharing({
   isAndroid,
   now: Date.now,
   invoke,
-  preparePermissions: async () =>
-    ensureTauriLocationPermission(await import('@tauri-apps/plugin-geolocation')),
+  preparePermissions: async () => {
+    if (androidLocationApi) await ensureAndroidLocationPermission(androidLocationApi)
+  },
 })
 const migrateAndroidSourceShares = async (): Promise<void> => {
   if (!isAndroid || !backgroundSharing) return
@@ -545,6 +578,7 @@ const unsubscribe = runtime.subscribe((next) => {
   }
   runtimeState.value = next
   const latestNetwork = runtime.networkDiagnostics()
+  recordSessionEvents(networkDiagnostics.value, latestNetwork)
   if (transportSummary(networkDiagnostics.value) !== transportSummary(latestNetwork)) {
     sessionLog.record({
       level: 'info',
@@ -607,7 +641,10 @@ const refreshBackgroundStatus = async (): Promise<void> => {
       message: transportSummary(next.diagnostics),
     })
   }
+  if (next.diagnostics) recordSessionEvents(backgroundStatus.value?.diagnostics, next.diagnostics)
+  const previousServiceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
   backgroundStatus.value = next
+  if (previousServiceOwnsLocation !== Boolean(next.shares.length)) updateLocationOwnership()
 }
 
 const activeShares = computed(() =>
@@ -826,6 +863,7 @@ const createShare = async (): Promise<void> => {
         await refreshBackgroundStatus()
       }
       const existingShareIds = new Set(backgroundStatus.value?.shares.map(({ shareId }) => shareId))
+      locationSource.stop()
       backgroundStatus.value = await backgroundSharing.start(
         shareDraft.value,
         shareBaseUrl,
@@ -867,6 +905,7 @@ const createShare = async (): Promise<void> => {
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'
   } finally {
     creatingShare.value = false
+    if (backgroundSharing) updateLocationOwnership()
   }
 }
 
@@ -888,12 +927,7 @@ const acceptInvitation = async (): Promise<void> => {
     }
     const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
     if (follow && runtimeState.value.canSave) {
-      try {
-        await runtime.saveFollowing(shareId, follow.localName)
-        nicknamePrompt.value = { shareId, name: follow.localName }
-      } catch {
-        localError.value = 'Protected storage is unavailable; preview only.'
-      }
+      nicknamePrompt.value = { shareId, name: follow.localName }
     } else if (!runtimeState.value.canSave) {
       localError.value = 'Protected storage is unavailable; preview only.'
     }
@@ -1016,6 +1050,7 @@ const blockViewer = async (shareId: string, fingerprint: string): Promise<void> 
 const revokeShare = async (shareId: string): Promise<void> => {
   if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
     backgroundStatus.value = await backgroundSharing?.stop(shareId)
+    updateLocationOwnership()
   } else {
     await runtime.stopShare(shareId)
   }
@@ -1026,9 +1061,18 @@ const stopFollowing = async (shareId: string): Promise<void> => {
   if (selectedFollowId.value === shareId) followingOpen.value = false
 }
 
+const updateLocationOwnership = (): void => {
+  const visible = document.visibilityState === 'visible'
+  const serviceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
+  runtime.setVisible(
+    visible,
+    !browserLocationDeferred.value && !serviceOwnsLocation && !creatingShare.value,
+  )
+  if (serviceOwnsLocation) locationSource.stop()
+}
 const updateVisibility = (): void => {
   const visible = document.visibilityState === 'visible'
-  runtime.setVisible(visible, !browserLocationDeferred.value)
+  updateLocationOwnership()
   void backgroundSharing?.setVisible(visible).catch(() => undefined)
 }
 onMounted(() => {

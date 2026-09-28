@@ -173,3 +173,28 @@ test('clears an asynchronous watch that resolves after stop', async () => {
   assert.deepEqual(cleared, [17])
   assert.equal(source.getState().status, 'permission-required')
 })
+
+test('does not register duplicate watches while a start is pending', async () => {
+  let resolveWatch: ((watchId: number) => void) | undefined
+  let registrations = 0
+  const source = createBrowserLocationSource({
+    sourceId: 'pending-platform',
+    geolocation: {
+      watchPosition: () => {
+        registrations += 1
+        return new Promise<number>((resolve) => {
+          resolveWatch = resolve
+        })
+      },
+      clearWatch: () => undefined,
+    },
+  })
+
+  source.start()
+  source.start()
+  assert.equal(registrations, 1)
+  resolveWatch?.(18)
+  await Promise.resolve()
+  source.start()
+  assert.equal(registrations, 1)
+})

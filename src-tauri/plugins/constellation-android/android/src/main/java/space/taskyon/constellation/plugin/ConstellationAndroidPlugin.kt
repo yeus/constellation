@@ -5,14 +5,24 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.net.Uri
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.Permission
+import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
+import app.tauri.plugin.Channel
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
@@ -51,8 +61,38 @@ class VisibilityArgs {
   var visible: Boolean = false
 }
 
-@TauriPlugin
+@InvokeArg
+class AndroidPositionOptions {
+  var enableHighAccuracy: Boolean = true
+  var timeout: Long = 20_000
+  var maximumAge: Long = 0
+}
+
+@InvokeArg
+class AndroidWatchArgs {
+  var options: AndroidPositionOptions = AndroidPositionOptions()
+  lateinit var channel: Channel
+}
+
+@InvokeArg
+class AndroidCurrentArgs {
+  var options: AndroidPositionOptions = AndroidPositionOptions()
+}
+
+@InvokeArg
+class AndroidWatchIdArgs {
+  var watchId: Long = 0
+}
+
+@TauriPlugin(permissions = [Permission(
+  strings = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION],
+  alias = "location",
+)])
 class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activity) {
+  private val locationManager by lazy { activity.getSystemService(LocationManager::class.java) }
+  private val locationHandler = Handler(Looper.getMainLooper())
+  private val locationWatches = mutableMapOf<Long, Pair<Channel, LocationListener>>()
+  private var cancelCurrentLocation: (() -> Unit)? = null
   private val store by lazy {
     EncryptedShareStore(activity.applicationContext, discardUnreadable = false)
   }
@@ -63,6 +103,139 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       "constellation-private-ui-state-v1",
       false,
     )
+  }
+
+  private fun locationPermissionResult(): JSObject = JSObject()
+    .put("grant", locationGrant(activity))
+    .put("servicesEnabled", locationManager.isLocationEnabled)
+
+  @Command
+  fun locationPermission(invoke: Invoke) {
+    invoke.resolve(locationPermissionResult())
+  }
+
+  @PermissionCallback
+  private fun locationPermissionCallback(invoke: Invoke) {
+    locationPermission(invoke)
+  }
+
+  @Command
+  fun requestLocationPermission(invoke: Invoke) {
+    if (!locationManager.isLocationEnabled || locationGrant(activity) != "none") {
+      locationPermission(invoke)
+    } else {
+      requestPermissionForAlias("location", invoke, "locationPermissionCallback")
+    }
+  }
+
+  @Command
+  fun startLocationWatch(invoke: Invoke) {
+    val args = invoke.parseArgs(AndroidWatchArgs::class.java)
+    activity.runOnUiThread {
+      if (locationGrant(activity) == "none" || !locationManager.isLocationEnabled) {
+        invoke.reject("Location access is unavailable.")
+        return@runOnUiThread
+      }
+      val listener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+          args.channel.send(JSObject().put("position", locationPositionJson(location)))
+        }
+      }
+      if (!watchAndroidLocation(locationManager, listener, 5_000, 0f)) {
+        invoke.reject("No permitted Android location provider is available.")
+        return@runOnUiThread
+      }
+      locationWatches[args.channel.id] = args.channel to listener
+      invoke.resolve(JSObject().put("watchId", args.channel.id))
+    }
+  }
+
+  @Command
+  fun stopLocationWatch(invoke: Invoke) {
+    val watchId = invoke.parseArgs(AndroidWatchIdArgs::class.java).watchId
+    activity.runOnUiThread {
+      locationWatches.remove(watchId)?.let { locationManager.removeUpdates(it.second) }
+      invoke.resolve()
+    }
+  }
+
+  @Command
+  fun currentLocation(invoke: Invoke) {
+    val options = invoke.parseArgs(AndroidCurrentArgs::class.java).options
+    activity.runOnUiThread { acquireCurrentLocation(invoke, options) }
+  }
+
+  private fun acquireCurrentLocation(invoke: Invoke, options: AndroidPositionOptions) {
+    if (locationGrant(activity) == "none" || !locationManager.isLocationEnabled) {
+      invoke.reject("Location access is unavailable.")
+      return
+    }
+    val cached = availableLocationProviders(locationManager)
+      .mapNotNull { runCatching { locationManager.getLastKnownLocation(it) }.getOrNull() }
+      .filter { location ->
+        options.maximumAge > 0 &&
+          (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000 <=
+          options.maximumAge
+      }
+      .maxByOrNull { it.elapsedRealtimeNanos }
+    if (cached != null) {
+      invoke.resolve(JSObject(locationPositionJson(cached), arrayOf("timestamp", "coords")))
+      return
+    }
+    cancelCurrentLocation?.invoke()
+    var completed = false
+    lateinit var timeout: Runnable
+    val listener = object : LocationListener {
+      override fun onLocationChanged(location: Location) {
+        if (completed) return
+        completed = true
+        locationHandler.removeCallbacks(timeout)
+        locationManager.removeUpdates(this)
+        cancelCurrentLocation = null
+        invoke.resolve(JSObject(locationPositionJson(location), arrayOf("timestamp", "coords")))
+      }
+    }
+    timeout = Runnable {
+      if (completed) return@Runnable
+      completed = true
+      locationManager.removeUpdates(listener)
+      cancelCurrentLocation = null
+      invoke.reject("Location fix timed out.")
+    }
+    if (!watchAndroidLocation(locationManager, listener, 0, 0f)) {
+      invoke.reject("No permitted Android location provider is available.")
+      return
+    }
+    locationHandler.postDelayed(timeout, options.timeout.coerceIn(1_000, 20_000))
+    cancelCurrentLocation = {
+      locationHandler.removeCallbacks(timeout)
+      locationManager.removeUpdates(listener)
+      if (!completed) invoke.reject("Location request was cancelled.")
+      completed = true
+    }
+  }
+
+  override fun onPause() {
+    super.onPause()
+    locationWatches.values.forEach { locationManager.removeUpdates(it.second) }
+    cancelCurrentLocation?.invoke()
+    cancelCurrentLocation = null
+  }
+
+  override fun onResume() {
+    super.onResume()
+    val permissionRevoked = locationGrant(activity) == "none"
+    if (permissionRevoked || !locationManager.isLocationEnabled) {
+      val code = if (permissionRevoked) 1 else 4
+      locationWatches.values.forEach { it.first.send(JSObject().put("error", code)) }
+      locationWatches.clear()
+    } else {
+      locationWatches.values.forEach { (channel, listener) ->
+        if (!watchAndroidLocation(locationManager, listener, 5_000, 0f)) {
+          channel.send(JSObject().put("error", 2))
+        }
+      }
+    }
   }
 
   @Command
@@ -93,12 +266,16 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
 
   @Command
   fun savePrivateState(invoke: Invoke) {
+    Log.i("ConstellationPersist", "native-save-invoked")
     try {
       val state = invoke.parseArgs(PrivateStateArgs::class.java).state
       JSONObject(state)
       privateStore.savePrivateState(state)
+      Log.i("ConstellationPersist", "native-save-committed")
       invoke.resolve(JSObject())
+      Log.i("ConstellationPersist", "native-save-resolved")
     } catch (_: Exception) {
+      Log.i("ConstellationPersist", "native-save-failed")
       invoke.reject("Protected location state could not be saved.")
     }
   }
@@ -141,7 +318,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
           val normalized = JSONObject(stored)
           if (!normalized.has("shares")) normalized.put("shares", org.json.JSONArray())
           normalized.remove("share")
-          invoke.resolve(JSObject(normalized))
+          invoke.resolve(JSObject(normalized.toString()))
         } else {
           invoke.resolve(JSObject(stored))
         }
@@ -273,9 +450,8 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   private fun requireLocationPermission(background: Boolean) {
-    check(ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) ==
-      PackageManager.PERMISSION_GRANTED) {
-      "Allow precise location before starting a share."
+    check(locationGrant(activity) != "none") {
+      "Allow device location before starting a share."
     }
     if (background && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=

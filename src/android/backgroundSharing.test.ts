@@ -121,6 +121,33 @@ test('Android forwards a device block to its running background share', async ()
   ])
 })
 
+test('overlapping status polls share one native request and retry after completion', async () => {
+  let requests = 0
+  let complete: ((value: AndroidBackgroundStatus) => void) | undefined
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => {
+      requests += 1
+      return new Promise<AndroidBackgroundStatus>((resolve) => {
+        complete = resolve
+      })
+    },
+  })
+  assert.ok(controller)
+
+  const first = controller.status()
+  const second = controller.status()
+  assert.equal(requests, 1)
+  complete?.(readyStatus)
+  assert.deepEqual(await Promise.all([first, second]), [readyStatus, readyStatus])
+
+  const third = controller.status()
+  assert.equal(requests, 2)
+  complete?.(readyStatus)
+  assert.deepEqual(await third, readyStatus)
+})
+
 test('Android status rejects malformed native responses', async () => {
   const controller = createAndroidBackgroundSharing({
     isAndroid: true,

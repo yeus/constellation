@@ -1,6 +1,81 @@
 #[cfg(target_os = "android")]
 use tauri_plugin_constellation_android::ConstellationAndroidExt;
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_location_permission(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    app.constellation_android()
+        .location_permission()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_request_location_permission(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    app.constellation_android()
+        .request_location_permission()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_start_location_watch(
+    app: tauri::AppHandle,
+    options: serde_json::Value,
+    channel: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    app.constellation_android()
+        .start_location_watch(&options, channel)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_stop_location_watch(
+    app: tauri::AppHandle,
+    watch_id: u64,
+) -> Result<serde_json::Value, String> {
+    app.constellation_android()
+        .stop_location_watch(watch_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_current_location(
+    app: tauri::AppHandle,
+    options: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    app.constellation_android()
+        .current_location(&options)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(target_os = "android", debug_assertions))]
+fn trace_android_save_response(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    match app.get_webview_window("main") {
+        Some(webview) => {
+            let accepted = webview
+                .eval("console.log('[constellation-ipc] native-save-eval-received')")
+                .is_ok();
+            eprintln!(
+                "constellation-ipc-eval-{}",
+                if accepted { "accepted" } else { "failed" }
+            );
+        }
+        None => eprintln!("constellation-ipc-eval-missing-window"),
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod desktop_private_store;
 
@@ -13,6 +88,7 @@ async fn android_start_background_share(
     return app
         .constellation_android()
         .start(&request)
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -26,10 +102,21 @@ async fn android_background_share_status(
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
-    return app
-        .constellation_android()
-        .status()
-        .map_err(|error| error.to_string());
+    {
+        let result = app
+            .constellation_android()
+            .status()
+            .await
+            .map_err(|error| error.to_string());
+        #[cfg(debug_assertions)]
+        if let Ok(status) = &result {
+            eprintln!(
+                "constellation-ipc-status-bytes-{}",
+                status.to_string().len()
+            );
+        }
+        return result;
+    }
     #[cfg(not(target_os = "android"))]
     {
         let _ = app;
@@ -46,6 +133,7 @@ async fn android_stop_background_share(
     return app
         .constellation_android()
         .stop(&share_id)
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -63,6 +151,7 @@ async fn android_set_background_visibility(
     return app
         .constellation_android()
         .set_visible(visible)
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -80,6 +169,7 @@ async fn android_import_source_state(
     return app
         .constellation_android()
         .import_source_state(&state)
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -99,6 +189,7 @@ async fn android_set_background_viewer_name(
     return app
         .constellation_android()
         .set_viewer_name(&share_id, &fingerprint, &name)
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -117,6 +208,7 @@ async fn android_block_background_viewer(
     return app
         .constellation_android()
         .block_viewer(&share_id, &fingerprint)
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -131,6 +223,7 @@ async fn android_take_shared_text(app: tauri::AppHandle) -> Result<serde_json::V
     return app
         .constellation_android()
         .take_shared_text()
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -145,6 +238,7 @@ async fn android_load_private_state(app: tauri::AppHandle) -> Result<serde_json:
     return app
         .constellation_android()
         .load_private_state()
+        .await
         .map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
@@ -154,15 +248,23 @@ async fn android_load_private_state(app: tauri::AppHandle) -> Result<serde_json:
 }
 
 #[tauri::command]
-async fn android_save_private_state(
-    app: tauri::AppHandle,
-    state: String,
-) -> Result<serde_json::Value, String> {
+async fn android_save_private_state(app: tauri::AppHandle, state: String) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    return app
-        .constellation_android()
-        .save_private_state(&state)
-        .map_err(|error| error.to_string());
+    {
+        #[cfg(debug_assertions)]
+        eprintln!("constellation-ipc-save-entered");
+        let result = app
+            .constellation_android()
+            .save_private_state(&state)
+            .await
+            .map_err(|error| error.to_string());
+        #[cfg(debug_assertions)]
+        eprintln!("constellation-ipc-save-plugin-returned");
+        result?;
+        #[cfg(debug_assertions)]
+        trace_android_save_response(&app);
+        return Ok(());
+    }
     #[cfg(not(target_os = "android"))]
     {
         let _ = (app, state);
@@ -218,9 +320,19 @@ pub fn run() {
             android_save_private_state,
             desktop_load_private_state,
             desktop_save_private_state,
+            #[cfg(target_os = "android")]
+            android_location_permission,
+            #[cfg(target_os = "android")]
+            android_request_location_permission,
+            #[cfg(target_os = "android")]
+            android_start_location_watch,
+            #[cfg(target_os = "android")]
+            android_stop_location_watch,
+            #[cfg(target_os = "android")]
+            android_current_location,
         ])
         .setup(|_app| {
-            #[cfg(mobile)]
+            #[cfg(target_os = "ios")]
             _app.handle().plugin(tauri_plugin_geolocation::init())?;
             Ok(())
         })
