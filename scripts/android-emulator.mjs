@@ -28,6 +28,17 @@ export const androidTool = (name, environment = process.env) => {
   return sdk ? path.join(sdk, ...segments) : name
 }
 
+export const androidAdbEnvironment = (environment = process.env) => {
+  const localEnvironment = { ...environment }
+  delete localEnvironment.ADB_SERVER_SOCKET
+  if (localEnvironment.ADB_VENDOR_KEYS) return localEnvironment
+  const emulatorHome = localEnvironment.ANDROID_EMULATOR_HOME
+  const persistedKey = emulatorHome ? path.join(emulatorHome, 'adbkey') : undefined
+  return persistedKey && fs.existsSync(persistedKey)
+    ? { ...localEnvironment, ADB_VENDOR_KEYS: persistedKey }
+    : localEnvironment
+}
+
 const run = (executable, args, options = {}) =>
   execFileSync(executable, args, {
     encoding: 'utf8',
@@ -35,10 +46,15 @@ const run = (executable, args, options = {}) =>
     ...options,
   })
 
-const avdExists = (avdName) => {
+const avdExists = (avdName, environment = process.env) => {
+  const avdHome =
+    environment.ANDROID_AVD_HOME ??
+    (environment.HOME ? path.join(environment.HOME, '.android', 'avd') : undefined)
+  if (avdHome && fs.existsSync(path.join(avdHome, `${avdName}.ini`))) return true
   try {
-    const output = execFileSync(androidTool('avdmanager'), ['list', 'avd', '-c'], {
+    const output = execFileSync(androidTool('avdmanager', environment), ['list', 'avd', '-c'], {
       encoding: 'utf8',
+      env: environment,
     })
     return output.split(/\r?\n/).includes(avdName)
   } catch {
@@ -46,10 +62,10 @@ const avdExists = (avdName) => {
   }
 }
 
-export const create = (selected) => {
-  if (avdExists(selected.avdName)) return
+export const create = (selected, environment = process.env) => {
+  if (avdExists(selected.avdName, environment)) return
   run(
-    androidTool('avdmanager'),
+    androidTool('avdmanager', environment),
     [
       'create',
       'avd',
@@ -60,7 +76,7 @@ export const create = (selected) => {
       '--device',
       'pixel_2',
     ],
-    { input: 'no\n', stdio: ['pipe', 'inherit', 'inherit'] },
+    { input: 'no\n', stdio: ['pipe', 'inherit', 'inherit'], env: environment },
   )
 }
 
@@ -69,6 +85,12 @@ export const profile = (name) => {
     return {
       avdName: 'constellation-api29',
       systemImage: 'system-images;android-29;google_apis_playstore;x86_64',
+    }
+  if (name === 'aosp')
+    return {
+      avdName: 'constellation-api29-aosp',
+      systemImage: 'system-images;android-29;default;x86_64',
+      sdkRoot: '/android-state/aosp-sdk',
     }
   if (name === 'modern')
     return {

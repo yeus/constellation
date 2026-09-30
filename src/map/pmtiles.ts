@@ -1,7 +1,7 @@
 import { layers, namedFlavor } from '@protomaps/basemaps'
 import type { StyleSpecification } from 'maplibre-gl'
 import maplibregl from 'maplibre-gl'
-import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?url'
+import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?worker&url'
 import { PMTiles, Protocol } from 'pmtiles'
 
 export const DEFAULT_WORLD_PMTILES_URL =
@@ -39,14 +39,33 @@ export const createWorldStyle = (
   }
 }
 
+const createMapLibreWorkerBootstrapUrl = (): string => {
+  const compatibilityUrl = new URL(
+    `${import.meta.env.BASE_URL}legacy-compat.js`,
+    window.location.origin,
+  ).toString()
+  const compiledWorkerUrl = new URL(mapLibreWorkerUrl, window.location.origin).toString()
+  return URL.createObjectURL(
+    new Blob(
+      [
+        `importScripts(${JSON.stringify(compatibilityUrl)});`,
+        `importScripts(${JSON.stringify(compiledWorkerUrl)});`,
+      ],
+      { type: 'text/javascript' },
+    ),
+  )
+}
+
 export const createPmtilesRuntime = () => {
   const protocol = new Protocol()
   let installed = false
+  let workerBootstrapUrl: string | undefined
 
   return {
     setup: () => {
       if (installed) return
-      maplibregl.setWorkerUrl(mapLibreWorkerUrl)
+      workerBootstrapUrl = createMapLibreWorkerBootstrapUrl()
+      maplibregl.setWorkerUrl(workerBootstrapUrl)
       maplibregl.addProtocol('pmtiles', protocol.tile)
       installed = true
     },
@@ -59,6 +78,8 @@ export const createPmtilesRuntime = () => {
     dispose: () => {
       if (!installed) return
       maplibregl.removeProtocol('pmtiles')
+      if (workerBootstrapUrl) URL.revokeObjectURL(workerBootstrapUrl)
+      workerBootstrapUrl = undefined
       installed = false
     },
   }

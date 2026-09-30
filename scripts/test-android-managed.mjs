@@ -1,10 +1,14 @@
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { gunzipSync } from 'node:zlib'
 
-import { androidTool, create, emulatorArguments, profile } from './android-emulator.mjs'
+import {
+  androidAdbEnvironment,
+  androidTool,
+  create,
+  emulatorArguments,
+  profile,
+} from './android-emulator.mjs'
 import { androidApkCandidates } from './copy-android-apk.mjs'
 
 const packageName = 'space.taskyon.constellation'
@@ -19,12 +23,18 @@ const run = (executable, args, options = {}) =>
   })
 
 const adbPath = androidTool('adb')
-const emulatorPath = androidTool('emulator')
+const adbEnvironment = androidAdbEnvironment()
+
+const restartAdbServer = () => {
+  run(adbPath, ['kill-server'], { env: adbEnvironment })
+  run(adbPath, ['start-server'], { env: adbEnvironment })
+}
 
 const adb = (args, options = {}, serial) =>
   execFileSync(adbPath, [...(serial ? ['-s', serial] : []), ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: adbEnvironment,
     ...options,
   })
 
@@ -32,20 +42,6 @@ const wait = (milliseconds) =>
   new Promise((resolve) => {
     setTimeout(resolve, milliseconds)
   })
-
-const pull = (serial, remote, destination) => {
-  let lastError
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      run(adbPath, ['-s', serial, 'pull', remote, destination])
-      return
-    } catch (error) {
-      lastError = error
-      if (fs.existsSync(destination)) fs.unlinkSync(destination)
-    }
-  }
-  throw lastError
-}
 
 const onlineSerials = () =>
   adb(['devices'])
@@ -90,44 +86,6 @@ const stopEmulator = async (child, serial) => {
   if (child.exitCode === null) child.kill('SIGTERM')
 }
 
-const captureWebView = (directory, serial) => {
-  const webViewPath = adb(['shell', 'pm', 'path', 'com.google.android.webview'], {}, serial)
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^package:/, '').trim())
-    .find(Boolean)
-  if (!webViewPath) throw new Error('The API 36 emulator has no Android System WebView APK.')
-
-  const compressedLibrary = path.join(directory, 'TrichromeLibrary.apk.gz')
-  const libraryApk = path.join(directory, 'TrichromeLibrary.apk')
-  const webViewApk = path.join(directory, 'WebViewGoogle.apk')
-  pull(serial, webViewPath, webViewApk)
-  pull(serial, '/product/app/TrichromeLibrary/TrichromeLibrary.apk.gz', compressedLibrary)
-  fs.writeFileSync(libraryApk, gunzipSync(fs.readFileSync(compressedLibrary)))
-
-  const details = adb(['shell', 'dumpsys', 'package', 'com.google.android.webview'], {}, serial)
-  const version = details.match(/versionName=([^\s]+)/)?.[1]
-  if (!version) throw new Error('Could not determine the API 36 WebView version.')
-  return { libraryApk, webViewApk, version }
-}
-
-const installWebView = (fixture, serial) => {
-  run(adbPath, ['-s', serial, 'install', '-r', '-d', fixture.libraryApk])
-  run(adbPath, ['-s', serial, 'install', '-r', '-d', fixture.webViewApk])
-  run(adbPath, [
-    '-s',
-    serial,
-    'shell',
-    'cmd',
-    'webviewupdate',
-    'set-webview-implementation',
-    'com.google.android.webview',
-  ])
-  const state = adb(['shell', 'dumpsys', 'webviewupdate'], {}, serial)
-  if (!state.includes(`(com.google.android.webview, ${fixture.version})`)) {
-    throw new Error(`API 29 did not select WebView ${fixture.version}.`)
-  }
-}
-
 const uninstallIfPresent = (serial) => {
   try {
     if (adb(['shell', 'pm', 'path', packageName], { timeout: 10_000 }, serial).trim()) {
@@ -138,18 +96,31 @@ const uninstallIfPresent = (serial) => {
   }
 }
 
-const startProfile = async (selected, prepare) => {
-  create(selected)
+const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
+  const profileEnvironment = selected.sdkRoot
+    ? {
+        ...adbEnvironment,
+        ANDROID_HOME: selected.sdkRoot,
+        ANDROID_SDK_ROOT: selected.sdkRoot,
+      }
+    : adbEnvironment
+  create(selected, profileEnvironment)
   const previousSerials = new Set(onlineSerials())
-  const child = spawn(emulatorPath, emulatorArguments(selected, ['-no-window', '-no-boot-anim']), {
-    stdio: 'ignore',
-  })
+  const selectedEmulatorPath = androidTool('emulator', profileEnvironment)
+  const child = spawn(
+    selectedEmulatorPath,
+    emulatorArguments(selected, ['-no-window', '-no-boot-anim']),
+    {
+      stdio: 'ignore',
+      env: profileEnvironment,
+    },
+  )
   let serial
   try {
     serial = await waitForBoot(child, selected.avdName, previousSerials)
-    uninstallIfPresent(serial)
+    if (uninstall) uninstallIfPresent(serial)
     await prepare?.(serial)
-    return { child, serial }
+    return { child, serial, profileEnvironment }
   } catch (error) {
     await stopEmulator(child, serial)
     throw error
@@ -159,12 +130,55 @@ const startProfile = async (selected, prepare) => {
 const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
   const device = await startProfile(profile(name), prepare)
   try {
-    run(adbPath, ['-s', device.serial, 'install', '-r', selectedApk])
+    run(adbPath, ['start-server'], { env: adbEnvironment })
+    run(adbPath, ['-s', device.serial, 'install', '-r', selectedApk], { env: adbEnvironment })
     run(process.execPath, ['scripts/test-android.mjs', ...testArgs], {
-      env: { ...process.env, ANDROID_SERIAL: device.serial },
+      env: { ...adbEnvironment, ANDROID_SERIAL: device.serial },
     })
   } finally {
     await stopEmulator(device.child, device.serial)
+  }
+}
+
+const runManagedPowerCycle = async () => {
+  const selected = profile('modern')
+  let before
+  let after
+  try {
+    before = await startProfile(selected)
+    run(adbPath, ['-s', before.serial, 'install', '-r', apk], { env: adbEnvironment })
+    const prepareOutput = execFileSync(
+      process.execPath,
+      ['scripts/test-android.mjs', '--reboot-prepare-smoke'],
+      {
+        env: { ...adbEnvironment, ANDROID_SERIAL: before.serial },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'inherit'],
+      },
+    )
+    const marker = prepareOutput
+      .split(/\r?\n/)
+      .find((line) => line.startsWith('[constellation-reboot-state] '))
+    if (!marker) throw new Error('Reboot preparation did not report synthetic share state.')
+    const expected = JSON.parse(marker.slice('[constellation-reboot-state] '.length))
+    if (typeof expected.shareId !== 'string' || !Number.isFinite(expected.expiresAt)) {
+      throw new Error('Reboot preparation returned invalid synthetic share state.')
+    }
+
+    await stopEmulator(before.child, before.serial)
+    before = undefined
+    after = await startProfile(selected, undefined, { uninstall: false })
+    run(process.execPath, ['scripts/test-android.mjs', '--reboot-verify-smoke'], {
+      env: {
+        ...adbEnvironment,
+        ANDROID_SERIAL: after.serial,
+        EXPECTED_REBOOT_SHARE_ID: expected.shareId,
+        EXPECTED_REBOOT_EXPIRES_AT: String(expected.expiresAt),
+      },
+    })
+  } finally {
+    if (after) await stopEmulator(after.child, after.serial)
+    if (before) await stopEmulator(before.child, before.serial)
   }
 }
 
@@ -188,7 +202,7 @@ const runThreeWay = async () => {
       ],
       {
         env: {
-          ...process.env,
+          ...adbEnvironment,
           ANDROID_SERIALS: `${first.serial},${second.serial}`,
           ANDROID_SERIAL: '',
         },
@@ -226,6 +240,7 @@ const buildThreeWayApk = () => {
   fs.copyFileSync(source, threeWayApk)
 }
 
+restartAdbServer()
 const main = async () => {
   if (process.argv.includes('--native-location-smoke')) {
     if (!fs.existsSync(apk)) throw new Error('Build the Android debug APK first.')
@@ -252,25 +267,76 @@ const main = async () => {
   if (!process.argv.includes('--skip-build')) {
     run('yarn', ['build:android:debug:x86_64-emulator'])
   }
+  if (process.argv.includes('--notification-stop-smoke')) {
+    await runProfile('modern', undefined, ['--notification-stop-smoke'])
+    return
+  }
+  if (process.argv.includes('--permission-denial-smoke')) {
+    await runProfile('modern', undefined, ['--permission-denial-smoke'])
+    return
+  }
+  if (process.argv.includes('--expiry-smoke')) {
+    await runProfile('modern', undefined, ['--expiry-smoke'])
+    return
+  }
+  if (process.argv.includes('--service-restart-smoke')) {
+    await runProfile('modern', undefined, ['--service-restart-smoke'])
+    return
+  }
+  if (process.argv.includes('--foreground-only-smoke')) {
+    await runProfile('modern', undefined, ['--foreground-only-smoke'])
+    return
+  }
+  if (process.argv.includes('--multiple-source-links-smoke')) {
+    await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
+    return
+  }
+  if (process.argv.includes('--power-network-smoke')) {
+    await runProfile('modern', undefined, ['--power-network-smoke'])
+    return
+  }
+  if (process.argv.includes('--reboot-smoke')) {
+    await runManagedPowerCycle()
+    console.log('Android power-cycle preserved protected share identity and absolute expiry.')
+    return
+  }
+  if (process.argv.includes('--native-fallback-smoke')) {
+    await runProfile('modern', undefined, ['--native-fallback-smoke'])
+    return
+  }
+  if (process.argv.includes('--ui-policy-smoke')) {
+    await runProfile('modern', undefined, ['--ui-policy-smoke'])
+    return
+  }
+  if (process.argv.includes('--no-gms-smoke')) {
+    await runProfile('aosp', undefined, ['--no-gms-flow'])
+    console.log('Android API 29 AOSP/no-GMS location-sharing flow passed.')
+    return
+  }
   if (process.argv.includes('--modern-only')) {
     await runProfile('modern')
     console.log('Android API 36 location-sharing tests passed.')
     return
   }
-  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-webview-'))
-  try {
-    let fixture
-    await runProfile('modern', (serial) => {
-      fixture = captureWebView(fixtureDirectory, serial)
-    })
-    await runProfile('compat', (serial) => {
-      if (!fixture) throw new Error('The modern WebView fixture was not captured.')
-      installWebView(fixture, serial)
-    })
-    console.log('Android API 29 and API 36 location-sharing tests passed.')
-  } finally {
-    fs.rmSync(fixtureDirectory, { recursive: true, force: true })
+  if (process.argv.includes('--compat-only')) {
+    await runProfile('compat')
+    console.log('Android API 29 compatibility location-sharing tests passed.')
+    return
   }
+  await runProfile('modern')
+  await runProfile('compat')
+  await runProfile('aosp', undefined, ['--no-gms-flow'])
+  await runProfile('modern', undefined, ['--notification-stop-smoke'])
+  await runProfile('modern', undefined, ['--permission-denial-smoke'])
+  await runProfile('modern', undefined, ['--expiry-smoke'])
+  await runProfile('modern', undefined, ['--foreground-only-smoke'])
+  await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
+  await runProfile('modern', undefined, ['--native-fallback-smoke'])
+  await runProfile('modern', undefined, ['--ui-policy-smoke'])
+  await runProfile('modern', undefined, ['--power-network-smoke'])
+  await runProfile('modern', undefined, ['--service-restart-smoke'])
+  await runManagedPowerCycle()
+  console.log('Android API 29 stock/no-GMS and API 36 location-sharing tests passed.')
 }
 
 main().catch((error) => {
