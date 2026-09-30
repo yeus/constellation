@@ -1376,12 +1376,6 @@ const runPowerNetworkSmoke = async () => {
         const status = await invoke('android_background_share_status');
         const candidate = status.shares?.[0];
         if (candidate) {
-    try {
-      adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
-    } catch {}
-    try {
-      adb(['shell', 'cmd', 'netpolicy', 'set', 'metered-network', 'AndroidWifi', 'undefined'])
-    } catch {}
           return JSON.stringify({
             shareId: candidate.shareId,
             expiresAt: candidate.expiresAt ?? null,
