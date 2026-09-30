@@ -98,4 +98,4 @@ bash scripts/with-android-build-tools.sh \
   yarn tauri android build \
   --apk \
   --target aarch64
-node scripts/copy-android-apk.mjs release aarch64
+bash scripts/with-android-build-tools.sh node scripts/copy-android-apk.mjs release aarch64

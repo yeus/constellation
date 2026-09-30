@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,10 +58,25 @@ const copyAndroidApk = (root, mode, target) => {
     )
   }
 
+  if (mode === 'release') {
+    try {
+      execFileSync('apksigner', ['verify', source], { stdio: 'pipe' })
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        throw new Error('Android build tools apksigner is required to verify the release APK.')
+      }
+      throw new Error('Android release APK signature verification failed; refusing to copy it.')
+    }
+  }
+
   const outputDirectory = path.join(root, 'dist')
   const destination = path.join(outputDirectory, androidArtifactName(mode, target))
   fs.mkdirSync(outputDirectory, { recursive: true })
   fs.copyFileSync(source, destination)
+  if (mode === 'release') {
+    const hash = createHash('sha256').update(fs.readFileSync(destination)).digest('hex')
+    fs.writeFileSync(`${destination}.sha256`, `${hash}  ${path.basename(destination)}\n`)
+  }
   return destination
 }
 

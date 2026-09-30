@@ -193,21 +193,25 @@ test('reports a missing keytool before blaming the stored password', (t) => {
   const fixture = createFixture(t)
   const keystorePath = path.join(fixture.home, 'release.jks')
   fs.writeFileSync(keystorePath, 'synthetic-existing-keystore')
-  const result = spawnSync('bash', [
-    '-c',
-    'source "$1"; PATH=/nonexistent; prepare_constellation_android_signing build 0',
-    'test',
-    path.join(projectRoot, 'scripts/android-release-secrets.sh'),
-  ], {
-    encoding: 'utf8',
-    env: {
-      ...fixture.env,
-      ANDROID_KEYSTORE_PATH: keystorePath,
-      ANDROID_KEYSTORE_PASSWORD: 'synthetic-store-password',
-      ANDROID_KEY_ALIAS: 'synthetic-release-alias',
-      ANDROID_KEY_PASSWORD: 'synthetic-key-password',
+  const result = spawnSync(
+    'bash',
+    [
+      '-c',
+      'source "$1"; PATH=/nonexistent; prepare_constellation_android_signing build 0',
+      'test',
+      path.join(projectRoot, 'scripts/android-release-secrets.sh'),
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...fixture.env,
+        ANDROID_KEYSTORE_PATH: keystorePath,
+        ANDROID_KEYSTORE_PASSWORD: 'synthetic-store-password',
+        ANDROID_KEY_ALIAS: 'synthetic-release-alias',
+        ANDROID_KEY_PASSWORD: 'synthetic-key-password',
+      },
     },
-  })
+  )
 
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /keytool.*not.*PATH/i)
@@ -423,13 +427,16 @@ test('refuses to choose between two different valid signing keystores', (t) => {
   const fixture = createFixture(t)
   const keystorePath = path.join(fixture.home, 'release.jks')
   fs.writeFileSync(keystorePath, 'synthetic-local-key')
-  fs.writeFileSync(fixture.storePath, JSON.stringify({
-    android_keystore_path: keystorePath,
-    android_keystore_base64: Buffer.from('synthetic-backup-key').toString('base64'),
-    android_keystore_password: 'synthetic-store-password',
-    android_key_alias: 'synthetic-release-alias',
-    android_key_password: 'synthetic-key-password',
-  }))
+  fs.writeFileSync(
+    fixture.storePath,
+    JSON.stringify({
+      android_keystore_path: keystorePath,
+      android_keystore_base64: Buffer.from('synthetic-backup-key').toString('base64'),
+      android_keystore_password: 'synthetic-store-password',
+      android_key_alias: 'synthetic-release-alias',
+      android_key_password: 'synthetic-key-password',
+    }),
+  )
 
   const result = runPrepare(fixture)
   assert.notEqual(result.status, 0)
