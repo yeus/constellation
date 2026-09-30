@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Bundle
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
@@ -21,6 +22,20 @@ internal fun locationGrant(context: Context): String = when {
 internal fun availableLocationProviders(manager: LocationManager): List<String> =
   listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
     .filter { provider -> runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false) }
+
+internal fun androidLocationListener(
+  onLocationChanged: (Location) -> Unit,
+  onProviderDisabled: (String) -> Unit = {},
+): LocationListener = object : LocationListener {
+  override fun onLocationChanged(location: Location) = onLocationChanged(location)
+
+  override fun onProviderDisabled(provider: String) = onProviderDisabled(provider)
+
+  override fun onProviderEnabled(provider: String) = Unit
+
+  @Suppress("DEPRECATION")
+  override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+}
 
 internal fun watchAndroidLocation(
   manager: LocationManager,

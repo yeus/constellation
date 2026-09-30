@@ -1,3 +1,4 @@
+import { shouldSignalIdleAfterShareUpdate } from './backgroundRuntimePolicy.ts'
 import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
 import type { ShareDraft } from '../shareDraft.ts'
 import {
@@ -73,6 +74,7 @@ const start = (): void => {
   let refreshObserver: ((position: BrowserPosition) => void) | undefined
   let errorObserver: ((error: { code: number }) => void) | undefined
   let latestState: SharingRuntimeState | undefined
+  let previousShareCount = 0
   let requestCounter = 0
   let commandQueue = Promise.resolve()
   const pendingStoreRequests = new Map<
@@ -122,15 +124,14 @@ const start = (): void => {
   runtime.setVisible(false, false)
 
   const report = (state: SharingRuntimeState): void => {
+    const shareCount = state.shares.length
+    const becameIdle = shouldSignalIdleAfterShareUpdate(previousShareCount, shareCount)
+    previousShareCount = shareCount
     latestState = state
     post({
       type: 'status',
       status: {
-        state: state.shares.length
-          ? 'sharing'
-          : state.peerStatus === 'error'
-            ? 'error'
-            : 'starting',
+        state: shareCount ? 'sharing' : state.peerStatus === 'error' ? 'error' : 'starting',
         peerStatus: state.peerStatus,
         diagnostics: runtime.networkDiagnostics(),
         shares: state.shares,
@@ -139,6 +140,7 @@ const start = (): void => {
         message: state.message,
       },
     })
+    if (becameIdle) post({ type: 'idle' })
   }
 
   const sendError = (error: unknown, fallback: string): void =>

@@ -31,11 +31,31 @@ const requireFiniteNumber = (value: unknown, field: string): number => {
 const optionalFiniteNumber = (value: unknown, field: string): number | undefined =>
   value === undefined ? undefined : requireFiniteNumber(value, field)
 
+const LOCATION_OBSERVATION_FIELDS = [
+  'profile',
+  'sourceId',
+  'precision',
+  'sequence',
+  'capturedAt',
+  'expiresAt',
+  'latitude',
+  'longitude',
+  'accuracyMeters',
+  'altitudeMeters',
+  'headingDegrees',
+  'speedMps',
+] as const
+
 export const parseLocationObservationV1 = (value: unknown): LocationObservationV1 => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError('Location observation must be an object.')
   }
   const raw = value as Record<string, unknown>
+  const unknownField = Object.keys(raw).find(
+    (field) =>
+      !LOCATION_OBSERVATION_FIELDS.includes(field as (typeof LOCATION_OBSERVATION_FIELDS)[number]),
+  )
+  if (unknownField) throw new TypeError(`Unknown location observation field: ${unknownField}.`)
   if (raw.profile !== LOCATION_PROFILE_V1) {
     throw new TypeError(`Unsupported location profile: ${String(raw.profile)}.`)
   }

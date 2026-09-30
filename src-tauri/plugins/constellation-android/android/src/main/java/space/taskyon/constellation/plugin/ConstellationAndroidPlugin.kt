@@ -2,7 +2,6 @@ package space.taskyon.constellation.plugin
 
 import android.Manifest
 import android.app.Activity
-import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
@@ -136,11 +135,9 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         invoke.reject("Location access is unavailable.")
         return@runOnUiThread
       }
-      val listener = object : LocationListener {
-        override fun onLocationChanged(location: Location) {
-          args.channel.send(JSObject().put("position", locationPositionJson(location)))
-        }
-      }
+      val listener = androidLocationListener(onLocationChanged = { location ->
+        args.channel.send(JSObject().put("position", locationPositionJson(location)))
+      })
       if (!watchAndroidLocation(locationManager, listener, 5_000, 0f)) {
         invoke.reject("No permitted Android location provider is available.")
         return@runOnUiThread
@@ -185,16 +182,13 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     cancelCurrentLocation?.invoke()
     var completed = false
     lateinit var timeout: Runnable
-    val listener = object : LocationListener {
-      override fun onLocationChanged(location: Location) {
-        if (completed) return
-        completed = true
-        locationHandler.removeCallbacks(timeout)
-        locationManager.removeUpdates(this)
-        cancelCurrentLocation = null
-        invoke.resolve(JSObject(locationPositionJson(location), arrayOf("timestamp", "coords")))
-      }
-    }
+    val listener = androidLocationListener(onLocationChanged = { location ->
+      if (completed) return@androidLocationListener
+      completed = true
+      locationHandler.removeCallbacks(timeout)
+      cancelCurrentLocation = null
+      invoke.resolve(JSObject(locationPositionJson(location), arrayOf("timestamp", "coords")))
+    })
     timeout = Runnable {
       if (completed) return@Runnable
       completed = true
@@ -292,9 +286,11 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       } else {
         STARTING_STATUS
       }
+      ShareServiceContract.startPending = true
       ensureService(ShareServiceContract.ACTION_START, request = request.toString())
       invoke.resolve(JSObject(initial))
     } catch (error: Exception) {
+      ShareServiceContract.startPending = false
       invoke.reject(error.message ?: "Could not start background location sharing.")
     }
   }
@@ -303,18 +299,32 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun backgroundShareStatus(invoke: Invoke) {
     try {
       val stored = ShareServiceContract.currentStatus ?: store.loadStatus() ?: STOPPED_STATUS
-      if (!serviceRunning() && store.hasBackgroundShares()) {
+      val running = serviceRunning()
+      val hasSavedShares = store.hasSavedShares()
+      val hasBackgroundShares = store.hasBackgroundShares()
+      val state = runCatching { JSONObject(stored).optString("state") }.getOrDefault("error")
+      Log.i(
+        "ConstellationStatus",
+        "background-status running=$running has-saved=$hasSavedShares has-background=$hasBackgroundShares current=${ShareServiceContract.currentStatus != null} stored=$state",
+      )
+      if (ShareServiceContract.startPending && !running) {
+        invoke.resolve(JSObject(STARTING_STATUS))
+      } else if (!running && hasBackgroundShares) {
+        ShareServiceContract.startPending = true
         store.saveStatus(STARTING_STATUS)
         ShareServiceContract.currentStatus = STARTING_STATUS
         ensureService(ShareServiceContract.ACTION_RESTORE)
         invoke.resolve(JSObject(STARTING_STATUS))
       } else {
-        val state = runCatching { JSONObject(stored).optString("state") }.getOrDefault("error")
-        if (serviceRunning() && ShareServiceContract.currentStatus == null) {
+        if (
+          running &&
+          ShareServiceContract.currentStatus == null &&
+          (hasSavedShares || state in setOf("sharing", "starting", "paused"))
+        ) {
           invoke.resolve(JSObject(STARTING_STATUS))
-        } else if (!serviceRunning() && state in setOf("sharing", "starting")) {
+        } else if (!running && state in setOf("sharing", "starting")) {
           invoke.resolve(JSObject(INTERRUPTED_STATUS))
-        } else if (!serviceRunning()) {
+        } else if (!running) {
           val normalized = JSONObject(stored)
           if (!normalized.has("shares")) normalized.put("shares", org.json.JSONArray())
           normalized.remove("share")
@@ -484,13 +494,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     }
   }
 
-  @Suppress("DEPRECATION")
-  private fun serviceRunning(): Boolean {
-    val manager = activity.getSystemService(ActivityManager::class.java)
-    return manager.getRunningServices(Int.MAX_VALUE).any {
-      it.service.className == LocationShareService::class.java.name
-    }
-  }
+  private fun serviceRunning(): Boolean = ShareServiceContract.serviceRunning
 
   private fun validateRequest(encoded: String): JSONObject {
     require(encoded.isNotBlank() && encoded.length <= 4096) { "Background share request is invalid." }

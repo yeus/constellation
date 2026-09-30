@@ -24,6 +24,7 @@ import android.webkit.WebViewClient
 import java.io.ByteArrayInputStream
 import java.util.UUID
 import java.util.concurrent.Executors
+import org.json.JSONArray
 import org.json.JSONObject
 
 class LocationShareService : Service(), LocationListener {
@@ -44,6 +45,8 @@ class LocationShareService : Service(), LocationListener {
 
   override fun onCreate() {
     super.onCreate()
+    ShareServiceContract.serviceRunning = true
+    ShareServiceContract.startPending = false
     store = EncryptedShareStore(applicationContext, discardUnreadable = false)
   }
 
@@ -157,6 +160,8 @@ class LocationShareService : Service(), LocationListener {
     webView = null
     runtimeStarting = false
     ShareServiceContract.currentStatus = null
+    ShareServiceContract.serviceRunning = false
+    ShareServiceContract.startPending = false
     ioExecutor.shutdown()
     super.onDestroy()
   }
@@ -192,13 +197,14 @@ class LocationShareService : Service(), LocationListener {
 
   private fun runtimeClient() = object : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-      request.url.toString() !in setOf(PAGE_URL, SCRIPT_URL)
+      request.url.toString() !in setOf(PAGE_URL, ERROR_SCRIPT_URL, SCRIPT_URL)
 
     override fun shouldInterceptRequest(
       view: WebView,
       request: WebResourceRequest,
     ): WebResourceResponse = when (request.url.toString()) {
       PAGE_URL -> response("text/html", HTML.toByteArray())
+      ERROR_SCRIPT_URL -> response("application/javascript", ERROR_SCRIPT.toByteArray())
       SCRIPT_URL -> response(
         "application/javascript",
         assets.open("constellation-background.js").readBytes(),
@@ -223,10 +229,13 @@ class LocationShareService : Service(), LocationListener {
     @JavascriptInterface
     fun postMessage(message: String) {
       val parsed = runCatching { JSONObject(message) }.getOrNull() ?: return
-      if (parsed.optString("type") == "private-state") {
-        handlePrivateStateRequest(parsed)
-      } else {
-        mainHandler.post { handleRuntimeMessage(parsed) }
+      when (parsed.optString("type")) {
+        "runtime-error" -> Log.e(
+          "ConstellationRuntime",
+          redactRuntimeError(parsed.optString("message")),
+        )
+        "private-state" -> handlePrivateStateRequest(parsed)
+        else -> mainHandler.post { handleRuntimeMessage(parsed) }
       }
     }
   }
@@ -279,15 +288,54 @@ class LocationShareService : Service(), LocationListener {
           viewers += shares?.optJSONObject(index)?.optInt("viewerCount", 0) ?: 0
         }
         runtimeError = status.optString("state") == "error" && (shares?.length() ?: 0) == 0
-        ShareNotification.update(
-          this,
-          "$viewers connected across ${shares?.length() ?: 0} links",
-        )
+        ShareNotification.update(this, notificationBody(shares, viewers))
         stopWhenIdle()
       }
       "idle", "stopped" -> finishStop()
       "paused" -> finishPause()
     }
+  }
+
+  private fun notificationBody(shares: JSONArray?, viewers: Int): String {
+    val count = shares?.length() ?: 0
+    if (count == 0) return "No active links"
+    val precisions = linkedSetOf<String>()
+    var nearestExpiry: Long? = null
+    for (index in 0 until count) {
+      val share = shares?.optJSONObject(index) ?: continue
+      when (share.optString("precision")) {
+        "exact" -> precisions.add("exact")
+        "approximate" -> precisions.add("approximate")
+        "very-coarse" -> precisions.add("very coarse")
+      }
+      if (!share.isNull("expiresAt")) {
+        val expiresAt = share.optLong("expiresAt", 0L)
+        if (expiresAt > 0L && (nearestExpiry == null || expiresAt < nearestExpiry!!)) {
+          nearestExpiry = expiresAt
+        }
+      }
+    }
+    val precisionText = if (precisions.isEmpty()) "location" else precisions.joinToString(" + ")
+    val expiryText = nearestExpiry?.let { expiresAt ->
+      val remainingMinutes = maxOf(1L, (expiresAt - System.currentTimeMillis() + 59_999L) / 60_000L)
+      "next ends in $remainingMinutes min"
+    } ?: "until stopped"
+    val linkText = if (count == 1) "1 link" else "$count links"
+    return "$linkText · $precisionText · $viewers connected · $expiryText"
+  }
+
+  private fun foregroundNotificationBody(): String {
+    val status = ShareServiceContract.currentStatus
+      ?.let { runCatching { JSONObject(it) }.getOrNull() }
+      ?: return "Restoring private P2P sharing…"
+    if (status.optString("state") != "sharing") return "Restoring private P2P sharing…"
+    val shares = status.optJSONArray("shares")
+    if ((shares?.length() ?: 0) == 0) return "Restoring private P2P sharing…"
+    var viewers = 0
+    for (index in 0 until (shares?.length() ?: 0)) {
+      viewers += shares?.optJSONObject(index)?.optInt("viewerCount", 0) ?: 0
+    }
+    return notificationBody(shares, viewers)
   }
 
   private fun startLocationUpdates() {
@@ -343,12 +391,10 @@ class LocationShareService : Service(), LocationListener {
       }.onFailure { clearRefresh() }
       return
     }
-    val listener = object : LocationListener {
-      override fun onLocationChanged(location: Location) {
-        clearRefresh()
-        sendPosition(location, "location-refresh-result")
-      }
-    }
+    val listener = androidLocationListener(onLocationChanged = { location ->
+      clearRefresh()
+      sendPosition(location, "location-refresh-result")
+    })
     refreshListener = listener
     val timeout = Runnable { clearRefresh() }
     refreshTimeout = timeout
@@ -360,14 +406,17 @@ class LocationShareService : Service(), LocationListener {
   private fun send(command: JSONObject) {
     val encoded = JSONObject.quote(command.toString())
     mainHandler.post {
-      webView?.evaluateJavascript("window.__constellationBackgroundCommand?.($encoded)", null)
+      webView?.evaluateJavascript(
+        "if (window.__constellationBackgroundCommand) window.__constellationBackgroundCommand($encoded)",
+        null,
+      )
     }
   }
 
   private fun startRuntime() {
     startForeground(
       ShareServiceContract.NOTIFICATION_ID,
-      ShareNotification.build(this, "Restoring private P2P sharing…"),
+      ShareNotification.build(this, foregroundNotificationBody()),
     )
     if (webView == null && !runtimeStarting) createRuntime()
   }
@@ -382,12 +431,16 @@ class LocationShareService : Service(), LocationListener {
       ?: return
     if ((status.optJSONArray("shares")?.length() ?: 0) > 0) return
     if (runtimeError) {
+      ShareServiceContract.serviceRunning = false
       stopForeground(STOP_FOREGROUND_REMOVE)
       stopSelf()
-    } else {
       finishStop()
     }
   }
+
+  private fun redactRuntimeError(message: String): String = message
+    .replace(Regex("#share=[A-Za-z0-9_-]+"), "#share=<redacted>")
+    .take(2_048)
 
   private fun redactedStatus(status: JSONObject): String = JSONObject(status.toString())
     .apply {
@@ -415,6 +468,7 @@ class LocationShareService : Service(), LocationListener {
       .put("message", message)
       .toString()
     ShareServiceContract.currentStatus = status
+    ShareServiceContract.serviceRunning = false
     runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
@@ -424,6 +478,7 @@ class LocationShareService : Service(), LocationListener {
     stopLocationUpdates()
     runCatching { store.saveStatus(STOPPED_STATUS) }
     ShareServiceContract.currentStatus = STOPPED_STATUS
+    ShareServiceContract.serviceRunning = false
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }
@@ -433,6 +488,7 @@ class LocationShareService : Service(), LocationListener {
     val status = "{\"state\":\"paused\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"Foreground-only links are paused until Constellation is reopened.\"}"
     runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
     ShareServiceContract.currentStatus = status
+    ShareServiceContract.serviceRunning = false
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }
@@ -442,16 +498,39 @@ class LocationShareService : Service(), LocationListener {
     "utf-8",
     200,
     "OK",
-    mapOf("Content-Security-Policy" to "default-src 'none'; script-src 'self'; connect-src https: wss: ws:"),
+    mapOf(
+      "Content-Security-Policy" to "default-src 'none'; script-src 'self'; connect-src https: wss: ws:",
+      "Access-Control-Allow-Origin" to "*",
+    ),
     ByteArrayInputStream(bytes),
   )
 
   private companion object {
     const val PAGE_URL = "https://constellation.invalid/runtime.html"
+    const val ERROR_SCRIPT_URL = "https://constellation.invalid/runtime-errors.js"
     const val SCRIPT_URL = "https://constellation.invalid/constellation-background.js"
     const val LOCATION_UPDATE_INTERVAL_MS = 5_000L
     const val LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f
-    const val HTML = "<!doctype html><meta charset=\"utf-8\"><script src=\"/constellation-background.js\"></script>"
+    val ERROR_SCRIPT = """
+      (function () {
+        function report(message) {
+          try {
+            ConstellationNative.postMessage(JSON.stringify({ type: 'runtime-error', message: String(message).slice(0, 2048) }));
+          } catch (_) {}
+        }
+        window.addEventListener('error', function (event) {
+          var detail = String(event.message || 'Unknown runtime error') +
+            ' @ ' + String(event.filename || '<inline>') + ':' + String(event.lineno || 0) + ':' + String(event.colno || 0);
+          if (event.error && event.error.stack) detail += '\n' + event.error.stack;
+          report(detail);
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          report(reason && reason.stack ? reason.stack : String(reason || 'Unhandled rejection'));
+        });
+      })();
+    """.trimIndent()
+    const val HTML = "<!doctype html><meta charset=\"utf-8\"><script src=\"/runtime-errors.js\"></script><script crossorigin=\"anonymous\" src=\"/constellation-background.js\"></script>"
     const val STOPPED_STATUS = "{\"state\":\"stopped\",\"location\":{\"status\":\"unavailable\"},\"message\":\"\"}"
   }
 }

@@ -68,3 +68,10 @@ test('accepts only increasing observations from the same source', () => {
     false,
   )
 })
+
+test('rejects unknown required observation fields', () => {
+  assert.throws(
+    () => parseLocationObservationV1({ ...validObservation, requiredFutureBehavior: true }),
+    /unknown|unsupported/i,
+  )
+})
