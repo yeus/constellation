@@ -8,12 +8,22 @@ an expiry, and can see how many viewers are connected. A recipient opens the
 link without creating an account or managing a Space.
 
 Version 0.1 is under active development. The browser flow passes against a
-local libp2p circuit relay. A fresh Chromium probe also obtained a reservation
-from the hosted relay, but cross-device sharing through that relay still needs
-acceptance testing. The current Android debug APK compiles; its new share-target
-and protected-store paths have not yet passed an emulator runtime test.
-Hosted deployment, signed releases, direct-path NAT coverage and physical-device
-acceptance are not yet release-verified.
+local libp2p circuit relay. Managed Android API 29 and 36 tests passed
+background sharing, private return links, locked-screen updates, process
+recovery, and shared-text intake. A local-relay test with two Android peers and
+a desktop browser passed all three Star links, with two viewers on each Android
+source; the desktop peer was a browser, not the packaged Tauri app. Hosted-relay
+Android/browser sharing and a Tauri desktop development-app preview also passed
+in the sandbox. Hosted web deployment, signed releases, packaged desktop sharing,
+direct-path NAT coverage and physical-device acceptance are not yet release-verified.
+The 0.1 feature freeze keeps usable live sharing and the online map in scope;
+generic Taskyon sensor advertisements/grants and offline PMTiles caching are
+deferred to a later release.
+The current x86_64 AppImage and Flatpak were rebuilt from the locked Nix flake
+in the sandbox. The AppImage passed a virtual-display launch smoke with the
+WebKit HTTPS/TLS dependencies bundled. Packaged live-sharing, protected-storage
+recovery on a normal host session, artifact signing, and publication remain
+release-hardening work.
 
 The map normally shows your current position even before you share. Opening an
 incoming link in a browser previews that location immediately without
@@ -91,8 +101,9 @@ starting Playwright's downloaded Chromium. This prevents host Chromium from
 loading an incompatible Nix glibc. Browser P2P tests start a disposable
 localhost Taskyon circuit relay, so they do not depend on the hosted relay;
 Android interoperability tests exercise the configured hosted relay separately.
-A Chromium reservation probe succeeded on 2026-09-24; this does not establish
-that Android-to-browser sharing is reliable across arbitrary networks.
+A managed API 36 Android/browser hosted-relay flow passed on 2026-09-29 after
+one earlier run lost its WebView debugger connection following screen wake.
+This does not establish reliability across arbitrary networks.
 
 ## Hosted web deployment
 
@@ -102,6 +113,10 @@ The standalone repository's `main` pipeline builds the web app and publishes
 and the required DNS record; the repository cannot configure those external
 settings itself. Share links keep their capability in the URL fragment, which
 the web server never receives.
+
+On 2026-09-29, the public hostname still presented a TLS certificate valid only for
+`assets.taskyon.space`, not `constellation.taskyon.space`. Fix the domain's
+DNS/Pages certificate before testing hosted links or Android App Links.
 
 For verified Android App Links, set the GitLab CI variable
 `ANDROID_APP_LINK_SHA256` to the uppercase colon-separated SHA-256 fingerprint
@@ -119,6 +134,11 @@ Run the Linux desktop shell during development:
 ```sh
 yarn tauri dev
 ```
+
+The Nix shell exposes GLib's TLS module so the desktop WebKit can fetch HTTPS
+map tiles and reach the relay. A virtual-display development-app check received
+a browser share over the hosted relay on 2026-09-29; packaged desktop sharing
+and protected-storage recovery remain to be checked on a normal host session.
 
 Build a release AppImage and copy it to `dist/`:
 
@@ -209,8 +229,12 @@ yarn build:android:release:arm64-device
 ```
 
 Signing values and the temporary Gradle properties file remain outside Git.
-The resulting artifact is
-`dist/constellation-android-release-arm64-v8a.apk`.
+The resulting artifacts are
+`dist/constellation-android-release-arm64-v8a.apk` and its SHA-256 sidecar
+`dist/constellation-android-release-arm64-v8a.apk.sha256`.
+Before copying them there, the release command uses Android build tools to verify
+the APK signature and fails if verification fails or the verifier is missing.
+The checksum is generated only after that signature verification succeeds.
 On systems without Linux Secret Service, provide the three signing credentials
 and either `ANDROID_KEYSTORE_BASE64` or `ANDROID_KEYSTORE_PATH`.
 Before Gradle starts, the release command checks that both the keystore
@@ -272,11 +296,12 @@ in the same browser profile; this does not protect against a malicious
 same-origin script or someone who controls that profile. Android UI state now
 uses a separate Keystore-encrypted record and Linux desktop state uses Secret
 Service. If protected storage is unavailable, incoming previews remain
-temporary and saving is refused; native recovery is not yet device-tested.
-Android's native foreground
-service currently owns one background link; extra foreground-only UI links
-use a separate peer and stop when the app closes. Delegated resharing and
-group share-back modes are still design requirements, not available features.
+temporary and saving is refused. Two saved follows and their locations recovered
+after force-stopping and relaunching the app on an API 36 emulator; Linux Secret Service recovery
+still needs packaged-desktop verification. Android's native foreground service
+owns active background links, while foreground-only links stop when the app
+closes. Delegated resharing and group share-back modes are still design
+requirements, not available features.
 
 `SYSTEM_DEFINITION.csv` is the canonical record of requirements, current
 evidence, release scope and known limitations. Keep it synchronized with every

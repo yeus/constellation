@@ -15,8 +15,16 @@ clarify the relevant requirement instead of inventing semantics.
 - Keep requirement descriptions, status, surface, Taskyon compatibility, implementation paths,
   verification evidence, milestones, sources, notes, and target releases synchronized with the
   resulting behavior.
-- Do not mark a requirement tracked, implemented, or verified beyond the available evidence. Record
-  partial coverage and remaining limitations explicitly.
+- Use status to show regression-test coverage, not a feature's importance or partial completion:
+  - `planned`: the requirement's acceptance criteria are not yet met.
+  - `implemented`: the behavior or policy is in place, but no repeatable regression test is
+    maintained for it. Record the implementation path and the available evidence in the catalog.
+  - `tracked`: the acceptance criteria are met and one or more focused regression tests are
+    maintained and included in the regular test workflow. Name the test and its runner in
+    `verification`.
+- A one-off manual check is useful evidence, but does not by itself qualify a requirement as
+  `tracked`. Record remaining gaps and platform limits in `notes`; do not describe partial behavior
+  as meeting the full acceptance criteria.
 - Treat `target_release` as product scope and `milestone` as implementation order. A prerequisite may
   belong to v1 even when its milestone is `foundation` or `web-preview`.
 
