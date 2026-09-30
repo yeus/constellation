@@ -280,6 +280,10 @@ set -euo pipefail
 
 appdir="''${1:-}"
 if [ -d "$appdir" ]; then
+  # The GTK hook points GIO_EXTRA_MODULES at AppDir. Bundle the HTTPS backend
+  # there so WebKit can load map tiles without a host-installed GIO module.
+  cp -L ${pkgs.glib-networking}/lib/gio/modules/libgiognutls.so "$appdir/"
+  cp -L ${pkgs.gmp}/lib/libgmp.so.10 "$appdir/usr/lib/"
   gdk_stage="''${CONSTELLATION_APPIMAGE_GDK_STAGE_DIR:-}"
   if [ -d "$gdk_stage/lib" ]; then
     mkdir -p "$appdir/usr/lib"
@@ -404,7 +408,7 @@ EOF
           printf 'ID=nixos\n' > "$tmp_dir/os-release"
           env -u LD_LIBRARY_PATH -u PKG_CONFIG_PATH -u NIX_CFLAGS_COMPILE -u NIX_LDFLAGS \
             ${pkgs.nix}/bin/nix develop --no-write-lock-file "$repo_root" --command \
-            ${appimageFhs}/bin/constellation-appimage-fhs -lc "cd \"$repo_root\" && ln -sfn \"$tmp_dir/os-release\" /etc/os-release && PATH=\"$shim_dir:\$PATH\" HOME=\"$home_dir\" RUSTUP_HOME=\"$rustup_home\" CARGO_HOME=\"$cargo_home\" CARGO_TARGET_DIR=\"$cargo_target_dir\" TMPDIR=\"$tmp_dir\" XDG_CACHE_HOME=\"$cache_dir\" CONSTELLATION_APPIMAGE_SCHEMAS_DIR=\"$schemas_dir\" CONSTELLATION_APPIMAGE_GTK_STAGE_DIR=\"$gtk_stage_dir\" CONSTELLATION_APPIMAGE_GDK_STAGE_DIR=\"$gdk_stage_dir\" XDG_DATA_DIRS=\"/usr/share:${pkgs.gsettings-desktop-schemas}/share:${pkgs.gtk3}/share:${pkgs.adwaita-icon-theme}/share\" WINIT_WAYLAND_CSD_THEME=light LIBDECOR_PLUGIN_DIR=\"${pkgs.libdecor}/lib/libdecor/plugins-1\" RUST_BACKTRACE=1 APPIMAGE_EXTRACT_AND_RUN=1 /bin/bash scripts/build-appimage.sh --verbose"
+            ${appimageFhs}/bin/constellation-appimage-fhs -lc "cd \"$repo_root\" && ln -sfn \"$tmp_dir/os-release\" /etc/os-release && PATH=\"$shim_dir:\$PATH\" HOME=\"$home_dir\" RUSTUP_HOME=\"$rustup_home\" CARGO_HOME=\"$cargo_home\" CARGO_TARGET_DIR=\"$cargo_target_dir\" TMPDIR=\"$tmp_dir\" XDG_CACHE_HOME=\"$cache_dir\" COREPACK_HOME=\"$tmp_dir/corepack\" CONSTELLATION_APPIMAGE_SCHEMAS_DIR=\"$schemas_dir\" CONSTELLATION_APPIMAGE_GTK_STAGE_DIR=\"$gtk_stage_dir\" CONSTELLATION_APPIMAGE_GDK_STAGE_DIR=\"$gdk_stage_dir\" XDG_DATA_DIRS=\"/usr/share:${pkgs.gsettings-desktop-schemas}/share:${pkgs.gtk3}/share:${pkgs.adwaita-icon-theme}/share\" WINIT_WAYLAND_CSD_THEME=light LIBDECOR_PLUGIN_DIR=\"${pkgs.libdecor}/lib/libdecor/plugins-1\" RUST_BACKTRACE=1 APPIMAGE_EXTRACT_AND_RUN=1 /bin/bash scripts/build-appimage.sh --verbose"
         '';
         buildFlatpakScript = pkgs.writeShellScriptBin "constellation-build-flatpak" ''
           set -euo pipefail
@@ -459,6 +463,7 @@ EOF
             export ANDROID_EMULATOR_HOME="''${ANDROID_EMULATOR_HOME:-$ANDROID_USER_HOME/emulator}"
             export CARGO_TARGET_DIR="''${CARGO_TARGET_DIR:-''${XDG_CACHE_HOME:-$HOME/.cache}/constellation/cargo-target}"
             export GRADLE_USER_HOME="''${GRADLE_USER_HOME:-''${XDG_CACHE_HOME:-$HOME/.cache}/constellation/gradle}"
+            export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules"
             export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share:${pkgs.gtk3}/share:${pkgs.glib}/share:''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
             if [ -n "''${WAYLAND_DISPLAY:-}" ] || [ "''${XDG_SESSION_TYPE:-}" = "wayland" ]; then
               export WEBKIT_DISABLE_DMABUF_RENDERER="1"
