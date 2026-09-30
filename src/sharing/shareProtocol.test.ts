@@ -37,3 +37,18 @@ test('combines share authorization and Taskyon sensor operations on one versione
     false,
   )
 })
+
+test('rejects unknown required semantics instead of silently accepting them', () => {
+  assert.equal(
+    constellationProtocolV1.message.safeParse({
+      type: 'share.redeemRequest',
+      requestId: 'request-unknown-field',
+      shareId: 'synthetic-share-id',
+      viewerNonce: 'synthetic-viewer-nonce',
+      proof: 'synthetic-proof-value-that-is-long-enough',
+      requiredFutureBehavior: true,
+    }).success,
+    false,
+  )
+  assert.equal(SHARE_STREAM_PROTOCOL, '/constellation/location-share/1.0.0')
+})

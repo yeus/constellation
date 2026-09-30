@@ -10,44 +10,52 @@ export const shareProtocolV1 = defineFrpServiceProtocol({
   version: '1',
   commands: {
     redeem: {
-      request: z.object({
-        shareId: z.string().min(16).max(64),
-        viewerNonce: z.string().min(16).max(128),
-        proof: z.string().min(32).max(128),
-        label: z.string().trim().min(1).max(32).optional(),
-      }),
-      response: z.object({
-        sessionId: z.string().min(16).max(64),
-        expiresAt: z.number().int().positive().nullable(),
-        precision: z.enum(['exact', 'approximate']),
-        sourceName: z.string().max(32).optional(),
-        heartbeatIntervalMs: z.number().int().min(5_000).max(60_000),
-      }),
+      request: z
+        .object({
+          shareId: z.string().min(16).max(64),
+          viewerNonce: z.string().min(16).max(128),
+          proof: z.string().min(32).max(128),
+          label: z.string().trim().min(1).max(32).optional(),
+        })
+        .strict(),
+      response: z
+        .object({
+          sessionId: z.string().min(16).max(64),
+          expiresAt: z.number().int().positive().nullable(),
+          precision: z.enum(['exact', 'approximate']),
+          sourceName: z.string().max(32).optional(),
+          heartbeatIntervalMs: z.number().int().min(5_000).max(60_000),
+        })
+        .strict(),
       defaultTimeoutMs: 10_000,
     },
     heartbeat: {
-      request: z.object({ sessionId: z.string().min(16).max(64) }),
-      response: z.object({ receivedAt: z.number().int().nonnegative() }),
+      request: z.object({ sessionId: z.string().min(16).max(64) }).strict(),
+      response: z.object({ receivedAt: z.number().int().nonnegative() }).strict(),
       defaultTimeoutMs: 10_000,
     },
     leave: {
-      request: z.object({ sessionId: z.string().min(16).max(64) }),
+      request: z.object({ sessionId: z.string().min(16).max(64) }).strict(),
       defaultTimeoutMs: 5_000,
     },
     offerReturn: {
-      request: z.object({
-        sessionId: z.string().min(16).max(64),
-        url: z.string().url().max(4_096),
-      }),
+      request: z
+        .object({
+          sessionId: z.string().min(16).max(64),
+          url: z.string().url().max(4_096),
+        })
+        .strict(),
       defaultTimeoutMs: 10_000,
     },
   },
   streams: {
     sessions: {
-      closed: z.object({
-        sessionId: z.string().min(16).max(64),
-        reason: z.enum(['expired', 'revoked', 'disconnected', 'error']),
-      }),
+      closed: z
+        .object({
+          sessionId: z.string().min(16).max(64),
+          reason: z.enum(['expired', 'revoked', 'disconnected', 'error']),
+        })
+        .strict(),
     },
   },
 })

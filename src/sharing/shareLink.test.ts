@@ -36,3 +36,37 @@ test('rejects expired and oversized invitations', () => {
     /too large/i,
   )
 })
+
+test('separate shares use independent capability identifiers and secrets', () => {
+  const first = createShareInvitation({
+    baseUrl: 'https://constellation.example/',
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: [],
+    expiresAt: null,
+    randomBytes: (length) => new Uint8Array(length).fill(1),
+  })
+  const second = createShareInvitation({
+    baseUrl: 'https://constellation.example/',
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: [],
+    expiresAt: null,
+    randomBytes: (length) => new Uint8Array(length).fill(2),
+  })
+  assert.notEqual(first.capability.shareId, second.capability.shareId)
+  assert.notEqual(first.capability.secret, second.capability.secret)
+})
+
+test('rejects unknown capability fields', () => {
+  const invitation = createShareInvitation({
+    baseUrl: 'https://constellation.example/',
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: [],
+    expiresAt: null,
+    randomBytes,
+  })
+  const url = new URL(invitation.url)
+  const encoded = url.hash.slice('#share='.length)
+  const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+  url.hash = `share=${Buffer.from(JSON.stringify({ ...payload, requiredFutureBehavior: true })).toString('base64url')}`
+  assert.throws(() => parseShareInvitation(url.toString()), /unrecognized|unknown/i)
+})

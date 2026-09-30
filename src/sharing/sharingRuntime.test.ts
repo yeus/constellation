@@ -4,10 +4,12 @@ import test from 'node:test'
 import { createBrowserLocationSource } from '../location/browser.ts'
 import {
   appendSessionEvent,
+  followStatusFor,
   createSharingRuntime,
   generatedFollowName,
   rememberRedeemedNonce,
   savedFollowRecords,
+  sessionSweepReason,
 } from './sharingRuntime.ts'
 
 test('session diagnostics are bounded and contain only safe lifecycle details', () => {
@@ -105,4 +107,27 @@ test('unavailable protected storage leaves temporary previews possible', async (
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
     else Reflect.deleteProperty(globalThis, 'window')
   }
+})
+
+test('classifies follow freshness and terminal states explicitly', () => {
+  const observation = { capturedAt: 10_000, expiresAt: 40_000 }
+  assert.equal(followStatusFor({ connected: true, observation, now: 20_000 }), 'live')
+  assert.equal(followStatusFor({ connected: true, observation, now: 30_000 }), 'delayed')
+  assert.equal(followStatusFor({ connected: true, observation, now: 40_000 }), 'stale')
+  assert.equal(followStatusFor({ connected: false, observation, now: 20_000 }), 'unavailable')
+  assert.equal(
+    followStatusFor({ connected: false, observation, now: 20_000, terminal: 'expired' }),
+    'expired',
+  )
+  assert.equal(
+    followStatusFor({ connected: false, observation, now: 20_000, terminal: 'revoked' }),
+    'revoked',
+  )
+})
+
+test('classifies heartbeat and expiry cleanup deterministically', () => {
+  assert.equal(sessionSweepReason(null, 10_000, 20_000), undefined)
+  assert.equal(sessionSweepReason(null, 10_000, 45_001), 'heartbeat-timeout')
+  assert.equal(sessionSweepReason(30_000, 29_000, 30_000), 'expired')
+  assert.equal(sessionSweepReason(30_000, 0, 70_000), 'expired')
 })

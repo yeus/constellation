@@ -5,14 +5,16 @@ import { base64UrlToText, bytesToBase64Url, textToBase64Url } from './encoding.t
 export const SHARE_LINK_VERSION = 1 as const
 export const MAX_SHARE_FRAGMENT_LENGTH = 1_800
 
-const ShareCapabilitySchema = z.object({
-  v: z.literal(SHARE_LINK_VERSION),
-  shareId: z.string().min(16).max(64),
-  secret: z.string().min(43).max(64),
-  sourcePeerId: z.string().min(1).max(256),
-  addresses: z.array(z.string().min(1).max(512)).max(4),
-  expiresAt: z.number().int().positive().nullable(),
-})
+const ShareCapabilitySchema = z
+  .object({
+    v: z.literal(SHARE_LINK_VERSION),
+    shareId: z.string().min(16).max(64),
+    secret: z.string().min(43).max(64),
+    sourcePeerId: z.string().min(1).max(256),
+    addresses: z.array(z.string().min(1).max(512)).max(4),
+    expiresAt: z.number().int().positive().nullable(),
+  })
+  .strict()
 
 export type ShareCapability = z.output<typeof ShareCapabilitySchema>
 

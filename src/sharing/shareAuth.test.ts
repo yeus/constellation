@@ -19,3 +19,20 @@ test('binds a capability proof to the source, viewer, share and nonce', async ()
     false,
   )
 })
+
+test('separate share secrets produce independent authorization proofs', async () => {
+  const input = {
+    shareId: 'synthetic-share',
+    sourcePeerId: 'synthetic-source',
+    viewerPeerId: 'synthetic-viewer',
+    viewerNonce: 'synthetic-nonce',
+  }
+  const firstSecret = new Uint8Array(32).fill(1)
+  const secondSecret = new Uint8Array(32).fill(2)
+  const first = await createRedemptionProof(firstSecret, input)
+  const second = await createRedemptionProof(secondSecret, input)
+
+  assert.notEqual(first, second)
+  assert.equal(await verifyRedemptionProof(firstSecret, input, second), false)
+  assert.equal(await verifyRedemptionProof(secondSecret, input, first), false)
+})

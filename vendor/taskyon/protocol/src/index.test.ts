@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { z } from 'zod'
 
-import { createDuplexChannel, createPortClient, createPortServer, createStream } from './index.ts'
+import {
+  createDuplexChannel,
+  createPortClient,
+  createPortServer,
+  createStream,
+  defineFrpServiceProtocol,
+} from './index.ts'
 import { sensorProtocolV1 } from './sensor.ts'
 
 test('streams values and disposes individual subscriptions', () => {
@@ -46,4 +53,40 @@ test('serves the sensor protocol through the public protocol machinery', async (
   })
 
   stop()
+})
+
+test('preserves strict command and stream schemas when adding protocol envelope fields', () => {
+  const protocol = defineFrpServiceProtocol({
+    service: 'strict',
+    version: '1',
+    commands: {
+      ping: {
+        request: z.object({ value: z.string() }).strict(),
+        response: z.object({ ok: z.boolean() }).strict(),
+      },
+    },
+    streams: {
+      events: {
+        changed: z.object({ value: z.string() }).strict(),
+      },
+    },
+  })
+
+  assert.equal(
+    protocol.message.safeParse({
+      type: 'strict.pingRequest',
+      requestId: 'request-1',
+      value: 'hello',
+      requiredFutureBehavior: true,
+    }).success,
+    false,
+  )
+  assert.equal(
+    protocol.message.safeParse({
+      type: 'strict.events.changed',
+      value: 'hello',
+      requiredFutureBehavior: true,
+    }).success,
+    false,
+  )
 })
