@@ -138,3 +138,76 @@ test('city-sized areas return toward the preset after a temporary accuracy enlar
     circleOverlapRatio(poorFix.state.radiusMeters, next.state.radiusMeters, centers) >= 0.75,
   )
 })
+
+test('keeps jitter inside one region and preserves containment across a movement sweep', () => {
+  let state = projectApproximateLocation(
+    exactObservation(32.7157, -117.1611, 8),
+    undefined,
+    randomValues(0.2, 0.3, 0.4),
+  ).state
+  const first = state
+
+  for (let index = 1; index <= 20; index += 1) {
+    const jitter = index % 2 === 0 ? 0.00005 : -0.00005
+    const result = projectApproximateLocation(
+      exactObservation(32.7157 + jitter, -117.1611 - jitter, 12, index + 1),
+      state,
+      randomValues(0.6, 0.4, 0.8),
+    )
+    state = result.state
+    assert.ok(
+      distanceMeters(
+        state.latitude,
+        state.longitude,
+        result.observation.latitude,
+        result.observation.longitude,
+      ) < 1,
+    )
+  }
+  assert.equal(state.latitude, first.latitude)
+  assert.equal(state.longitude, first.longitude)
+
+  for (let index = 0; index < 8; index += 1) {
+    const previous = state
+    const moved = exactObservation(32.73 + index * 0.01, -117.1611, 25, 30 + index)
+    const result = projectApproximateLocation(moved, state, randomValues(0.1, 0.7, 0.9))
+    state = result.state
+    assert.ok(
+      distanceMeters(state.latitude, state.longitude, moved.latitude, moved.longitude) +
+        moved.accuracyMeters <=
+        state.radiusMeters,
+    )
+    const centers = distanceMeters(
+      previous.latitude,
+      previous.longitude,
+      state.latitude,
+      state.longitude,
+    )
+    assert.ok(circleOverlapRatio(previous.radiusMeters, state.radiusMeters, centers) >= 0.75)
+  }
+})
+
+test('bounds randomized center offsets across deterministic random samples', () => {
+  for (const random of [0, 0.01, 0.25, 0.5, 0.75, 0.99, 0.999999]) {
+    const result = projectApproximateLocation(
+      exactObservation(40, -70, 10),
+      undefined,
+      randomValues(random, 0.5, 0.5),
+    )
+    const offset = distanceMeters(result.state.latitude, result.state.longitude, 40, -70)
+    assert.ok(offset + 10 <= result.state.radiusMeters)
+    assert.ok(offset < result.state.radiusMeters)
+  }
+
+  test('high-speed observations disclose only the approximate region', () => {
+    const fast = { ...exactObservation(34.0522, -118.2437, 20), speedMps: 75, headingDegrees: 270 }
+    const result = projectApproximateLocation(fast, undefined, randomValues(0.2, 0.5, 0.7))
+
+    assert.equal(result.observation.precision, 'approximate')
+    assert.equal('speedMps' in result.observation, false)
+    assert.equal('headingDegrees' in result.observation, false)
+    assert.equal('altitudeMeters' in result.observation, false)
+    assert.notEqual(result.observation.latitude, fast.latitude)
+    assert.notEqual(result.observation.longitude, fast.longitude)
+  })
+})

@@ -46,8 +46,18 @@
       </p>
       <p>
         Approximate sharing uses a neighborhood-sized area; Very coarse uses a city-sized area. Both
-        reduce precision, but repeated areas can still reveal movement patterns. Neither makes you
-        anonymous.
+        reduce precision, but that does not make you anonymous. Long trajectories, known places,
+        screenshots, copied observations, or colluding recipients can still reveal sensitive
+        patterns.
+      </p>
+      <p>
+        Revocation stops future authorized access, but it cannot erase coordinates a recipient has
+        already viewed, copied, photographed, or otherwise retained.
+      </p>
+      <p>
+        Connectivity is best-effort. Constellation cannot keep a live connection through total
+        network loss, a captive portal that blocks access, or a network that blocks every available
+        outbound transport.
       </p>
       <p>
         Learn more about

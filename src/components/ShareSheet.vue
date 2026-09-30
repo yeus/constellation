@@ -56,6 +56,11 @@
             <strong>In background</strong>
             <span>Android notification</span>
           </button>
+          <p v-if="draft.publication === 'background'" class="field-help">
+            Background sharing keeps this share active on metered networks and battery saver until
+            you stop it or it expires. Data Saver, Doze, or device power controls may still delay or
+            block location and network updates.
+          </p>
         </div>
       </fieldset>
 

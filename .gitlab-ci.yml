@@ -21,6 +21,15 @@ quality:
     - corepack yarn test
     - corepack yarn test:android:config
     - corepack yarn build
+browser-regression:
+  image: mcr.microsoft.com/playwright:v1.61.1-noble
+  stage: test
+  before_script:
+    - corepack enable
+    - corepack yarn install --immutable
+  script:
+    - corepack yarn playwright test tests/share-flow.spec.ts --workers=1
+    - corepack yarn playwright test tests/p2p-share.spec.ts --project=desktop --workers=1
 sast:
   stage: test
 include:

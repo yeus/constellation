@@ -32,8 +32,8 @@ test('introduces encrypted P2P sharing and keeps the note dismissed', async ({ p
   await expect(introduction).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Share location' }).click()
-  await expect(page.getByRole('dialog')).toContainText('end-to-end encrypted')
-  await expect(page.getByRole('dialog')).toContainText('not uploaded to a central location service')
+  await expect(page.getByRole('dialog')).toContainText(/end-to-end encrypted/i)
+  await expect(page.getByRole('dialog')).toContainText(/no central location history/i)
 })
 
 test('explains relay and local-storage limits in About', async ({ page }) => {
@@ -76,7 +76,7 @@ test('copies bounded session diagnostics from the top-left menu', async ({ page 
   )
   expect(copied).toContain('Constellation session logs')
   expect(copied).toContain('app.started')
-  await expect(page.getByRole('status')).toContainText('Copied logs to clipboard')
+  await expect(page.getByRole('status').last()).toContainText('Copied logs to clipboard')
 })
 
 test('explains when the clipboard cannot accept logs', async ({ page }) => {
@@ -93,7 +93,9 @@ test('explains when the clipboard cannot accept logs', async ({ page }) => {
   await page.getByRole('button', { name: 'Open menu' }).click()
   await page.getByRole('button', { name: 'Copy logs' }).click()
 
-  await expect(page.getByRole('status')).toContainText('Could not copy logs to the clipboard')
+  await expect(page.getByRole('status').last()).toContainText(
+    'Could not copy logs to the clipboard',
+  )
 })
 
 test('configures a privacy-preserving location share', async ({ page }) => {

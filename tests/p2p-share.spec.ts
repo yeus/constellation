@@ -26,7 +26,12 @@ test('a viewer privately offers a separately consented return share to the sourc
     await source.getByRole('button', { name: 'Share location' }).click()
     await source.getByRole('button', { name: 'Create private link' }).click()
     const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+    await expect(source.getByRole('img', { name: 'Location share QR code' })).toHaveAttribute(
+      'src',
+      /^data:image\/png;base64,/,
+    )
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+    await expect(source.getByRole('button', { name: /Sharing 1 · next ends/ })).toBeVisible()
 
     await viewer.goto(url)
     await viewer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
@@ -129,6 +134,8 @@ test('browser link previews immediately and saves only after Keep following', as
       },
     })
   })
+  const requestedUrls: string[] = []
+  viewerContext.on('request', (request) => requestedUrls.push(request.url()))
   try {
     const source = await sourceContext.newPage()
     const viewer = await viewerContext.newPage()
@@ -141,6 +148,7 @@ test('browser link previews immediately and saves only after Keep following', as
     await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
       timeout: 30_000,
     })
+    expect(requestedUrls.every((requestedUrl) => !requestedUrl.includes('#share='))).toBe(true)
     expect(await viewer.evaluate(() => location.hash)).toBe('')
     expect(
       await viewer.evaluate(
@@ -185,6 +193,89 @@ test('browser link previews immediately and saves only after Keep following', as
     ).toBeVisible({ timeout: 30_000 })
   } finally {
     await viewerContext.close()
+    await sourceContext.close()
+  }
+})
+
+test('uses a distinct persistent source identity for each share link', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(60_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  try {
+    const source = await sourceContext.newPage()
+    await source.goto('/')
+
+    const createLink = async (): Promise<string> => {
+      await source.getByRole('button', { name: 'Share location' }).click()
+      await source.getByRole('button', { name: 'Create private link' }).click()
+      const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+      await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+      return url
+    }
+
+    const firstUrl = await createLink()
+    await source.getByRole('button', { name: 'Show sharing actions' }).click()
+    const secondUrl = await createLink()
+    const first = parseShareInvitation(firstUrl)
+    const second = parseShareInvitation(secondUrl)
+
+    expect(first.sourcePeerId).not.toBe(second.sourcePeerId)
+    expect(first.addresses).not.toEqual(second.addresses)
+    expect(first.addresses.every((address) => address.includes(first.sourcePeerId))).toBe(true)
+    expect(second.addresses.every((address) => address.includes(second.sourcePeerId))).toBe(true)
+
+    await source.reload()
+    await expect(source.getByRole('button', { name: 'Sharing 2' })).toBeVisible({ timeout: 30_000 })
+    const restoredUrls = await source.evaluate(async () => {
+      const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+      return (await createBrowserPrivateStore().load())?.shares.map(({ url }) => url) ?? []
+    })
+    expect(new Set(restoredUrls)).toEqual(new Set([firstUrl, secondUrl]))
+  } finally {
+    await sourceContext.close()
+  }
+})
+
+test('enforces the configured one-viewer share capacity', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(60_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  const firstContext = await browser.newContext({ baseURL })
+  const secondContext = await browser.newContext({ baseURL })
+  try {
+    const source = await sourceContext.newPage()
+    const first = await firstContext.newPage()
+    const second = await secondContext.newPage()
+    await source.goto('/')
+    await source.getByRole('button', { name: 'Share location' }).click()
+    await source.getByRole('button', { name: 'Create private link' }).click()
+    const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+
+    await first.goto(url)
+    await expect(first.getByRole('button', { name: 'Keep following' })).toBeVisible({
+      timeout: 30_000,
+    })
+    await second.goto(url)
+    await expect(second.getByText('Share access denied.')).toBeVisible({ timeout: 30_000 })
+  } finally {
+    await secondContext.close()
+    await firstContext.close()
     await sourceContext.close()
   }
 })
@@ -272,6 +363,10 @@ test('shares a browser location over an authenticated P2P stream', async ({
     await source.getByRole('button', { name: 'Open menu' }).click()
     await source.getByRole('button', { name: 'P2P diagnostics' }).click()
     await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('viewer')
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('WebRTC')
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText(
+      /stream-open.*admitted|admitted.*stream-open/,
+    )
     await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).not.toContainText('/ip4/')
     await source.getByRole('button', { name: 'Reveal peer IDs and addresses' }).click()
     await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('/ip4/')
@@ -424,6 +519,15 @@ test('blocking one viewer device preserves the other and survives source reload'
     await first.goto(url)
     await first.reload()
     await expect(first.getByText('Share access denied.')).toBeVisible({ timeout: 30_000 })
+    await source.getByRole('button', { name: 'Open menu' }).click()
+    await source.getByRole('button', { name: 'P2P diagnostics' }).click()
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText(
+      'redeem-denied',
+    )
+    await source
+      .getByRole('dialog', { name: 'P2P diagnostics' })
+      .getByRole('button', { name: 'Close' })
+      .click()
     await expect(source.getByRole('button', { name: 'Sharing 1' })).toBeVisible()
     await source.getByRole('button', { name: 'Sharing 1' }).click()
     await expect(source.getByRole('dialog', { name: 'Active shares' })).toContainText(
@@ -528,4 +632,45 @@ test('follows two independent sources and stops one without removing the other',
     await secondContext.close()
     await firstContext.close()
   }
+})
+
+test('independent links from one source use unlinkable source peer identities', async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+  await page.context().grantPermissions(['geolocation'])
+  await page.context().setGeolocation({ latitude: 48.1372, longitude: 11.5756 })
+  await page.goto('/')
+
+  const createLink = async (): Promise<string> => {
+    const shareLocation = page.getByRole('button', { name: 'Share location' })
+    if (!(await shareLocation.isVisible())) {
+      await page.getByRole('button', { name: 'Show sharing actions' }).click()
+    }
+    await shareLocation.click()
+    await page.getByRole('button', { name: 'Create private link' }).click()
+    const url = await page.getByLabel('Share link').inputValue({ timeout: 30_000 })
+    await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+    return url
+  }
+
+  const firstUrl = await createLink()
+  const secondUrl = await createLink()
+  const first = parseShareInvitation(firstUrl)
+  const second = parseShareInvitation(secondUrl)
+  expect(first.sourcePeerId).not.toBe(second.sourcePeerId)
+  expect(first.addresses).not.toEqual(second.addresses)
+
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Sharing 2' })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'Sharing 2' }).click()
+  const links = await page
+    .getByRole('dialog', { name: 'Active shares' })
+    .getByRole('button', {
+      name: 'Show link / QR',
+    })
+    .all()
+  await links[0]!.click()
+  const restoredUrl = await page.getByLabel('Share link').inputValue()
+  expect(parseShareInvitation(restoredUrl).sourcePeerId).toBe(first.sourcePeerId)
 })

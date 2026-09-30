@@ -210,7 +210,7 @@
               stroke-linejoin="round"
             />
           </svg>
-          <span>Sharing {{ activeShares.length }}</span>
+          <span>{{ sharingLabel }}</span>
         </button>
         <button
           class="dock-add"
@@ -656,6 +656,19 @@ const activeShares = computed(() =>
     })),
   })),
 )
+const sharingLabel = computed(() => {
+  const shares = activeShares.value
+  if (shares.length === 0) return 'Sharing 0'
+  const expiries = shares
+    .map(({ expiresAt }) => expiresAt)
+    .filter((expiresAt): expiresAt is number => expiresAt !== null)
+  if (expiries.length === 0) return `Sharing ${shares.length} · until stopped`
+  const nextExpiry = new Date(Math.min(...expiries)).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+  return `Sharing ${shares.length} · next ends ${nextExpiry}`
+})
 const previewFollow = computed(() => runtimeState.value.following.find((entry) => !entry.saved))
 
 const locations = computed(() => {

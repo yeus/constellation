@@ -22,10 +22,7 @@
       </button>
       <article v-for="follow in visible" :key="follow.shareId" class="follow-item">
         <strong>{{ follow.localName || follow.sourceName || 'Shared location' }}</strong>
-        <span
-          >{{ follow.connected ? 'Connected' : 'Stale / disconnected' }} ·
-          {{ follow.saved ? 'Saved' : 'Preview' }}</span
-        >
+        <span>{{ statusLabel(follow.status) }} · {{ follow.saved ? 'Saved' : 'Preview' }}</span>
         <span v-if="follow.sourceName && follow.sourceName !== follow.localName"
           >Sender: {{ follow.sourceName }}</span
         >
@@ -152,6 +149,16 @@ const visible = computed(() =>
     ? props.following.filter((entry) => entry.shareId === props.selectedId)
     : props.following,
 )
+
+const statusLabel = (status: FollowSummary['status']): string =>
+  ({
+    live: 'Live',
+    delayed: 'Delayed',
+    stale: 'Stale',
+    expired: 'Expired',
+    revoked: 'Revoked',
+    unavailable: 'Unavailable',
+  })[status]
 
 const elapsed = (timestamp: number): string => {
   const minutes = Math.floor(Math.max(0, Date.now() - timestamp) / 60_000)
