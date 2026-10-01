@@ -59,7 +59,7 @@
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-deep-link": "2.4.10",
     "@tauri-apps/plugin-geolocation": "2.3.3",
-    "maplibre-gl": "5.23.0",
+    "maplibre-gl": "6.4.1",
     "pmtiles": "4.4.1",
     "qrcode": "1.5.4",
     "vue": "3.5.22",
