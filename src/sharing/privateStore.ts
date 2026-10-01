@@ -10,6 +10,8 @@ const ShareRecord = z.object({
   capacity: z.number().int().min(1).max(128),
   name: z.string().max(32).optional(),
   publication: z.enum(['foreground', 'background']),
+  battery: z.enum(['balanced', 'saver']).optional(),
+  network: z.enum(['always', 'pause-when-metered']).optional(),
   blockedPeerIds: z.array(z.string().min(10).max(200)).max(128).optional(),
   approximation: z
     .object({

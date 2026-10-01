@@ -263,11 +263,14 @@
       @acknowledge="updateAcknowledgement"
       @name="updateName"
       @publication="updatePublication"
+      @battery="updateBatteryPolicy"
+      @network="updateNetworkPolicy"
     />
 
     <ShareListSheet
       v-if="sharesOpen"
       :shares="activeShares"
+      :pause-reason="backgroundStatus?.pauseReason"
       @close="sharesOpen = false"
       @show="showExistingShare"
       @stop="revokeShare"
@@ -374,13 +377,17 @@ import {
   acknowledgeUntilRevoked,
   canCreateShare,
   createShareDraft,
+  setBatteryPolicy,
   setDuration,
   setName,
+  setNetworkPolicy,
   setPrecision,
   setPublication,
   setViewerCapacity,
   type LocationPrecision,
+  type ShareBatteryPolicy,
   type ShareDuration,
+  type ShareNetworkPolicy,
   type SharePublication,
   type ViewerCapacity,
 } from '../shareDraft.ts'
@@ -723,10 +730,18 @@ const toggleActions = (): void => {
   actionsExpanded.value = !actionsExpanded.value
   window.localStorage.setItem('constellation.actions-expanded', actionsExpanded.value ? '1' : '0')
 }
+const policyPauseMessage = computed(() => {
+  const reason = backgroundStatus.value?.pauseReason
+  if (!reason) return ''
+  return reason === 'metered'
+    ? 'Updates are paused on a metered network and resume automatically.'
+    : 'Updates are paused by Data Saver and resume automatically.'
+})
 const statusMessage = computed(
   () =>
     localError.value ||
     copyNotice.value ||
+    policyPauseMessage.value ||
     backgroundStatus.value?.message ||
     runtimeState.value.message,
 )
@@ -799,6 +814,12 @@ const updateName = (name: string) => {
 }
 const updatePublication = (publication: SharePublication) => {
   shareDraft.value = setPublication(shareDraft.value, publication)
+}
+const updateBatteryPolicy = (battery: ShareBatteryPolicy) => {
+  shareDraft.value = setBatteryPolicy(shareDraft.value, battery)
+}
+const updateNetworkPolicy = (network: ShareNetworkPolicy) => {
+  shareDraft.value = setNetworkPolicy(shareDraft.value, network)
 }
 
 const ownObservation = computed(() => {

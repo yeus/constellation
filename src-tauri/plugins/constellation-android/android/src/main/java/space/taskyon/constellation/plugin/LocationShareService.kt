@@ -1,11 +1,17 @@
 package space.taskyon.constellation.plugin
 
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -38,6 +44,30 @@ class LocationShareService : Service(), LocationListener {
   private var runtimeReady = false
   private var runtimeError = false
   private var lastPersistedStatus: String? = null
+  private var lastShares: JSONArray? = null
+  private var lastViewerCount = 0
+  private var watchRequested = false
+  private var appliedSampling: String? = null
+  private var policyPauseReason: String? = null
+  private var connectivityManager: ConnectivityManager? = null
+  private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+    override fun onAvailable(network: Network) {
+      mainHandler.post { updatePolicyState() }
+    }
+
+    override fun onLost(network: Network) {
+      mainHandler.post { updatePolicyState() }
+    }
+
+    override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+      mainHandler.post { updatePolicyState() }
+    }
+  }
+  private val restrictBackgroundReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      mainHandler.post { updatePolicyState() }
+    }
+  }
   private var locationManager: LocationManager? = null
   private var refreshCancellation: CancellationSignal? = null
   private var refreshListener: LocationListener? = null
@@ -48,6 +78,14 @@ class LocationShareService : Service(), LocationListener {
     ShareServiceContract.serviceRunning = true
     ShareServiceContract.startPending = false
     store = EncryptedShareStore(applicationContext, discardUnreadable = false)
+    connectivityManager = getSystemService(ConnectivityManager::class.java)
+    runCatching { connectivityManager?.registerDefaultNetworkCallback(networkCallback) }
+    runCatching {
+      registerReceiver(
+        restrictBackgroundReceiver,
+        IntentFilter(ConnectivityManager.ACTION_RESTRICT_BACKGROUND_CHANGED),
+      )
+    }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -140,6 +178,7 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun sendPosition(location: Location, type: String) {
+    if (policyPauseReason != null) return
     send(JSONObject()
       .put("type", type)
       .put("position", locationPositionJson(location)))
@@ -156,6 +195,13 @@ class LocationShareService : Service(), LocationListener {
 
   override fun onDestroy() {
     stopLocationUpdates()
+    runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
+    runCatching { unregisterReceiver(restrictBackgroundReceiver) }
+    connectivityManager = null
+    watchRequested = false
+    policyPauseReason = null
+    ShareServiceContract.policyPauseReason = null
+    ShareServiceContract.sampling = "balanced"
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
     runtimeStarting = false
@@ -276,7 +322,10 @@ class LocationShareService : Service(), LocationListener {
         stopWhenIdle()
       }
       "location-watch-start" -> startLocationUpdates()
-      "location-watch-stop" -> stopLocationUpdates()
+      "location-watch-stop" -> {
+        watchRequested = false
+        stopLocationUpdates()
+      }
       "location-refresh" -> requestFreshLocation()
       "status" -> {
         val status = parsed.optJSONObject("status") ?: return
@@ -287,7 +336,10 @@ class LocationShareService : Service(), LocationListener {
         for (index in 0 until (shares?.length() ?: 0)) {
           viewers += shares?.optJSONObject(index)?.optInt("viewerCount", 0) ?: 0
         }
+        lastShares = shares
+        lastViewerCount = viewers
         runtimeError = status.optString("state") == "error" && (shares?.length() ?: 0) == 0
+        updatePolicyState()
         ShareNotification.update(this, notificationBody(shares, viewers))
         stopWhenIdle()
       }
@@ -321,7 +373,13 @@ class LocationShareService : Service(), LocationListener {
       "next ends in $remainingMinutes min"
     } ?: "until stopped"
     val linkText = if (count == 1) "1 link" else "$count links"
-    return "$linkText · $precisionText · $viewers connected · $expiryText"
+    val pauseText = when (policyPauseReason) {
+      "metered" -> "Paused on metered network"
+      "data-saver" -> "Paused by Data Saver"
+      else -> null
+    }
+    val details = "$linkText · $precisionText · $viewers connected · $expiryText"
+    return if (pauseText == null) details else "$pauseText · $details"
   }
 
   private fun foregroundNotificationBody(): String {
@@ -339,17 +397,21 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun startLocationUpdates() {
+    watchRequested = true
+    if (policyPauseReason != null) return
     if (locationGrant(this) == "none") {
       send(JSONObject().put("type", "location-error").put("code", 1))
       return
     }
+    val sampling = samplingFor(lastShares)
+    appliedSampling = sampling
     val manager = getSystemService(LocationManager::class.java)
     locationManager = manager
     if (!watchAndroidLocation(
       manager,
       this,
-      LOCATION_UPDATE_INTERVAL_MS,
-      LOCATION_UPDATE_MINIMUM_DISTANCE_METRES,
+      intervalFor(sampling),
+      distanceFor(sampling),
     )) {
       send(JSONObject().put("type", "location-error").put("code", 2))
     }
@@ -359,6 +421,55 @@ class LocationShareService : Service(), LocationListener {
     clearRefresh()
     locationManager?.let { manager -> runCatching { manager.removeUpdates(this) } }
     locationManager = null
+    appliedSampling = null
+  }
+
+  private fun samplingFor(shares: JSONArray?): String {
+    for (index in 0 until (shares?.length() ?: 0)) {
+      if (shares?.optJSONObject(index)?.optString("battery") == "saver") return "saver"
+    }
+    return "balanced"
+  }
+
+  private fun intervalFor(sampling: String): Long =
+    if (sampling == "saver") SAVER_UPDATE_INTERVAL_MS else BALANCED_UPDATE_INTERVAL_MS
+
+  private fun distanceFor(sampling: String): Float =
+    if (sampling == "saver") SAVER_UPDATE_MINIMUM_DISTANCE_METRES else BALANCED_UPDATE_MINIMUM_DISTANCE_METRES
+
+  private fun pausePolicyRequested(shares: JSONArray?): Boolean {
+    for (index in 0 until (shares?.length() ?: 0)) {
+      if (shares?.optJSONObject(index)?.optString("network") == "pause-when-metered") return true
+    }
+    return false
+  }
+
+  private fun connectivityPauseReason(): String? {
+    val manager = connectivityManager ?: return null
+    val active = manager.activeNetwork ?: return null
+    val capabilities = manager.getNetworkCapabilities(active) ?: return null
+    if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) return "metered"
+    return if (manager.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED) {
+      "data-saver"
+    } else {
+      null
+    }
+  }
+
+  private fun updatePolicyState() {
+    val sampling = samplingFor(lastShares)
+    val reason = if (pausePolicyRequested(lastShares)) connectivityPauseReason() else null
+    val pauseChanged = reason != policyPauseReason
+    policyPauseReason = reason
+    ShareServiceContract.policyPauseReason = reason
+    ShareServiceContract.sampling = sampling
+    if (reason != null) {
+      if (locationManager != null) stopLocationUpdates()
+    } else if (watchRequested && (locationManager == null || appliedSampling != sampling)) {
+      stopLocationUpdates()
+      startLocationUpdates()
+    }
+    if (pauseChanged) ShareNotification.update(this, notificationBody(lastShares, lastViewerCount))
   }
 
   private fun clearRefresh() {
@@ -371,6 +482,7 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun requestFreshLocation() {
+    if (policyPauseReason != null) return
     if (locationGrant(this) == "none") return
     val manager = locationManager ?: getSystemService(LocationManager::class.java)
     val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
@@ -476,6 +588,11 @@ class LocationShareService : Service(), LocationListener {
 
   private fun finishStop() {
     stopLocationUpdates()
+    watchRequested = false
+    lastShares = null
+    lastViewerCount = 0
+    policyPauseReason = null
+    ShareServiceContract.policyPauseReason = null
     runCatching { store.saveStatus(STOPPED_STATUS) }
     ShareServiceContract.currentStatus = STOPPED_STATUS
     ShareServiceContract.serviceRunning = false
@@ -485,6 +602,11 @@ class LocationShareService : Service(), LocationListener {
 
   private fun finishPause() {
     stopLocationUpdates()
+    watchRequested = false
+    lastShares = null
+    lastViewerCount = 0
+    policyPauseReason = null
+    ShareServiceContract.policyPauseReason = null
     val status = "{\"state\":\"paused\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"Foreground-only links are paused until Constellation is reopened.\"}"
     runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
     ShareServiceContract.currentStatus = status
@@ -509,8 +631,10 @@ class LocationShareService : Service(), LocationListener {
     const val PAGE_URL = "https://constellation.invalid/runtime.html"
     const val ERROR_SCRIPT_URL = "https://constellation.invalid/runtime-errors.js"
     const val SCRIPT_URL = "https://constellation.invalid/constellation-background.js"
-    const val LOCATION_UPDATE_INTERVAL_MS = 5_000L
-    const val LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f
+    const val BALANCED_UPDATE_INTERVAL_MS = 5_000L
+    const val BALANCED_UPDATE_MINIMUM_DISTANCE_METRES = 5f
+    const val SAVER_UPDATE_INTERVAL_MS = 30_000L
+    const val SAVER_UPDATE_MINIMUM_DISTANCE_METRES = 25f
     val ERROR_SCRIPT = """
       (function () {
         function report(message) {

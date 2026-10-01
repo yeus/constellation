@@ -14,6 +14,8 @@ const draft: ShareDraft = {
   untilRevokedAcknowledged: false,
   name: 'River',
   publication: 'background',
+  battery: 'saver',
+  network: 'pause-when-metered',
 }
 
 const readyStatus: AndroidBackgroundStatus = {
@@ -24,6 +26,8 @@ const readyStatus: AndroidBackgroundStatus = {
       shareId: 'share-1',
       url: 'https://constellation.taskyon.space/#share=test',
       precision: 'approximate',
+      battery: 'saver',
+      network: 'pause-when-metered',
       expiresAt: 3_600_000,
       viewerCount: 0,
     },
@@ -76,6 +80,8 @@ test('Android start request contains policy but no location', async () => {
           viewerCapacity: 10,
           name: 'River',
           publication: 'background',
+          battery: 'saver',
+          network: 'pause-when-metered',
           visible: true,
           expiresAt: 3_601_000,
           shareBaseUrl: 'https://constellation.taskyon.space/',
@@ -164,6 +170,30 @@ test('Android status rejects an unknown background peer state', async () => {
     isAndroid: true,
     now: () => 0,
     invoke: async () => ({ ...readyStatus, peerStatus: 'somewhere' }),
+  })
+
+  assert.ok(controller)
+  await assert.rejects(controller.status(), /invalid background sharing status/i)
+})
+
+test('Android status carries the native policy pause and sampling state', async () => {
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, pauseReason: 'data-saver', sampling: 'saver' }),
+  })
+
+  assert.ok(controller)
+  const status = await controller.status()
+  assert.equal(status.pauseReason, 'data-saver')
+  assert.equal(status.sampling, 'saver')
+})
+
+test('Android status rejects an unknown policy pause reason', async () => {
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, pauseReason: 'somewhere' }),
   })
 
   assert.ok(controller)

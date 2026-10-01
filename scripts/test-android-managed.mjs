@@ -295,6 +295,16 @@ const main = async () => {
     await runProfile('modern', undefined, ['--power-network-smoke'])
     return
   }
+  if (process.argv.includes('--metered-policy-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runProfile('modern', undefined, ['--metered-policy-smoke'], threeWayApk)
+    console.log('Android metered/Data Saver policy paused and resumed with the share intact.')
+    return
+  }
   if (process.argv.includes('--reboot-smoke')) {
     await runManagedPowerCycle()
     console.log('Android power-cycle preserved protected share identity and absolute expiry.')

@@ -4,6 +4,8 @@ import type { PrivateState } from '../sharing/privateStore.ts'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
 
+export type BackgroundPolicyPause = 'metered' | 'data-saver'
+
 export interface AndroidBackgroundStatus {
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
   readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
@@ -16,6 +18,8 @@ export interface AndroidBackgroundStatus {
   }[]
   readonly location: BrowserLocationState
   readonly message: string
+  readonly pauseReason?: BackgroundPolicyPause
+  readonly sampling?: 'balanced' | 'saver'
 }
 
 interface AndroidBackgroundSharingDependencies {
@@ -59,7 +63,10 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
     ) ||
     typeof candidate.message !== 'string' ||
     (candidate.peerStatus !== undefined &&
-      !['offline', 'connecting', 'online', 'error'].includes(candidate.peerStatus))
+      !['offline', 'connecting', 'online', 'error'].includes(candidate.peerStatus)) ||
+    (candidate.pauseReason !== undefined &&
+      !['metered', 'data-saver'].includes(candidate.pauseReason)) ||
+    (candidate.sampling !== undefined && !['balanced', 'saver'].includes(candidate.sampling))
   ) {
     throw new Error('Invalid background sharing status.')
   }
@@ -110,6 +117,8 @@ export const createAndroidBackgroundSharing = (
             viewerCapacity: draft.viewerCapacity,
             name: draft.name,
             publication: draft.publication,
+            battery: draft.battery,
+            network: draft.network,
             visible,
             expiresAt: shareExpiryFor(draft, dependencies.now()),
             shareBaseUrl,

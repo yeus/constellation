@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { decryptPrivateState, encryptPrivateState, type PrivateState } from './privateStore.ts'
+import {
+  decryptPrivateState,
+  encryptPrivateState,
+  parsePrivateState,
+  type PrivateState,
+} from './privateStore.ts'
 
 const state: PrivateState = {
   version: 1,
@@ -50,4 +55,36 @@ test('encrypted private state cannot be opened with another key', async () => {
   ])
   const encrypted = await encryptPrivateState(state, key)
   await assert.rejects(() => decryptPrivateState(encrypted, otherKey))
+})
+
+test('share battery and network policy stay optional for existing protected state', () => {
+  const legacy = parsePrivateState({
+    version: 1,
+    privateKey: 'A'.repeat(40),
+    shares: [
+      {
+        url: 'https://example.test/#share=synthetic',
+        precision: 'approximate',
+        capacity: 1,
+        publication: 'background',
+      },
+    ],
+    followed: [],
+    viewerLabels: [],
+  })
+  assert.equal(legacy.shares[0]?.battery, undefined)
+  assert.equal(legacy.shares[0]?.network, undefined)
+
+  const current = parsePrivateState({
+    ...legacy,
+    shares: [
+      {
+        ...legacy.shares[0],
+        battery: 'saver',
+        network: 'pause-when-metered',
+      },
+    ],
+  })
+  assert.equal(current.shares[0]?.battery, 'saver')
+  assert.equal(current.shares[0]?.network, 'pause-when-metered')
 })

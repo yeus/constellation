@@ -62,6 +62,18 @@
             · last fix {{ elapsed(background.location.observation.capturedAt) }} ago</span
           >
         </p>
+        <p v-if="background.pauseReason" class="field-help">
+          Policy pause:
+          {{
+            background.pauseReason === 'metered'
+              ? 'metered network'
+              : 'Data Saver background restriction'
+          }}
+          · updates resume automatically.
+        </p>
+        <p v-if="background.sampling" class="field-help">
+          Battery sampling: {{ background.sampling === 'saver' ? 'battery saver' : 'balanced' }}.
+        </p>
         <p v-if="!background.diagnostics" class="field-help">
           Detailed native connections are unavailable in this build.
         </p>

@@ -141,8 +141,15 @@ assert.match(locationAccess, /override fun onProviderEnabled/)
 assert.match(locationAccess, /override fun onStatusChanged/)
 assert.doesNotMatch(androidPlugin, /object\s*:\s*LocationListener/)
 assert.doesNotMatch(locationService, /object\s*:\s*LocationListener/)
-assert.match(locationService, /LOCATION_UPDATE_INTERVAL_MS = 5_000L/)
-assert.match(locationService, /LOCATION_UPDATE_MINIMUM_DISTANCE_METRES = 5f/)
+assert.match(locationService, /BALANCED_UPDATE_INTERVAL_MS = 5_000L/)
+assert.match(locationService, /BALANCED_UPDATE_MINIMUM_DISTANCE_METRES = 5f/)
+assert.match(locationService, /SAVER_UPDATE_INTERVAL_MS = 30_000L/)
+assert.match(locationService, /SAVER_UPDATE_MINIMUM_DISTANCE_METRES = 25f/)
+assert.match(locationService, /ACTION_RESTRICT_BACKGROUND_CHANGED/)
+assert.match(locationService, /fun connectivityPauseReason\(\): String\?/)
+assert.match(locationService, /policyPauseReason/)
+assert.match(manifest, /android\.permission\.ACCESS_NETWORK_STATE/)
+assert.match(androidPlugin, /fun statusWithPolicy\(json: String\): JSObject/)
 assert.doesNotMatch(
   locationService,
   /checkSelfPermission\(this, Manifest\.permission\.ACCESS_FINE_LOCATION\)/,

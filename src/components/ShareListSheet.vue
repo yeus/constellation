@@ -10,12 +10,24 @@
           <CloseIcon />
         </button>
       </header>
+      <p v-if="pauseReason" class="field-help">
+        {{
+          pauseReason === 'metered'
+            ? 'Updates are paused on a metered network and resume automatically.'
+            : 'Updates are paused by Data Saver and resume automatically.'
+        }}
+      </p>
       <p v-if="shares.length === 0" class="field-help">You are not sharing with anyone.</p>
       <article v-for="share in shares" :key="share.shareId" class="share-list-item">
         <strong>{{ share.name || 'Private link' }}</strong>
         <span
           >{{ share.precision === 'very-coarse' ? 'very coarse' : share.precision }} ·
           {{ share.viewerCount }} connected · {{ share.publication || 'background' }} ·
+          {{ share.battery === 'saver' ? 'battery saver' : 'balanced' }}<template
+            v-if="share.network === 'pause-when-metered'"
+            > · pauses on metered</template
+          >
+          ·
           {{
             share.expiresAt === null
               ? 'until stopped'
@@ -91,7 +103,10 @@ import { ref } from 'vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 
-defineProps<{ shares: readonly ShareSummary[] }>()
+defineProps<{
+  shares: readonly ShareSummary[]
+  pauseReason?: 'metered' | 'data-saver'
+}>()
 const emit = defineEmits<{
   close: []
   show: [share: ShareSummary]

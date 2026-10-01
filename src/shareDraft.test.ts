@@ -6,8 +6,10 @@ import {
   canCreateShare,
   createShareDraft,
   disclosedPrecisionFor,
+  setBatteryPolicy,
   setDuration,
   setName,
+  setNetworkPolicy,
   setPublication,
   setPrecision,
   setViewerCapacity,
@@ -21,7 +23,24 @@ test('new shares use privacy-preserving defaults', () => {
     untilRevokedAcknowledged: false,
     name: '',
     publication: 'foreground',
+    battery: 'balanced',
+    network: 'always',
   })
+})
+
+test('battery and metered policy stay independent per link', () => {
+  const initial = createShareDraft()
+  const saver = setBatteryPolicy(initial, 'saver')
+  const pausing = setNetworkPolicy(saver, 'pause-when-metered')
+
+  assert.equal(initial.battery, 'balanced')
+  assert.equal(initial.network, 'always')
+  assert.equal(saver.battery, 'saver')
+  assert.equal(saver.network, 'always')
+  assert.equal(pausing.battery, 'saver')
+  assert.equal(pausing.network, 'pause-when-metered')
+  assert.notEqual(saver, initial)
+  assert.notEqual(pausing, saver)
 })
 
 test('name and publication mode remain independent per link', () => {

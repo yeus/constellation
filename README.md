@@ -270,6 +270,13 @@ intermediate `dist-background/constellation-background.js` bundle, but it is
 not an installable app. The managed test needs a working emulator and relay
 connectivity. It uses only synthetic coordinates.
 
+Background links offer a Balanced or Battery saver sampling preset and an
+optional "pause on metered networks and Data Saver" policy, off by default.
+While paused the link, grant, connected viewers, and absolute expiry remain, and
+collection resumes automatically once the network is unmetered or Data Saver is
+cleared. The pause reason appears in the map status, active-share sheet, Android
+notification, and diagnostics.
+
 Android also declares a `text/plain` share target: sharing a Constellation link
 from a messenger opens a one-time in-app approval before the recipient connects.
 An external camera app can handle QR codes through the same HTTPS link. Android

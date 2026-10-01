@@ -24,6 +24,8 @@ type CreateRequest = {
   readonly viewerCapacity: ShareDraft['viewerCapacity']
   readonly name: string
   readonly publication: ShareDraft['publication']
+  readonly battery?: ShareDraft['battery']
+  readonly network?: ShareDraft['network']
   readonly visible: boolean
   readonly expiresAt: number | null
   readonly shareBaseUrl: string
@@ -67,6 +69,8 @@ const draftFor = (request: CreateRequest): ShareDraft => ({
   untilRevokedAcknowledged: request.expiresAt === null,
   name: request.name,
   publication: request.publication,
+  battery: request.battery ?? 'balanced',
+  network: request.network ?? 'always',
 })
 
 const start = (): void => {

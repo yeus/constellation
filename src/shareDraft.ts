@@ -2,6 +2,8 @@ export type LocationPrecision = 'approximate' | 'very-coarse' | 'exact'
 export type ShareDuration = '1h' | '8h' | 'until-revoked'
 export type ViewerCapacity = 1 | 10 | 50 | 'unlimited'
 export type SharePublication = 'foreground' | 'background'
+export type ShareBatteryPolicy = 'balanced' | 'saver'
+export type ShareNetworkPolicy = 'always' | 'pause-when-metered'
 export const VERY_COARSE_RADIUS_METERS = 20_000
 
 export interface ShareDraft {
@@ -11,6 +13,8 @@ export interface ShareDraft {
   readonly untilRevokedAcknowledged: boolean
   readonly name: string
   readonly publication: SharePublication
+  readonly battery: ShareBatteryPolicy
+  readonly network: ShareNetworkPolicy
 }
 
 export const createShareDraft = (): ShareDraft => ({
@@ -20,6 +24,8 @@ export const createShareDraft = (): ShareDraft => ({
   untilRevokedAcknowledged: false,
   name: '',
   publication: 'foreground',
+  battery: 'balanced',
+  network: 'always',
 })
 
 export const setPrecision = (draft: ShareDraft, precision: LocationPrecision): ShareDraft => ({
@@ -55,6 +61,16 @@ export const setPublication = (draft: ShareDraft, publication: SharePublication)
   ...draft,
   publication,
 })
+
+export const setBatteryPolicy = (
+  draft: ShareDraft,
+  battery: ShareBatteryPolicy,
+): ShareDraft => ({ ...draft, battery })
+
+export const setNetworkPolicy = (
+  draft: ShareDraft,
+  network: ShareNetworkPolicy,
+): ShareDraft => ({ ...draft, network })
 
 export const canCreateShare = (draft: ShareDraft): boolean =>
   draft.name.length <= 32 && (draft.duration !== 'until-revoked' || draft.untilRevokedAcknowledged)

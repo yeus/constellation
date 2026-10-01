@@ -57,11 +57,55 @@
             <span>Android notification</span>
           </button>
           <p v-if="draft.publication === 'background'" class="field-help">
-            Background sharing keeps this share active on metered networks and battery saver until
-            you stop it or it expires. Data Saver, Doze, or device power controls may still delay or
-            block location and network updates.
+            Background sharing keeps this share active until you stop it or it expires.
           </p>
         </div>
+      </fieldset>
+
+      <fieldset v-if="draft.publication === 'background'">
+        <legend>Battery and network</legend>
+        <div class="choice-grid choice-grid--two">
+          <button
+            type="button"
+            class="choice"
+            :class="{ 'choice--selected': draft.battery === 'balanced' }"
+            :aria-pressed="draft.battery === 'balanced'"
+            @click="emit('battery', 'balanced')"
+          >
+            <strong>Balanced</strong>
+            <span>Updates about every 5 s</span>
+          </button>
+          <button
+            type="button"
+            class="choice"
+            :class="{ 'choice--selected': draft.battery === 'saver' }"
+            :aria-pressed="draft.battery === 'saver'"
+            @click="emit('battery', 'saver')"
+          >
+            <strong>Battery saver</strong>
+            <span>Updates about every 30 s</span>
+          </button>
+        </div>
+        <label class="warning">
+          <input
+            type="checkbox"
+            :checked="draft.network === 'pause-when-metered'"
+            @change="
+              emit(
+                'network',
+                ($event.target as HTMLInputElement).checked ? 'pause-when-metered' : 'always',
+              )
+            "
+          />
+          <span
+            >Pause updates on metered networks and Data Saver. The link stays active and resumes
+            automatically.</span
+          >
+        </label>
+        <p class="field-help">
+          Metered networks, battery saver, Data Saver, or Doze can still delay or block location and
+          network updates.
+        </p>
       </fieldset>
 
       <fieldset>
@@ -158,8 +202,10 @@
 import CloseIcon from './icons/CloseIcon.vue'
 import type {
   LocationPrecision,
+  ShareBatteryPolicy,
   ShareDraft,
   ShareDuration,
+  ShareNetworkPolicy,
   SharePublication,
   ViewerCapacity,
 } from '../shareDraft.ts'
@@ -181,6 +227,8 @@ const emit = defineEmits<{
   acknowledge: [value: boolean]
   name: [value: string]
   publication: [value: SharePublication]
+  battery: [value: ShareBatteryPolicy]
+  network: [value: ShareNetworkPolicy]
 }>()
 
 const durationOptions: readonly { label: string; value: ShareDuration }[] = [

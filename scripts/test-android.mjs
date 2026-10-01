@@ -642,7 +642,14 @@ const runPermissionDenialSmoke = async () => {
 const startDirectBackgroundShare = async (
   cdp,
   expiresAt = null,
-  { publication = 'background', visible = true, name = 'Emulator policy smoke', expectedShareCount = 1 } = {},
+  {
+    publication = 'background',
+    visible = true,
+    name = 'Emulator policy smoke',
+    expectedShareCount = 1,
+    battery = 'balanced',
+    network = 'always',
+  } = {},
 ) => {
   const started = await cdp.evaluate(`(async () => {
     const invoke = window.__TAURI_INTERNALS__?.invoke;
@@ -653,6 +660,8 @@ const startDirectBackgroundShare = async (
         viewerCapacity: 1,
         name: ${JSON.stringify(name)},
         publication: ${JSON.stringify(publication)},
+        battery: ${JSON.stringify(battery)},
+        network: ${JSON.stringify(network)},
         visible: ${visible ? 'true' : 'false'},
         expiresAt: ${expiresAt === null ? 'null' : String(expiresAt)},
         shareBaseUrl: 'https://constellation.taskyon.space/',
@@ -685,12 +694,15 @@ const startDirectBackgroundShare = async (
             peerStatus: status.peerStatus ?? '',
             message: status.message ?? '',
             shareCount: status.shares?.length ?? 0,
+            shareNames: (status.shares ?? []).map((entry) => entry.name ?? ''),
             share: share ? {
               shareId: share.shareId,
               url: share.url,
               expiresAt: share.expiresAt ?? null,
               name: share.name ?? '',
               publication: share.publication ?? '',
+              battery: share.battery ?? '',
+              network: share.network ?? '',
               peerStatus: status.peerStatus ?? '',
             } : null,
           });
@@ -702,6 +714,7 @@ const startDirectBackgroundShare = async (
           peerStatus: candidate.peerStatus,
           message: candidate.message,
           shareCount: candidate.shareCount,
+          shareNames: candidate.shareNames,
         }
         if (candidate.state === 'error') {
           throw new Error(candidate.message || 'native background share failed')
@@ -769,6 +782,32 @@ const readBackgroundStatus = async (cdp) => {
   const status = JSON.parse(serialized)
   if (status.error) throw new Error(status.error)
   return status
+}
+
+const readPolicyStatus = async (cdp) => {
+  const serialized = await cdp.evaluate(`(async () => {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return JSON.stringify({ error: 'bridge unavailable' });
+    const status = await invoke('android_background_share_status');
+    const observation = status.location?.observation;
+    return JSON.stringify({
+      state: status.state,
+      pauseReason: status.pauseReason ?? null,
+      sampling: status.sampling ?? null,
+      shares: (status.shares ?? []).map((share) => ({
+        shareId: share.shareId,
+        battery: share.battery ?? '',
+        network: share.network ?? '',
+        expiresAt: share.expiresAt ?? null,
+      })),
+      capturedAt: observation?.capturedAt ?? null,
+      sequence: observation?.sequence ?? null,
+    });
+  })()`)
+  assert.equal(typeof serialized, 'string')
+  const summary = JSON.parse(serialized)
+  if (summary.error) throw new Error(summary.error)
+  return summary
 }
 
 const setupNativeBackgroundSmoke = async () => {
@@ -2184,6 +2223,171 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
   }
 }
 
+const runMeteredPolicySmoke = async () => {
+  let cdp
+  let relay
+  let saverShare
+  try {
+    relay = await startLocalRelay()
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    cdp = await setupNativeBackgroundSmoke()
+    const balancedShare = await startDirectBackgroundShare(cdp, null, {
+      name: 'Balanced policy smoke',
+      battery: 'balanced',
+      network: 'always',
+    })
+    assert.equal(balancedShare.battery, 'balanced')
+    await waitFor(
+      async () => (await readPolicyStatus(cdp)).sampling === 'balanced',
+      'the balanced sampling policy',
+    )
+
+    saverShare = await startDirectBackgroundShare(cdp, null, {
+      name: 'Saver policy smoke',
+      battery: 'saver',
+      network: 'pause-when-metered',
+      expectedShareCount: 2,
+    })
+    assert.equal(saverShare.battery, 'saver')
+    assert.equal(saverShare.network, 'pause-when-metered')
+    await waitFor(
+      async () => (await readPolicyStatus(cdp)).sampling === 'saver',
+      'the most battery-friendly active sampling policy',
+    )
+    await cdp.evaluate(
+      `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(balancedShare.shareId)} })`,
+    )
+    await waitFor(async () => {
+      const policy = await readPolicyStatus(cdp)
+      return policy.sampling === 'saver' && policy.shares.length === 1
+    }, 'the remaining saver link to own the sampling policy')
+
+    const wifiNetworkId = firstSavedWifiNetworkId()
+    assert.ok(wifiNetworkId, 'the emulator must expose a synthetic Wi-Fi network')
+    const setWifiMetered = (metered) => {
+      try {
+        adb(['shell', 'cmd', 'netpolicy', 'set', 'metered-network', wifiNetworkId, String(metered)])
+      } catch {
+        // The synthetic emulator returns a nonzero exit even when the value applies.
+      }
+    }
+    const notificationDump = () => adb(['shell', 'dumpsys', 'notification', '--noredact'])
+    const assertPaused = async (reason, notice) => {
+      const paused = await readPolicyStatus(cdp)
+      assert.equal(paused.pauseReason, reason)
+      assert.equal(paused.shares.length, 1)
+      assert.equal(paused.shares[0].shareId, saverShare.shareId)
+      assert.ok(
+        notificationDump().includes(notice),
+        `the Android notification must surface ${notice}`,
+      )
+      adb(['emu', 'geo', 'fix', '-70.0301', '40.0301'])
+      await wait(8_000)
+      const stillPaused = await readPolicyStatus(cdp)
+      assert.equal(stillPaused.pauseReason, reason)
+      assert.equal(
+        stillPaused.capturedAt,
+        paused.capturedAt,
+        'a policy pause must not publish new locations',
+      )
+      assert.equal(stillPaused.sequence, paused.sequence)
+      return paused
+    }
+    const assertResumed = async (previousSequence) => {
+      adb(['emu', 'geo', 'fix', '-70.0401', '40.0401'])
+      await waitFor(
+        async () => {
+          const resumed = await readPolicyStatus(cdp)
+          return resumed.sequence !== null && resumed.sequence > previousSequence
+        },
+        'location updates to resume after the policy clears',
+        45_000,
+      )
+    }
+
+    try {
+      setWifiMetered(false)
+      await waitFor(
+        async () => (await readPolicyStatus(cdp)).pauseReason === null,
+        'the unmetered baseline without a policy pause',
+        30_000,
+      )
+
+      setWifiMetered(true)
+      await waitFor(
+        async () => (await readPolicyStatus(cdp)).pauseReason === 'metered',
+        'the metered policy pause',
+        30_000,
+      )
+      const meteredPause = await assertPaused('metered', 'Paused on metered network')
+      setWifiMetered(false)
+      await waitFor(
+        async () => (await readPolicyStatus(cdp)).pauseReason === null,
+        'the metered pause to clear',
+        30_000,
+      )
+      await assertResumed(meteredPause.sequence ?? 0)
+      assert.equal(notificationDump().includes('Paused on metered network'), false)
+
+      adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'true'])
+      await waitFor(
+        async () => (await readPolicyStatus(cdp)).pauseReason === 'data-saver',
+        'the Data Saver policy pause',
+        30_000,
+      )
+      const saverPause = await assertPaused('data-saver', 'Paused by Data Saver')
+      adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
+      await waitFor(
+        async () => (await readPolicyStatus(cdp)).pauseReason === null,
+        'the Data Saver pause to clear',
+        30_000,
+      )
+      await assertResumed(saverPause.sequence ?? 0)
+      assert.equal(notificationDump().includes('Paused by Data Saver'), false)
+    } finally {
+      try {
+        adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
+      } catch {
+        // Best-effort policy cleanup.
+      }
+      try {
+        adb(['shell', 'cmd', 'netpolicy', 'set', 'metered-network', wifiNetworkId, 'undefined'])
+      } catch {
+        // The emulator reports a nonzero exit for this reset even when it applies.
+      }
+    }
+
+    const finalStatus = await readPolicyStatus(cdp)
+    assert.equal(finalStatus.shares.length, 1)
+    assert.equal(finalStatus.shares[0].shareId, saverShare.shareId)
+    assert.equal(finalStatus.shares[0].expiresAt, null)
+    console.log('[android-test] metered/Data Saver policy paused and resumed with the share intact.')
+  } finally {
+    try {
+      adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
+    } catch {
+      // Best-effort cleanup after policy emulation.
+    }
+    if (saverShare) {
+      try {
+        await cdp?.evaluate(
+          `window.__TAURI_INTERNALS__?.invoke('android_stop_background_share', { shareId: ${JSON.stringify(saverShare.shareId)} })`,
+        )
+      } catch {
+        // The debugger may already be gone after the policy smoke.
+      }
+    }
+    relay?.kill('SIGTERM')
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // Best-effort cleanup.
+    }
+    cdp?.close()
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+}
+
 const describeInvitationAddresses = (shareUrl) => {
   const fragment = new URL(shareUrl).hash.slice('#share='.length)
   const capability = JSON.parse(Buffer.from(fragment, 'base64url').toString('utf8'))
@@ -2494,6 +2698,11 @@ const main = async () => {
   if (process.argv.includes('--power-network-smoke')) {
     await runPowerNetworkSmoke()
     console.log('Android active share survived Doze/power saver and network loss/recovery.')
+    return
+  }
+  if (process.argv.includes('--metered-policy-smoke')) {
+    await runMeteredPolicySmoke()
+    console.log('Android metered/Data Saver policy paused and resumed with the share intact.')
     return
   }
   if (process.argv.includes('--native-store-smoke')) {

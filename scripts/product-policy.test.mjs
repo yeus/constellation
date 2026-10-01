@@ -6,6 +6,7 @@ const about = fs.readFileSync('src/components/AboutSheet.vue', 'utf8')
 const shares = fs.readFileSync('src/components/ShareListSheet.vue', 'utf8')
 const following = fs.readFileSync('src/components/FollowingSheet.vue', 'utf8')
 const shareSheet = fs.readFileSync('src/components/ShareSheet.vue', 'utf8')
+const diagnostics = fs.readFileSync('src/components/NetworkDiagnosticsSheet.vue', 'utf8')
 
 test('privacy copy states approximation, revocation and network limits', () => {
   assert.match(about, /does not make you anonymous/i)
@@ -23,6 +24,11 @@ test('background sharing explains metered and power-policy limits', () => {
   assert.match(shareSheet, /Data Saver/i)
   assert.match(shareSheet, /Doze/i)
   assert.match(shareSheet, /delay\s+or\s+block/i)
+  assert.match(shareSheet, /pause-when-metered/)
+  assert.match(shareSheet, /resumes\s+automatically/i)
+  assert.match(shares, /pauseReason/)
+  assert.match(diagnostics, /pauseReason/)
+  assert.match(diagnostics, /sampling/)
 })
 
 test('active and followed location surfaces expose explicit status controls', () => {

@@ -308,34 +308,41 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         "background-status running=$running has-saved=$hasSavedShares has-background=$hasBackgroundShares current=${ShareServiceContract.currentStatus != null} stored=$state",
       )
       if (ShareServiceContract.startPending && !running) {
-        invoke.resolve(JSObject(STARTING_STATUS))
+        invoke.resolve(statusWithPolicy(STARTING_STATUS))
       } else if (!running && hasBackgroundShares) {
         ShareServiceContract.startPending = true
         store.saveStatus(STARTING_STATUS)
         ShareServiceContract.currentStatus = STARTING_STATUS
         ensureService(ShareServiceContract.ACTION_RESTORE)
-        invoke.resolve(JSObject(STARTING_STATUS))
+        invoke.resolve(statusWithPolicy(STARTING_STATUS))
       } else {
         if (
           running &&
           ShareServiceContract.currentStatus == null &&
           (hasSavedShares || state in setOf("sharing", "starting", "paused"))
         ) {
-          invoke.resolve(JSObject(STARTING_STATUS))
+          invoke.resolve(statusWithPolicy(STARTING_STATUS))
         } else if (!running && state in setOf("sharing", "starting")) {
-          invoke.resolve(JSObject(INTERRUPTED_STATUS))
+          invoke.resolve(statusWithPolicy(INTERRUPTED_STATUS))
         } else if (!running) {
           val normalized = JSONObject(stored)
           if (!normalized.has("shares")) normalized.put("shares", org.json.JSONArray())
           normalized.remove("share")
-          invoke.resolve(JSObject(normalized.toString()))
+          invoke.resolve(statusWithPolicy(normalized.toString()))
         } else {
-          invoke.resolve(JSObject(stored))
+          invoke.resolve(statusWithPolicy(stored))
         }
       }
     } catch (_: Exception) {
       invoke.reject("Could not read background sharing status.")
     }
+  }
+
+  private fun statusWithPolicy(json: String): JSObject {
+    val status = runCatching { JSONObject(json) }.getOrNull() ?: return JSObject(json)
+    ShareServiceContract.policyPauseReason?.let { status.put("pauseReason", it) }
+    status.put("sampling", ShareServiceContract.sampling)
+    return JSObject(status.toString())
   }
 
   @Command

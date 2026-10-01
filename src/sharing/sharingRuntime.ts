@@ -13,7 +13,9 @@ import {
   disclosedPrecisionFor,
   shareExpiryFor,
   VERY_COARSE_RADIUS_METERS,
+  type ShareBatteryPolicy,
   type ShareDraft,
+  type ShareNetworkPolicy,
 } from '../shareDraft.ts'
 import {
   createConstellationMessagePort,
@@ -51,6 +53,8 @@ export interface ShareSummary {
   readonly shareId: string
   readonly url: string
   readonly precision: ShareDraft['precision']
+  readonly battery: ShareBatteryPolicy
+  readonly network: ShareNetworkPolicy
   readonly expiresAt: number | null
   readonly viewerCount: number
   readonly viewers?: readonly { fingerprint: string; lastSeenAt: number; localName?: string }[]
@@ -169,6 +173,8 @@ interface SourceShare {
   readonly capacity: number
   readonly name?: string
   readonly publication: ShareDraft['publication']
+  readonly battery: ShareBatteryPolicy
+  readonly network: ShareNetworkPolicy
   readonly sessions: Set<SourceSession>
   readonly redeemedNonces: Set<string>
   readonly blockedPeerIds: Set<string>
@@ -338,6 +344,8 @@ export const createSharingRuntime = (
           }),
         ...(share.name ? { name: share.name } : {}),
         publication: share.publication,
+        battery: share.battery,
+        network: share.network,
       })),
       received: [...received.entries()].map(([shareId, observation]) => ({
         shareId,
@@ -393,6 +401,8 @@ export const createSharingRuntime = (
         capacity: share.capacity,
         name: share.name,
         publication: share.publication,
+        battery: share.battery,
+        network: share.network,
         blockedPeerIds: [...share.blockedPeerIds],
         approximation: share.approximation,
       })),
@@ -469,6 +479,8 @@ export const createSharingRuntime = (
               capacity: record.capacity,
               name: record.name,
               publication: record.publication,
+              battery: record.battery ?? 'balanced',
+              network: record.network ?? 'always',
               sessions: new Set(),
               redeemedNonces: new Set(),
               blockedPeerIds: new Set(record.blockedPeerIds ?? []),
@@ -1005,6 +1017,8 @@ export const createSharingRuntime = (
         capacity: capacityFor(draft),
         ...(draft.name ? { name: draft.name } : {}),
         publication: draft.publication,
+        battery: draft.battery,
+        network: draft.network,
         sessions: new Set(),
         redeemedNonces: new Set(),
         blockedPeerIds: new Set(),
