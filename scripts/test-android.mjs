@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 
 import { chromium } from '@playwright/test'
 import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
@@ -82,6 +83,24 @@ const startLocalRelay = async () => {
     }
   }, 'the local P2P relay')
   return child
+}
+
+const startCaptivePortalResponder = async (port) => {
+  const requests = []
+  const server = createServer((_request, response) => {
+    requests.push(true)
+    response.writeHead(302, {
+      Location: 'http://portal.invalid/',
+      'Content-Length': '0',
+      Connection: 'close',
+    })
+    response.end()
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', resolve)
+  })
+  return { server, requests }
 }
 
 const waitForCdpPage = async (port) => {
@@ -463,6 +482,9 @@ const assertNotificationStopAction = async () => {
 }
 
 const notificationStopActionCenter = async () => {
+  adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
+  adb(['shell', 'wm', 'dismiss-keyguard'])
+  await wait(500)
   adb(['shell', 'cmd', 'statusbar', 'expand-notifications'])
   const dumpPath = '/sdcard/constellation-notification.xml'
   const center = (node) => {
@@ -782,6 +804,37 @@ const readBackgroundStatus = async (cdp) => {
   const status = JSON.parse(serialized)
   if (status.error) throw new Error(status.error)
   return status
+}
+
+const directTransportKinds = new Set(['WebRTC', 'WebRTC over relay', 'WebSocket', 'WebTransport'])
+
+const readBackgroundTransportSummary = async (cdp) => {
+  const serialized = await cdp.evaluate(`(async () => {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return JSON.stringify({ error: 'bridge unavailable' });
+    const status = await invoke('android_background_share_status');
+    return JSON.stringify({
+      state: status.state,
+      peerStatus: status.peerStatus ?? '',
+      viewerCount: (status.shares ?? []).reduce(
+        (sum, share) => sum + (share.viewerCount ?? 0),
+        0,
+      ),
+      connections: (status.diagnostics?.connections ?? []).map((connection) => ({
+        role: connection.role,
+        transport: connection.transport,
+        direction: connection.direction,
+        status: connection.status,
+      })),
+      sessionEvents: (status.diagnostics?.sessionEvents ?? [])
+        .slice(-5)
+        .map((event) => event.event),
+    });
+  })()`)
+  assert.equal(typeof serialized, 'string')
+  const summary = JSON.parse(serialized)
+  if (summary.error) throw new Error(summary.error)
+  return summary
 }
 
 const readPolicyStatus = async (cdp) => {
@@ -2223,6 +2276,191 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
   }
 }
 
+const runDirectTransportSmoke = async () => {
+  let cdp
+  let server
+  let relay
+  let browser
+  let viewerContext
+  let share
+  try {
+    relay = await startLocalRelay()
+    server = await startWebServer('preview')
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    cdp = await setupNativeBackgroundSmoke()
+    share = await startDirectBackgroundShare(cdp, null, { name: 'Direct transport smoke' })
+    adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+    await waitFor(
+      () =>
+        adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+          'LocationShareService',
+        ),
+      'the Android foreground service for the direct-transport smoke',
+    )
+
+    browser = await chromium.launch({ env: browserProcessEnvironment(process.env) })
+    viewerContext = await browser.newContext({
+      geolocation: { latitude: 40.0002, longitude: -70.0002 },
+      permissions: ['geolocation'],
+    })
+    const viewer = await viewerContext.newPage()
+    await viewer.goto(`http://127.0.0.1:4173/${new URL(share.url).hash}`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90_000,
+    })
+    await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
+    await viewer.getByRole('button', { name: 'Keep following' }).click()
+    await viewer.getByRole('button', { name: 'Save location' }).click()
+    await viewer.getByRole('button', { name: 'Not now' }).click()
+    await viewer.getByRole('button', { name: 'Open menu' }).click()
+    await viewer.getByRole('button', { name: 'Following (1)' }).click()
+    await viewer.getByRole('button', { name: 'Show on map' }).waitFor({ timeout: 30_000 })
+
+    let observed = await readBackgroundTransportSummary(cdp)
+    try {
+      await waitFor(
+        async () => {
+          observed = await readBackgroundTransportSummary(cdp)
+          return observed.connections.some(
+            (connection) =>
+              connection.role === 'viewer' && directTransportKinds.has(connection.transport),
+          )
+        },
+        'a classified direct Android transport for the browser viewer',
+        30_000,
+      )
+    } catch (error) {
+      throw new Error(
+        `Android never classified a direct transport for the browser viewer: ${JSON.stringify(observed)}`,
+        { cause: error },
+      )
+    }
+    console.log(
+      `[android-test] direct Android transport classified: ${JSON.stringify(observed.connections)}`,
+    )
+
+    const updatesBeforeRelayLoss = await receivedUpdateCount(viewer)
+    relay.kill('SIGTERM')
+    relay = undefined
+    await waitFor(
+      async () => {
+        try {
+          return !(await fetch('http://127.0.0.1:9113/health')).ok
+        } catch {
+          return true
+        }
+      },
+      'the local relay to stop',
+      15_000,
+    )
+    adb(['emu', 'geo', 'fix', '-70.0202', '40.0202'])
+    try {
+      await waitFor(
+        async () => (await receivedUpdateCount(viewer)) > updatesBeforeRelayLoss,
+        'a location update over the direct transport after relay shutdown',
+        45_000,
+      )
+    } catch (error) {
+      const afterLoss = await readBackgroundTransportSummary(cdp)
+      throw new Error(
+        `No location update reached the browser after relay shutdown: ${JSON.stringify(afterLoss)}`,
+        { cause: error },
+      )
+    }
+    console.log('[android-test] sharing continued after the local relay shut down.')
+  } finally {
+    await viewerContext?.close().catch(() => undefined)
+    await browser?.close()
+    server?.kill('SIGTERM')
+    relay?.kill('SIGTERM')
+    if (share) {
+      try {
+        await cdp?.evaluate(
+          `window.__TAURI_INTERNALS__?.invoke('android_stop_background_share', { shareId: ${JSON.stringify(share.shareId)} })`,
+        )
+      } catch {
+        // The smoke may have lost the debugger during relay-loss recovery.
+      }
+    }
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // Best-effort cleanup.
+    }
+    cdp?.close()
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+}
+
+const runCaptiveTransportSmoke = async () => {
+  let cdp
+  let relay
+  let responder
+  try {
+    const captive = await startCaptivePortalResponder(9112)
+    responder = captive.server
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // No reverse mapping existed yet.
+    }
+    adb(['reverse', 'tcp:9111', 'tcp:9112'])
+    cdp = await setupNativeBackgroundSmoke()
+    assert.equal(await clickButton(cdp, 'Share location'), true)
+    assert.equal(await clickButton(cdp, 'Create private link'), true)
+    let blocked
+    await waitFor(
+      async () => {
+        blocked = await readBackgroundStatus(cdp)
+        const serviceRunning = adb([
+          'shell',
+          'dumpsys',
+          'activity',
+          'services',
+          packageName,
+        ]).includes('LocationShareService')
+        return !serviceRunning && blocked.shares.length === 0 && blocked.state !== 'sharing'
+      },
+      'the captive/blocked-relay fail-closed state',
+      60_000,
+    )
+    assert.ok(captive.requests.length > 0, 'the captive responder must see the relay attempt')
+    console.log(
+      `[android-test] captive/blocked relay failed closed: ${JSON.stringify({ state: blocked.state, message: blocked.message })}`,
+    )
+    await closeAndroidDialog(cdp)
+
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // The captive mapping is already gone.
+    }
+    relay = await startLocalRelay()
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    const share = await startDirectBackgroundShare(cdp, null, { name: 'Captive recovery smoke' })
+    assert.match(share.url, /#share=/)
+    await waitFor(
+      () =>
+        adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+          'LocationShareService',
+        ),
+      'background sharing after the relay recovered',
+      30_000,
+    )
+    console.log('[android-test] sharing recovered once the real relay was reachable.')
+  } finally {
+    responder?.close()
+    relay?.kill('SIGTERM')
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // Best-effort cleanup.
+    }
+    cdp?.close()
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+}
+
 const runMeteredPolicySmoke = async () => {
   let cdp
   let relay
@@ -2698,6 +2936,16 @@ const main = async () => {
   if (process.argv.includes('--power-network-smoke')) {
     await runPowerNetworkSmoke()
     console.log('Android active share survived Doze/power saver and network loss/recovery.')
+    return
+  }
+  if (process.argv.includes('--direct-transport-smoke')) {
+    await runDirectTransportSmoke()
+    console.log('Android classified a direct transport and kept sharing after relay shutdown.')
+    return
+  }
+  if (process.argv.includes('--captive-transport-smoke')) {
+    await runCaptiveTransportSmoke()
+    console.log('Android failed closed behind a captive relay and recovered with the real relay.')
     return
   }
   if (process.argv.includes('--metered-policy-smoke')) {

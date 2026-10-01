@@ -118,6 +118,7 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
   let serial
   try {
     serial = await waitForBoot(child, selected.avdName, previousSerials)
+    adb(['shell', 'settings', 'put', 'global', 'hide_error_dialogs', '1'], {}, serial)
     if (uninstall) uninstallIfPresent(serial)
     await prepare?.(serial)
     return { child, serial, profileEnvironment }
@@ -293,6 +294,26 @@ const main = async () => {
   }
   if (process.argv.includes('--power-network-smoke')) {
     await runProfile('modern', undefined, ['--power-network-smoke'])
+    return
+  }
+  if (process.argv.includes('--direct-transport-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runProfile('modern', undefined, ['--direct-transport-smoke'], threeWayApk)
+    console.log('Android classified a direct transport and kept sharing after relay shutdown.')
+    return
+  }
+  if (process.argv.includes('--captive-transport-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runProfile('modern', undefined, ['--captive-transport-smoke'], threeWayApk)
+    console.log('Android failed closed behind a captive relay and recovered with the real relay.')
     return
   }
   if (process.argv.includes('--metered-policy-smoke')) {

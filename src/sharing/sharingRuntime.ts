@@ -28,6 +28,7 @@ import { createRedemptionProof, verifyRedemptionProof } from './shareAuth.ts'
 import { createShareInvitation, parseShareInvitation, type ShareCapability } from './shareLink.ts'
 import { decryptLocationPayload, encryptLocationPayload } from './sharePayloadCrypto.ts'
 import { constellationProtocolV1, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import { classifyTransport, type TransportKind } from './transport.ts'
 import type { PrivateState, PrivateStateStore } from './privateStore.ts'
 
 const LOCATION_SENSOR_ID = 'location'
@@ -114,7 +115,7 @@ export interface NetworkDiagnostics {
   readonly sessionEvents: readonly SessionEvent[]
   readonly connections: readonly {
     role: 'viewer' | 'source' | 'other peer'
-    transport: 'relay circuit' | 'WebRTC' | 'WebSocket' | 'WebTransport' | 'other'
+    transport: TransportKind
     direction: string
     status: string
     connectedAt?: number
@@ -144,14 +145,6 @@ export const appendSessionEvent = (
   events: readonly SessionEvent[],
   event: SessionEvent,
 ): readonly SessionEvent[] => [...events, event].slice(-32)
-
-const transportFor = (address: string): NetworkDiagnostics['connections'][number]['transport'] => {
-  if (address.includes('/p2p-circuit')) return 'relay circuit'
-  if (address.includes('/webrtc')) return 'WebRTC'
-  if (address.includes('/webtransport')) return 'WebTransport'
-  if (address.includes('/ws')) return 'WebSocket'
-  return 'other'
-}
 
 interface SourceSession {
   readonly peerId: string
@@ -957,7 +950,7 @@ export const createSharingRuntime = (
           else if (source) role = 'source'
           return {
             role,
-            transport: transportFor(address),
+            transport: classifyTransport(address),
             direction: connection.direction,
             status: connection.status,
             peerId,

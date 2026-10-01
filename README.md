@@ -270,6 +270,18 @@ intermediate `dist-background/constellation-background.js` bundle, but it is
 not an installable app. The managed test needs a working emulator and relay
 connectivity. It uses only synthetic coordinates.
 
+The managed harness also has three opt-in policy fixtures that use the local-relay
+APK. Unless `--skip-build` is used, it builds that APK itself with
+`VITE_CONSTELLATION_RELAY_ADDRS=/ip4/127.0.0.1/tcp/9111/ws`, which the emulator
+reaches through `adb reverse`. `--direct-transport-smoke` asserts that Android
+classifies a direct transport for a browser viewer, then stops the local relay
+and requires location updates to continue over the surviving direct path.
+`--captive-transport-smoke` answers the configured relay endpoint with an HTTP
+302 captive response, requires a fail-closed result with no share or service,
+then verifies sharing recovers with the real relay. `--metered-policy-smoke`
+checks both the metered and Data Saver pauses, proves that a paused link stops
+publishing, and verifies automatic resume with the same share identity.
+
 Background links offer a Balanced or Battery saver sampling preset and an
 optional "pause on metered networks and Data Saver" policy, off by default.
 While paused the link, grant, connected viewers, and absolute expiry remain, and
