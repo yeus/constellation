@@ -851,6 +851,8 @@ const readPolicyStatus = async (cdp) => {
         shareId: share.shareId,
         battery: share.battery ?? '',
         network: share.network ?? '',
+        paused: share.paused ?? null,
+        lastUpdateAt: share.lastUpdateAt ?? null,
         expiresAt: share.expiresAt ?? null,
       })),
       capturedAt: observation?.capturedAt ?? null,
@@ -1065,9 +1067,10 @@ const runServiceRestartSmoke = async () => {
       true,
       'sticky-recovered background service should remain running before the Activity returns',
     )
-    const resumedActivity = adb(['shell', 'dumpsys', 'activity', 'activities'])
-      .split(/\r?\n/)
-      .find((line) => line.includes('mResumedActivity')) ?? ''
+    const resumedActivity =
+      adb(['shell', 'dumpsys', 'activity', 'activities'])
+        .split(/\r?\n/)
+        .find((line) => line.includes('mResumedActivity')) ?? ''
     assert.equal(
       resumedActivity.includes(packageName),
       false,
@@ -1247,7 +1250,9 @@ const runMultipleSourceLinksSmoke = async () => {
     })()`)
     assert.equal(reopened, true)
     await waitFor(() => androidTextIncludes(cdp, 'Share this QR code'), 'reopened Android share QR')
-    const reopenedUrl = await cdp.evaluate(`document.querySelector('input[aria-label="Share link"]')?.value ?? ''`)
+    const reopenedUrl = await cdp.evaluate(
+      `document.querySelector('input[aria-label="Share link"]')?.value ?? ''`,
+    )
     assert.equal(reopenedUrl, first.url)
     const closedReadyShare = await cdp.evaluate(`(() => {
       const button = document.querySelector('.share-ready button[aria-label="Close"]');
@@ -1256,7 +1261,6 @@ const runMultipleSourceLinksSmoke = async () => {
       return true;
     })()`)
     assert.equal(closedReadyShare, true)
-
 
     await cdp.evaluate(
       `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(first.shareId)} })`,
@@ -1778,7 +1782,9 @@ const verifyAndroidFollowingControls = async (cdp) => {
     'two viewable Android follows before control acceptance',
     30_000,
   )
-  const originalName = await cdp.evaluate(`document.querySelector('.follow-item strong')?.textContent?.trim() ?? ''`)
+  const originalName = await cdp.evaluate(
+    `document.querySelector('.follow-item strong')?.textContent?.trim() ?? ''`,
+  )
   assert.ok(originalName)
   const edited = await cdp.evaluate(`(() => {
     const row = document.querySelector('.follow-item');
@@ -1833,7 +1839,10 @@ const verifyAndroidFollowingControls = async (cdp) => {
   })()`)
   assert.equal(restoreEdit, true)
   await waitFor(
-    async () => await cdp.evaluate(`Boolean(document.querySelector('.follow-item input[aria-label="Your nickname"]'))`),
+    async () =>
+      await cdp.evaluate(
+        `Boolean(document.querySelector('.follow-item input[aria-label="Your nickname"]'))`,
+      ),
     'Android nickname editor to reopen',
   )
   const restored = await cdp.evaluate(`(() => {
@@ -1861,7 +1870,10 @@ const verifyAndroidFollowingControls = async (cdp) => {
   })()`)
   assert.equal(focused, true)
   await waitFor(
-    async () => !(await cdp.evaluate(`Boolean(document.querySelector('[aria-labelledby="following-title"]'))`)),
+    async () =>
+      !(await cdp.evaluate(
+        `Boolean(document.querySelector('[aria-labelledby="following-title"]'))`,
+      )),
     'single Android follow map focus',
   )
 
@@ -1876,7 +1888,10 @@ const verifyAndroidFollowingControls = async (cdp) => {
   })()`)
   assert.equal(focusedAll, true)
   await waitFor(
-    async () => !(await cdp.evaluate(`Boolean(document.querySelector('[aria-labelledby="following-title"]'))`)),
+    async () =>
+      !(await cdp.evaluate(
+        `Boolean(document.querySelector('[aria-labelledby="following-title"]'))`,
+      )),
     'all Android follows map focus',
   )
 }
@@ -2464,41 +2479,13 @@ const runCaptiveTransportSmoke = async () => {
 const runMeteredPolicySmoke = async () => {
   let cdp
   let relay
+  let alwaysShare
   let saverShare
+  let foregroundShare
   try {
     relay = await startLocalRelay()
     adb(['reverse', 'tcp:9111', 'tcp:9111'])
     cdp = await setupNativeBackgroundSmoke()
-    const balancedShare = await startDirectBackgroundShare(cdp, null, {
-      name: 'Balanced policy smoke',
-      battery: 'balanced',
-      network: 'always',
-    })
-    assert.equal(balancedShare.battery, 'balanced')
-    await waitFor(
-      async () => (await readPolicyStatus(cdp)).sampling === 'balanced',
-      'the balanced sampling policy',
-    )
-
-    saverShare = await startDirectBackgroundShare(cdp, null, {
-      name: 'Saver policy smoke',
-      battery: 'saver',
-      network: 'pause-when-metered',
-      expectedShareCount: 2,
-    })
-    assert.equal(saverShare.battery, 'saver')
-    assert.equal(saverShare.network, 'pause-when-metered')
-    await waitFor(
-      async () => (await readPolicyStatus(cdp)).sampling === 'saver',
-      'the most battery-friendly active sampling policy',
-    )
-    await cdp.evaluate(
-      `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(balancedShare.shareId)} })`,
-    )
-    await waitFor(async () => {
-      const policy = await readPolicyStatus(cdp)
-      return policy.sampling === 'saver' && policy.shares.length === 1
-    }, 'the remaining saver link to own the sampling policy')
 
     const wifiNetworkId = firstSavedWifiNetworkId()
     assert.ok(wifiNetworkId, 'the emulator must expose a synthetic Wi-Fi network')
@@ -2510,78 +2497,108 @@ const runMeteredPolicySmoke = async () => {
       }
     }
     const notificationDump = () => adb(['shell', 'dumpsys', 'notification', '--noredact'])
-    const assertPaused = async (reason, notice) => {
-      const paused = await readPolicyStatus(cdp)
-      assert.equal(paused.pauseReason, reason)
-      assert.equal(paused.shares.length, 1)
-      assert.equal(paused.shares[0].shareId, saverShare.shareId)
-      assert.ok(
-        notificationDump().includes(notice),
-        `the Android notification must surface ${notice}`,
-      )
-      adb(['emu', 'geo', 'fix', '-70.0301', '40.0301'])
-      await wait(8_000)
-      const stillPaused = await readPolicyStatus(cdp)
-      assert.equal(stillPaused.pauseReason, reason)
-      assert.equal(
-        stillPaused.capturedAt,
-        paused.capturedAt,
-        'a policy pause must not publish new locations',
-      )
-      assert.equal(stillPaused.sequence, paused.sequence)
-      return paused
+    const shareById = (status, shareId) => status.shares.find((share) => share.shareId === shareId)
+    const waitForShare = async (label, check, timeout = 30_000) => {
+      try {
+        await waitFor(async () => check(await readPolicyStatus(cdp)), label, timeout)
+      } catch (error) {
+        const status = await readPolicyStatus(cdp).catch(() => undefined)
+        throw new Error(`${label}: ${JSON.stringify(status)}`, { cause: error })
+      }
     }
-    const assertResumed = async (previousSequence) => {
-      adb(['emu', 'geo', 'fix', '-70.0401', '40.0401'])
-      await waitFor(
-        async () => {
-          const resumed = await readPolicyStatus(cdp)
-          return resumed.sequence !== null && resumed.sequence > previousSequence
-        },
-        'location updates to resume after the policy clears',
-        45_000,
-      )
-    }
+
+    alwaysShare = await startDirectBackgroundShare(cdp, null, {
+      name: 'Always policy smoke A',
+      battery: 'balanced',
+      network: 'always',
+    })
+    saverShare = await startDirectBackgroundShare(cdp, null, {
+      name: 'Metered policy smoke B',
+      battery: 'saver',
+      network: 'pause-when-metered',
+      expectedShareCount: 2,
+    })
+    assert.equal(alwaysShare.battery, 'balanced')
+    assert.equal(saverShare.battery, 'saver')
+    assert.equal(saverShare.network, 'pause-when-metered')
+    await waitForShare(
+      'the strictest balanced sampling while the always link is active',
+      (status) => status.sampling === 'balanced',
+    )
 
     try {
       setWifiMetered(false)
-      await waitFor(
-        async () => (await readPolicyStatus(cdp)).pauseReason === null,
-        'the unmetered baseline without a policy pause',
-        30_000,
-      )
+      await waitForShare('the unmetered baseline', (status) => status.pauseReason === null)
 
       setWifiMetered(true)
-      await waitFor(
-        async () => (await readPolicyStatus(cdp)).pauseReason === 'metered',
-        'the metered policy pause',
-        30_000,
+      await waitForShare(
+        'the per-link metered pause',
+        (status) =>
+          shareById(status, saverShare.shareId)?.paused === 'metered' &&
+          shareById(status, alwaysShare.shareId)?.paused === null,
       )
-      const meteredPause = await assertPaused('metered', 'Paused on metered network')
+      const meteredStatus = await readPolicyStatus(cdp)
+      const pausedSaver = shareById(meteredStatus, saverShare.shareId)
+      const alwaysBefore = shareById(meteredStatus, alwaysShare.shareId)
+      assert.equal(meteredStatus.sampling, 'balanced', 'the always link keeps balanced sampling')
+      assert.ok(
+        notificationDump().includes('1 of 2 links paused on metered network'),
+        'the notification must report the partial pause honestly',
+      )
+      adb(['emu', 'geo', 'fix', '-70.0301', '40.0301'])
+      await waitForShare(
+        'the always link to keep publishing while the metered link is paused',
+        (status) => {
+          const always = shareById(status, alwaysShare.shareId)
+          const saver = shareById(status, saverShare.shareId)
+          return (
+            always?.paused === null &&
+            typeof always?.lastUpdateAt === 'number' &&
+            always.lastUpdateAt > (alwaysBefore?.lastUpdateAt ?? 0) &&
+            saver?.paused === 'metered' &&
+            saver?.lastUpdateAt === pausedSaver?.lastUpdateAt
+          )
+        },
+        45_000,
+      )
+
       setWifiMetered(false)
-      await waitFor(
-        async () => (await readPolicyStatus(cdp)).pauseReason === null,
-        'the metered pause to clear',
-        30_000,
+      await waitForShare(
+        'the metered pause to clear for the opted-in link',
+        (status) => shareById(status, saverShare.shareId)?.paused === null,
       )
-      await assertResumed(meteredPause.sequence ?? 0)
-      assert.equal(notificationDump().includes('Paused on metered network'), false)
+      const resumedBefore = shareById(await readPolicyStatus(cdp), saverShare.shareId)?.lastUpdateAt
+      adb(['emu', 'geo', 'fix', '-70.0401', '40.0401'])
+      await waitForShare(
+        'the resumed link to publish again',
+        (status) => {
+          const saver = shareById(status, saverShare.shareId)
+          return (
+            typeof saver?.lastUpdateAt === 'number' && saver.lastUpdateAt > (resumedBefore ?? 0)
+          )
+        },
+        45_000,
+      )
+      const resumed = await readPolicyStatus(cdp)
+      assert.equal(shareById(resumed, saverShare.shareId)?.shareId, saverShare.shareId)
+      assert.equal(shareById(resumed, saverShare.shareId)?.expiresAt, null)
+      assert.equal(notificationDump().includes('paused on metered network'), false)
 
       adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'true'])
-      await waitFor(
-        async () => (await readPolicyStatus(cdp)).pauseReason === 'data-saver',
-        'the Data Saver policy pause',
-        30_000,
+      await waitForShare(
+        'the per-link Data Saver pause',
+        (status) =>
+          shareById(status, saverShare.shareId)?.paused === 'data-saver' &&
+          shareById(status, alwaysShare.shareId)?.paused === null,
       )
-      const saverPause = await assertPaused('data-saver', 'Paused by Data Saver')
+      const dataSaverStatus = await readPolicyStatus(cdp)
+      assert.equal(dataSaverStatus.sampling, 'balanced')
+      assert.ok(notificationDump().includes('1 of 2 links paused on Data Saver'))
       adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
-      await waitFor(
-        async () => (await readPolicyStatus(cdp)).pauseReason === null,
+      await waitForShare(
         'the Data Saver pause to clear',
-        30_000,
+        (status) => shareById(status, saverShare.shareId)?.paused === null,
       )
-      await assertResumed(saverPause.sequence ?? 0)
-      assert.equal(notificationDump().includes('Paused by Data Saver'), false)
     } finally {
       try {
         adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
@@ -2595,24 +2612,224 @@ const runMeteredPolicySmoke = async () => {
       }
     }
 
-    const finalStatus = await readPolicyStatus(cdp)
-    assert.equal(finalStatus.shares.length, 1)
-    assert.equal(finalStatus.shares[0].shareId, saverShare.shareId)
-    assert.equal(finalStatus.shares[0].expiresAt, null)
-    console.log('[android-test] metered/Data Saver policy paused and resumed with the share intact.')
+    await cdp.evaluate(
+      `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(alwaysShare.shareId)} })`,
+    )
+    await waitForShare(
+      'saver sampling once only the saver link remains',
+      (status) => status.sampling === 'saver' && status.shares.length === 1,
+    )
+
+    foregroundShare = await startDirectBackgroundShare(cdp, null, {
+      name: 'Foreground policy smoke C',
+      publication: 'foreground',
+      battery: 'saver',
+      network: 'pause-when-metered',
+      expectedShareCount: 2,
+    })
+    assert.equal(foregroundShare.battery, 'balanced')
+    assert.equal(foregroundShare.network, 'always')
+    setWifiMetered(true)
+    await waitForShare(
+      'the metered pause for the background saver link',
+      (status) => shareById(status, saverShare.shareId)?.paused === 'metered',
+    )
+    const foregroundStatus = await readPolicyStatus(cdp)
+    const foregroundBefore = shareById(foregroundStatus, foregroundShare.shareId)?.lastUpdateAt
+    assert.equal(shareById(foregroundStatus, foregroundShare.shareId)?.paused, null)
+    adb(['emu', 'geo', 'fix', '-70.0501', '40.0501'])
+    await waitForShare(
+      'the foreground-only link to keep publishing on metered',
+      (status) => {
+        const foreground = shareById(status, foregroundShare.shareId)
+        return (
+          foreground?.paused === null &&
+          typeof foreground?.lastUpdateAt === 'number' &&
+          foreground.lastUpdateAt > (foregroundBefore ?? 0)
+        )
+      },
+      45_000,
+    )
+    setWifiMetered(false)
+
+    console.log('[android-test] per-link metered policy paused only the opted-in link.')
   } finally {
     try {
       adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
     } catch {
       // Best-effort cleanup after policy emulation.
     }
-    if (saverShare) {
+    for (const share of [foregroundShare, saverShare, alwaysShare]) {
+      if (!share) continue
       try {
         await cdp?.evaluate(
-          `window.__TAURI_INTERNALS__?.invoke('android_stop_background_share', { shareId: ${JSON.stringify(saverShare.shareId)} })`,
+          `window.__TAURI_INTERNALS__?.invoke('android_stop_background_share', { shareId: ${JSON.stringify(share.shareId)} })`,
         )
       } catch {
         // The debugger may already be gone after the policy smoke.
+      }
+    }
+    relay?.kill('SIGTERM')
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // Best-effort cleanup.
+    }
+    cdp?.close()
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+}
+
+const runRestrictedStartSmoke = async () => {
+  let cdp
+  let relay
+  let alwaysShare
+  let saverShare
+  const processPid = () => {
+    try {
+      return adb(['shell', 'pidof', packageName]).trim().split(/\s+/)[0] ?? ''
+    } catch {
+      return ''
+    }
+  }
+  try {
+    relay = await startLocalRelay()
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    cdp = await setupNativeBackgroundSmoke()
+
+    const wifiNetworkId = firstSavedWifiNetworkId()
+    assert.ok(wifiNetworkId, 'the emulator must expose a synthetic Wi-Fi network')
+    const setWifiMetered = (metered) => {
+      try {
+        adb(['shell', 'cmd', 'netpolicy', 'set', 'metered-network', wifiNetworkId, String(metered)])
+      } catch {
+        // The synthetic emulator returns a nonzero exit even when the value applies.
+      }
+    }
+    const shareById = (status, shareId) => status.shares.find((share) => share.shareId === shareId)
+    const waitForShare = async (label, check, timeout = 30_000) => {
+      try {
+        await waitFor(async () => check(await readPolicyStatus(cdp)), label, timeout)
+      } catch (error) {
+        const status = await readPolicyStatus(cdp).catch(() => undefined)
+        throw new Error(`${label}: ${JSON.stringify(status)}`, { cause: error })
+      }
+    }
+
+    try {
+      setWifiMetered(true)
+      alwaysShare = await startDirectBackgroundShare(cdp, null, {
+        name: 'Restricted start always A',
+        battery: 'balanced',
+        network: 'always',
+      })
+      saverShare = await startDirectBackgroundShare(cdp, null, {
+        name: 'Restricted start pause B',
+        battery: 'saver',
+        network: 'pause-when-metered',
+        expectedShareCount: 2,
+      })
+      await waitForShare(
+        'the pause link to fail closed while the restriction is already active',
+        (status) =>
+          shareById(status, saverShare.shareId)?.paused === 'metered' &&
+          shareById(status, alwaysShare.shareId)?.paused === null,
+      )
+      assert.equal(
+        shareById(await readPolicyStatus(cdp), saverShare.shareId)?.lastUpdateAt,
+        null,
+        'a restricted pause link must not publish before its policy is applied',
+      )
+      adb(['emu', 'geo', 'fix', '-70.0601', '40.0601'])
+      await waitForShare(
+        'the always link to publish under the same restriction',
+        (status) => typeof shareById(status, alwaysShare.shareId)?.lastUpdateAt === 'number',
+        45_000,
+      )
+      assert.equal(
+        shareById(await readPolicyStatus(cdp), saverShare.shareId)?.lastUpdateAt,
+        null,
+        'the restricted pause link must stay unpublished',
+      )
+
+      cdp.close()
+      cdp = undefined
+      const originalPid = processPid()
+      assert.match(originalPid, /^\d+$/)
+      adb(['shell', 'cmd', 'activity', 'crash', packageName])
+      let restartedPid = ''
+      await waitFor(
+        () => {
+          restartedPid = processPid()
+          return (
+            /^\d+$/.test(restartedPid) &&
+            restartedPid !== originalPid &&
+            adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+              'LocationShareService',
+            )
+          )
+        },
+        'START_STICKY recovery while the restriction is active',
+        45_000,
+      )
+
+      adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+      cdp = undefined
+      for (let attempt = 0; attempt < 8 && !cdp; attempt += 1) {
+        let candidate
+        try {
+          candidate = await connectCdp()
+          const responsive = await Promise.race([
+            candidate.evaluate(`typeof window.__TAURI_INTERNALS__?.invoke === 'function'`),
+            wait(5_000).then(() => false),
+          ])
+          if (responsive) {
+            cdp = candidate
+            break
+          }
+        } catch {
+          // Process recovery can briefly leave a stale WebView target behind.
+        }
+        candidate?.close()
+        await wait(1_000)
+      }
+      if (!cdp) throw new Error('Tauri bridge did not stabilize after restricted restart.')
+
+      await waitForShare(
+        'the restored pause link to remain unpublished while restricted',
+        (status) =>
+          shareById(status, saverShare.shareId)?.paused === 'metered' &&
+          shareById(status, saverShare.shareId)?.lastUpdateAt === null,
+        60_000,
+      )
+      adb(['emu', 'geo', 'fix', '-70.0701', '40.0701'])
+      await waitForShare(
+        'the restored always link to publish',
+        (status) => typeof shareById(status, alwaysShare.shareId)?.lastUpdateAt === 'number',
+        45_000,
+      )
+      assert.equal(
+        shareById(await readPolicyStatus(cdp), saverShare.shareId)?.lastUpdateAt,
+        null,
+        'the restored pause link must stay unpublished',
+      )
+      console.log('[android-test] restricted start and restart kept the opted-in link unpublished.')
+    } finally {
+      try {
+        adb(['shell', 'cmd', 'netpolicy', 'set', 'metered-network', wifiNetworkId, 'undefined'])
+      } catch {
+        // The emulator reports a nonzero exit for this reset even when it applies.
+      }
+    }
+  } finally {
+    for (const share of [saverShare, alwaysShare]) {
+      if (!share) continue
+      try {
+        await cdp?.evaluate(
+          `window.__TAURI_INTERNALS__?.invoke('android_stop_background_share', { shareId: ${JSON.stringify(share.shareId)} })`,
+        )
+      } catch {
+        // The debugger may already be gone after the restart smoke.
       }
     }
     relay?.kill('SIGTERM')
@@ -2794,14 +3011,22 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     () => androidTextIncludes(cdp, 'Someone shared their location with you'),
     'the Android return-link approval',
   )
-   assert.equal(await clickButton(cdp, 'View location'), true)
-   await waitFor(() => androidTextIncludes(cdp, 'Keep following'), 'Android return preview', 30_000)
-   assert.equal(await clickButton(cdp, 'Keep following'), true)
-   await waitFor(() => androidTextIncludes(cdp, 'Save location'), 'Android return nickname prompt', 30_000)
-   assert.equal(await clickButton(cdp, 'Save location'), true)
-   await waitFor(() => androidTextIncludes(cdp, 'Share mine back'), 'Android return share-back prompt', 30_000)
-   assert.equal(await clickButton(cdp, 'Not now'), true)
-   await waitFor(() => androidTextIncludes(cdp, 'Seeing 1'), 'Android return viewer', 75_000)
+  assert.equal(await clickButton(cdp, 'View location'), true)
+  await waitFor(() => androidTextIncludes(cdp, 'Keep following'), 'Android return preview', 30_000)
+  assert.equal(await clickButton(cdp, 'Keep following'), true)
+  await waitFor(
+    () => androidTextIncludes(cdp, 'Save location'),
+    'Android return nickname prompt',
+    30_000,
+  )
+  assert.equal(await clickButton(cdp, 'Save location'), true)
+  await waitFor(
+    () => androidTextIncludes(cdp, 'Share mine back'),
+    'Android return share-back prompt',
+    30_000,
+  )
+  assert.equal(await clickButton(cdp, 'Not now'), true)
+  await waitFor(() => androidTextIncludes(cdp, 'Seeing 1'), 'Android return viewer', 75_000)
   assert.equal(await clickButton(cdp, 'Seeing 1'), true)
   await waitFor(() => androidTextIncludes(cdp, 'Show on map'), 'the return location', 30_000)
   assert.equal(await clickButton(cdp, 'Sharing 1'), true)
@@ -2925,7 +3150,9 @@ const main = async () => {
   }
   if (process.argv.includes('--foreground-only-smoke')) {
     await runForegroundOnlySmoke()
-    console.log('Android foreground-only sharing paused while hidden and resumed with the same link.')
+    console.log(
+      'Android foreground-only sharing paused while hidden and resumed with the same link.',
+    )
     return
   }
   if (process.argv.includes('--multiple-source-links-smoke')) {
@@ -2951,6 +3178,11 @@ const main = async () => {
   if (process.argv.includes('--metered-policy-smoke')) {
     await runMeteredPolicySmoke()
     console.log('Android metered/Data Saver policy paused and resumed with the share intact.')
+    return
+  }
+  if (process.argv.includes('--restricted-start-smoke')) {
+    await runRestrictedStartSmoke()
+    console.log('Android applied the network restriction before any restricted share published.')
     return
   }
   if (process.argv.includes('--native-store-smoke')) {
@@ -3012,7 +3244,15 @@ const main = async () => {
           // Start from the platform provider if no mock override exists yet.
         }
         adb(['shell', 'cmd', 'location', 'providers', 'add-test-provider', provider, capability])
-        adb(['shell', 'cmd', 'location', 'providers', 'set-test-provider-enabled', provider, 'true'])
+        adb([
+          'shell',
+          'cmd',
+          'location',
+          'providers',
+          'set-test-provider-enabled',
+          provider,
+          'true',
+        ])
       }
       grantIfSupported('android.permission.ACCESS_FINE_LOCATION')
       adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
@@ -3045,7 +3285,10 @@ const main = async () => {
       })()`)
       const fallbackStart = Date.now()
       await cdp.reload()
-      await waitFor(() => androidTextIncludes(cdp, 'Share location'), 'Android fallback smoke reload')
+      await waitFor(
+        () => androidTextIncludes(cdp, 'Share location'),
+        'Android fallback smoke reload',
+      )
       await waitFor(
         () => adb(['shell', 'dumpsys', 'location']).includes(packageName),
         'native Android location watch registration with no first fix',
@@ -3066,9 +3309,12 @@ const main = async () => {
           35_000,
         )
       } catch (error) {
-        throw new Error(`Android native fallback probe did not complete: ${JSON.stringify(probe)}`, {
-          cause: error,
-        })
+        throw new Error(
+          `Android native fallback probe did not complete: ${JSON.stringify(probe)}`,
+          {
+            cause: error,
+          },
+        )
       }
       assert.ok(Date.now() - fallbackStart >= 18_000)
       assert.ok(probe.webWatchCalls >= 1)
@@ -3087,14 +3333,24 @@ const main = async () => {
       grantIfSupported('android.permission.ACCESS_FINE_LOCATION')
       adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
       cdp = await connectCdp()
-      await waitFor(() => androidTextIncludes(cdp, 'Share location'), 'Android UI policy smoke startup')
-      const intro = await cdp.evaluate(`document.querySelector('[aria-label="Privacy introduction"]')?.textContent ?? ''`)
+      await waitFor(
+        () => androidTextIncludes(cdp, 'Share location'),
+        'Android UI policy smoke startup',
+      )
+      const intro = await cdp.evaluate(
+        `document.querySelector('[aria-label="Privacy introduction"]')?.textContent ?? ''`,
+      )
       assert.match(intro, /Direct when possible\. Encrypted between peers\./)
       assert.match(intro, /end-to-end encrypted P2P connections/)
       assert.match(intro, /no central location history/)
       assert.equal(await clickButton(cdp, 'How it works'), true)
-      await waitFor(() => androidTextIncludes(cdp, 'Privacy and network'), 'Android About privacy copy')
-      const about = await cdp.evaluate(`document.querySelector('[aria-labelledby="about-title"]')?.textContent ?? ''`)
+      await waitFor(
+        () => androidTextIncludes(cdp, 'Privacy and network'),
+        'Android About privacy copy',
+      )
+      const about = await cdp.evaluate(
+        `document.querySelector('[aria-labelledby="about-title"]')?.textContent ?? ''`,
+      )
       assert.match(about, /relays cannot read location content/i)
       assert.match(about, /configured relay for reachability/i)
       assert.match(about, /private share settings and followed links may be stored encrypted/i)

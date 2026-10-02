@@ -7,5 +7,6 @@ export const router = createRouter({
   routes: [
     { path: '/', component: MapView },
     { path: '/share', component: MapView },
+    { path: '/:pathMatch(.*)*', component: MapView },
   ],
 })

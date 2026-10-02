@@ -340,7 +340,13 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
 
   private fun statusWithPolicy(json: String): JSObject {
     val status = runCatching { JSONObject(json) }.getOrNull() ?: return JSObject(json)
-    ShareServiceContract.policyPauseReason?.let { status.put("pauseReason", it) }
+    val shares = status.optJSONArray("shares")
+    val pausedCount = (0 until (shares?.length() ?: 0)).count { index ->
+      shares?.optJSONObject(index)?.isNull("paused") == false
+    }
+    if (pausedCount > 0) {
+      ShareServiceContract.networkRestriction?.let { status.put("pauseReason", it) }
+    }
     status.put("sampling", ShareServiceContract.sampling)
     return JSObject(status.toString())
   }

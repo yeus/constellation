@@ -10,12 +10,20 @@
           <CloseIcon />
         </button>
       </header>
-      <p v-if="pauseReason" class="field-help">
+      <p v-if="pausedShares.length" class="field-help">
+        {{
+          pausedShares.length === shares.length
+            ? 'All links are paused'
+            : `${pausedShares.length} of ${shares.length} links are paused`
+        }}
         {{
           pauseReason === 'metered'
-            ? 'Updates are paused on a metered network and resume automatically.'
-            : 'Updates are paused by Data Saver and resume automatically.'
+            ? 'on a metered network'
+            : pauseReason === 'data-saver'
+              ? 'by Data Saver'
+              : 'by network policy'
         }}
+        and resume automatically.
       </p>
       <p v-if="shares.length === 0" class="field-help">You are not sharing with anyone.</p>
       <article v-for="share in shares" :key="share.shareId" class="share-list-item">
@@ -23,11 +31,9 @@
         <span
           >{{ share.precision === 'very-coarse' ? 'very coarse' : share.precision }} ·
           {{ share.viewerCount }} connected · {{ share.publication || 'background' }} ·
-          {{ share.battery === 'saver' ? 'battery saver' : 'balanced' }}<template
-            v-if="share.network === 'pause-when-metered'"
-            > · pauses on metered</template
-          >
-          ·
+          {{ share.battery === 'saver' ? 'battery saver' : 'balanced'
+          }}<template v-if="share.network === 'pause-when-metered'"> · pauses on metered</template>
+          ·<template v-if="share.paused"> paused ·</template>
           {{
             share.expiresAt === null
               ? 'until stopped'
@@ -99,14 +105,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 
-defineProps<{
+const props = defineProps<{
   shares: readonly ShareSummary[]
   pauseReason?: 'metered' | 'data-saver'
 }>()
+const pausedShares = computed(() => props.shares.filter((share) => share.paused))
 const emit = defineEmits<{
   close: []
   show: [share: ShareSummary]

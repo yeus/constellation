@@ -48,7 +48,8 @@ class LocationShareService : Service(), LocationListener {
   private var lastViewerCount = 0
   private var watchRequested = false
   private var appliedSampling: String? = null
-  private var policyPauseReason: String? = null
+  private var networkRestriction: String? = null
+  private var networkStateSent: String? = null
   private var connectivityManager: ConnectivityManager? = null
   private val networkCallback = object : ConnectivityManager.NetworkCallback() {
     override fun onAvailable(network: Network) {
@@ -178,7 +179,6 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun sendPosition(location: Location, type: String) {
-    if (policyPauseReason != null) return
     send(JSONObject()
       .put("type", type)
       .put("position", locationPositionJson(location)))
@@ -199,8 +199,9 @@ class LocationShareService : Service(), LocationListener {
     runCatching { unregisterReceiver(restrictBackgroundReceiver) }
     connectivityManager = null
     watchRequested = false
-    policyPauseReason = null
-    ShareServiceContract.policyPauseReason = null
+    networkRestriction = null
+    networkStateSent = null
+    ShareServiceContract.networkRestriction = null
     ShareServiceContract.sampling = "balanced"
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
@@ -315,6 +316,7 @@ class LocationShareService : Service(), LocationListener {
         runtimeReady = true
         pendingCommands.toList().forEach(::send)
         pendingCommands.clear()
+        updatePolicyState(forceSend = true)
         stopWhenIdle()
       }
       "create-complete" -> {
@@ -373,10 +375,24 @@ class LocationShareService : Service(), LocationListener {
       "next ends in $remainingMinutes min"
     } ?: "until stopped"
     val linkText = if (count == 1) "1 link" else "$count links"
-    val pauseText = when (policyPauseReason) {
-      "metered" -> "Paused on metered network"
-      "data-saver" -> "Paused by Data Saver"
-      else -> null
+    val pausedCount = (0 until count).count { index ->
+      shares?.optJSONObject(index)?.isNull("paused") == false
+    }
+    val pauseText = when {
+      pausedCount == 0 -> null
+      pausedCount == count -> when (networkRestriction) {
+        "metered" -> "All links paused on metered network"
+        "data-saver" -> "All links paused by Data Saver"
+        else -> "All links paused"
+      }
+      else -> {
+        val reason = when (networkRestriction) {
+          "metered" -> "metered network"
+          "data-saver" -> "Data Saver"
+          else -> "network policy"
+        }
+        "$pausedCount of $count links paused on $reason"
+      }
     }
     val details = "$linkText · $precisionText · $viewers connected · $expiryText"
     return if (pauseText == null) details else "$pauseText · $details"
@@ -398,7 +414,7 @@ class LocationShareService : Service(), LocationListener {
 
   private fun startLocationUpdates() {
     watchRequested = true
-    if (policyPauseReason != null) return
+    if (allKnownSharesPaused()) return
     if (locationGrant(this) == "none") {
       send(JSONObject().put("type", "location-error").put("code", 1))
       return
@@ -425,10 +441,20 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun samplingFor(shares: JSONArray?): String {
-    for (index in 0 until (shares?.length() ?: 0)) {
-      if (shares?.optJSONObject(index)?.optString("battery") == "saver") return "saver"
-    }
-    return "balanced"
+    val publishing = shareObjects(shares).filter { it.isNull("paused") }
+    val relevant = publishing.ifEmpty { shareObjects(shares) }
+    return if (relevant.any { it.optString("battery") == "balanced" }) "balanced" else "saver"
+  }
+
+  private fun shareObjects(shares: JSONArray?): List<JSONObject> =
+    (0 until (shares?.length() ?: 0)).mapNotNull { shares?.optJSONObject(it) }
+
+  private fun publishingShareCount(shares: JSONArray?): Int =
+    shareObjects(shares).count { it.isNull("paused") }
+
+  private fun allKnownSharesPaused(): Boolean {
+    val shares = lastShares ?: return false
+    return shares.length() > 0 && publishingShareCount(shares) == 0
   }
 
   private fun intervalFor(sampling: String): Long =
@@ -437,14 +463,7 @@ class LocationShareService : Service(), LocationListener {
   private fun distanceFor(sampling: String): Float =
     if (sampling == "saver") SAVER_UPDATE_MINIMUM_DISTANCE_METRES else BALANCED_UPDATE_MINIMUM_DISTANCE_METRES
 
-  private fun pausePolicyRequested(shares: JSONArray?): Boolean {
-    for (index in 0 until (shares?.length() ?: 0)) {
-      if (shares?.optJSONObject(index)?.optString("network") == "pause-when-metered") return true
-    }
-    return false
-  }
-
-  private fun connectivityPauseReason(): String? {
+  private fun connectivityRestriction(): String? {
     val manager = connectivityManager ?: return null
     val active = manager.activeNetwork ?: return null
     val capabilities = manager.getNetworkCapabilities(active) ?: return null
@@ -456,20 +475,25 @@ class LocationShareService : Service(), LocationListener {
     }
   }
 
-  private fun updatePolicyState() {
-    val sampling = samplingFor(lastShares)
-    val reason = if (pausePolicyRequested(lastShares)) connectivityPauseReason() else null
-    val pauseChanged = reason != policyPauseReason
-    policyPauseReason = reason
-    ShareServiceContract.policyPauseReason = reason
+  private fun updatePolicyState(forceSend: Boolean = false) {
+    val shares = lastShares
+    val restriction = connectivityRestriction()
+    val networkState = restriction ?: "unmetered"
+    if (forceSend || networkState != networkStateSent) {
+      networkStateSent = networkState
+      queueCommand(JSONObject().put("type", "network-state").put("state", networkState))
+    }
+    val sampling = samplingFor(shares)
+    networkRestriction = restriction
+    ShareServiceContract.networkRestriction = restriction
     ShareServiceContract.sampling = sampling
-    if (reason != null) {
+    if (publishingShareCount(shares) == 0) {
       if (locationManager != null) stopLocationUpdates()
     } else if (watchRequested && (locationManager == null || appliedSampling != sampling)) {
       stopLocationUpdates()
       startLocationUpdates()
     }
-    if (pauseChanged) ShareNotification.update(this, notificationBody(lastShares, lastViewerCount))
+    ShareNotification.update(this, notificationBody(shares, lastViewerCount))
   }
 
   private fun clearRefresh() {
@@ -482,7 +506,7 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun requestFreshLocation() {
-    if (policyPauseReason != null) return
+    if (allKnownSharesPaused()) return
     if (locationGrant(this) == "none") return
     val manager = locationManager ?: getSystemService(LocationManager::class.java)
     val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
@@ -591,8 +615,8 @@ class LocationShareService : Service(), LocationListener {
     watchRequested = false
     lastShares = null
     lastViewerCount = 0
-    policyPauseReason = null
-    ShareServiceContract.policyPauseReason = null
+    networkRestriction = null
+    ShareServiceContract.networkRestriction = null
     runCatching { store.saveStatus(STOPPED_STATUS) }
     ShareServiceContract.currentStatus = STOPPED_STATUS
     ShareServiceContract.serviceRunning = false
@@ -605,8 +629,8 @@ class LocationShareService : Service(), LocationListener {
     watchRequested = false
     lastShares = null
     lastViewerCount = 0
-    policyPauseReason = null
-    ShareServiceContract.policyPauseReason = null
+    networkRestriction = null
+    ShareServiceContract.networkRestriction = null
     val status = "{\"state\":\"paused\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"Foreground-only links are paused until Constellation is reopened.\"}"
     runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
     ShareServiceContract.currentStatus = status

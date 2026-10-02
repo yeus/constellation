@@ -76,7 +76,56 @@ font files or glyph ranges; label appearance and script coverage depend on the d
 ## Bundled software
 
 Taskyon protocol and P2P source snapshots retain their upstream MIT notices. MapLibre GL JS,
-PMTiles, libp2p, Vue, Tauri, and their transitive dependencies retain their own licenses. The
-release dependency inventory for each binary artifact must be completed before publication.
-The Linux Secret Service client crate `secret-service` is licensed MIT OR Apache-2.0 and retains
-its upstream notices.
+PMTiles, libp2p, Vue, Tauri, and their transitive dependencies retain their own licenses.
+
+Run the dependency inventory before publication:
+
+```sh
+yarn licenses:inventory
+```
+
+On 2026-10-01 the x86_64 inventory reported 245 installed JavaScript production packages: 243 under
+permissive licenses and two MPL-2.0 packages, `node-datachannel` and its installed
+`@node-datachannel/linux-x64-gnu` optional binary package. Both are Node-only dependencies and are
+not bundled in the web, background, or desktop application bundles. The architecture-specific
+optional package can differ on another build host. The Cargo inventory reported 504 packages:
+499 permissive and five MPL-2.0 crates (`cssparser`, `cssparser-macros`, `dtoa-short`, `option-ext`,
+`selectors`). `r-efi` is offered under MIT OR Apache-2.0 OR LGPL-2.1-or-later and can be used under
+the permissive alternatives. No inventoried package lacked a license field.
+
+Run the artifact-level triage for the Android APK and an extracted AppImage payload:
+
+```sh
+yarn licenses:artifacts --strict \
+  --apk dist/constellation-android-release-arm64-v8a.apk \
+  --appimage-root <extracted-AppImage-root>
+```
+
+## Android APK
+
+The APK contains one `classes.dex` (Constellation/Tauri plus AndroidX and Kotlin, Apache-2.0), one
+native library (`libconstellation_lib.so`, Constellation's own MIT-licensed Rust code), and the
+background-sharing JavaScript bundle (Constellation/Taskyon MIT plus the JavaScript dependency
+inventory above). Bundled Gradle dependencies ship their own notices under `META-INF/` (for example
+FastDoubleParser, AndroidX annotation, AndroidX lifecycle, and bigint). No other third-party native
+libraries are packaged.
+
+## AppImage bundled platform libraries
+
+The AppImage bundles the GTK/WebKitGTK desktop stack (191 libraries): GTK, GDK, ATK, Pango,
+GdkPixbuf, GLib/GIO, WebKitGTK/JavaScriptCore, libsoup, GnuTLS/glib-networking, libsecret, GStreamer,
+FFmpeg, Mesa, X11, image codecs, ICU, FreeType, HarfBuzz, and their support libraries. These retain
+their upstream licenses, predominantly LGPL-2.1-or-later, MIT, BSD-like, Apache-2.0, MPL-2.0, the
+Unicode license, and the GCC runtime exception. `yarn licenses:artifacts` classifies every bundled
+library into these families and currently reports no unclassified library. The AppImage does not
+bundle the full upstream license texts for these libraries; a human publication review must confirm
+that the required LGPL notices, source-offer, and relinking conditions are satisfied before release.
+
+## Flatpak
+
+The Flatpak manifest builds only the Constellation binary; GTK, WebKitGTK, and the rest of the
+desktop stack are provided by the `org.gnome.Platform` runtime, whose notices are maintained by the
+Flathub runtime. The manifest does not bundle additional libraries.
+
+The dependency and artifact inventories are triage aids, not a legal opinion. Final publication
+review of embedded binaries and bundled license texts remains a human gate.

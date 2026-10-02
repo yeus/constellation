@@ -731,11 +731,20 @@ const toggleActions = (): void => {
   window.localStorage.setItem('constellation.actions-expanded', actionsExpanded.value ? '1' : '0')
 }
 const policyPauseMessage = computed(() => {
-  const reason = backgroundStatus.value?.pauseReason
-  if (!reason) return ''
-  return reason === 'metered'
-    ? 'Updates are paused on a metered network and resume automatically.'
-    : 'Updates are paused by Data Saver and resume automatically.'
+  const status = backgroundStatus.value
+  if (!status) return ''
+  const paused = status.shares.filter((share) => share.paused).length
+  if (paused === 0) return ''
+  const reasonText =
+    status.pauseReason === 'metered'
+      ? 'a metered network'
+      : status.pauseReason === 'data-saver'
+        ? 'Data Saver'
+        : 'network policy'
+  if (paused === status.shares.length) {
+    return `Updates are paused on ${reasonText} and resume automatically.`
+  }
+  return `${paused} of ${status.shares.length} links paused on ${reasonText}; other links keep updating.`
 })
 const statusMessage = computed(
   () =>

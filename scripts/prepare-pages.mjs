@@ -21,17 +21,29 @@ export const assetLinksFor = (fingerprint, packageName) => {
   ]
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  fs.copyFileSync('dist/index.html', 'dist/404.html')
-  const fingerprint = process.env.ANDROID_APP_LINK_SHA256
-  if (fingerprint) {
-    const packageName = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).identifier
-    const assetLinks = assetLinksFor(fingerprint, packageName)
-    fs.mkdirSync('dist/.well-known', { recursive: true })
-    fs.writeFileSync('dist/.well-known/assetlinks.json', JSON.stringify(assetLinks))
-  } else {
-    process.stderr.write(
-      'Android App Links are not verified: set ANDROID_APP_LINK_SHA256 in GitLab CI.\n',
+export const tauriIdentifier = (tauriConfigPath = 'src-tauri/tauri.conf.json') =>
+  JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8')).identifier
+
+export const preparePages = ({
+  distDir = 'dist',
+  fingerprint = process.env.ANDROID_APP_LINK_SHA256,
+  packageName = tauriIdentifier(),
+  warn = (message) => process.stderr.write(message),
+} = {}) => {
+  fs.copyFileSync(path.join(distDir, 'index.html'), path.join(distDir, '404.html'))
+  if (!fingerprint) {
+    warn(
+      'Android App Links are not verified: set the ANDROID_APP_LINK_SHA256 GitHub Actions secret.\n',
     )
+    return { assetLinks: undefined }
   }
+  const assetLinks = assetLinksFor(fingerprint, packageName)
+  const wellKnown = path.join(distDir, '.well-known')
+  fs.mkdirSync(wellKnown, { recursive: true })
+  fs.writeFileSync(path.join(wellKnown, 'assetlinks.json'), JSON.stringify(assetLinks))
+  return { assetLinks }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  preparePages()
 }

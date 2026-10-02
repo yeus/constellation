@@ -62,14 +62,17 @@
             · last fix {{ elapsed(background.location.observation.capturedAt) }} ago</span
           >
         </p>
-        <p v-if="background.pauseReason" class="field-help">
-          Policy pause:
+        <p v-if="pausedShareCount" class="field-help">
+          Network restriction:
           {{
             background.pauseReason === 'metered'
               ? 'metered network'
-              : 'Data Saver background restriction'
+              : background.pauseReason === 'data-saver'
+                ? 'Data Saver'
+                : 'not yet reported'
           }}
-          · updates resume automatically.
+          · {{ pausedShareCount }} of {{ background.shares.length }} links paused · updates resume
+          automatically.
         </p>
         <p v-if="background.sampling" class="field-help">
           Battery sampling: {{ background.sampling === 'saver' ? 'battery saver' : 'balanced' }}.
@@ -120,6 +123,9 @@ const props = defineProps<{
 }>()
 const backgroundViewerCount = computed(
   () => props.background?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0,
+)
+const pausedShareCount = computed(
+  () => props.background?.shares.filter((share) => share.paused).length ?? 0,
 )
 const emit = defineEmits<{ close: [] }>()
 const revealed = ref(false)

@@ -26,6 +26,12 @@ import {
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { createRedemptionProof, verifyRedemptionProof } from './shareAuth.ts'
 import { createShareInvitation, parseShareInvitation, type ShareCapability } from './shareLink.ts'
+import {
+  backgroundSharePolicy,
+  sharePauseReason,
+  type NetworkRestriction,
+  type SharePauseState,
+} from './sharePolicy.ts'
 import { decryptLocationPayload, encryptLocationPayload } from './sharePayloadCrypto.ts'
 import { constellationProtocolV1, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
 import { classifyTransport, type TransportKind } from './transport.ts'
@@ -56,6 +62,8 @@ export interface ShareSummary {
   readonly precision: ShareDraft['precision']
   readonly battery: ShareBatteryPolicy
   readonly network: ShareNetworkPolicy
+  readonly paused?: SharePauseState
+  readonly lastUpdateAt?: number
   readonly expiresAt: number | null
   readonly viewerCount: number
   readonly viewers?: readonly { fingerprint: string; lastSeenAt: number; localName?: string }[]
@@ -253,6 +261,7 @@ const requireAuthorized = (session: SourceSession, share: SourceShare | undefine
 
 export interface SharingRuntime {
   networkDiagnostics: () => NetworkDiagnostics
+  setNetworkState: (restriction: NetworkRestriction | undefined) => void
   getViewerLabel: (shareId: string, fingerprint: string) => string | undefined
   setViewerLabel: (shareId: string, fingerprint: string, name: string) => Promise<void>
   blockViewer: (shareId: string, fingerprint: string) => Promise<void>
@@ -303,6 +312,7 @@ export const createSharingRuntime = (
   let privateStateAvailable = true
   let sessionEvents: readonly SessionEvent[] = []
   let sessionEventSequence = 0
+  let networkRestriction: NetworkRestriction | undefined
   let state: SharingRuntimeState = {
     peerStatus: 'offline',
     location: locationSource.getState(),
@@ -339,6 +349,10 @@ export const createSharingRuntime = (
         publication: share.publication,
         battery: share.battery,
         network: share.network,
+        ...(sharePauseReason(share, networkRestriction)
+          ? { paused: sharePauseReason(share, networkRestriction) }
+          : {}),
+        ...(share.latest ? { lastUpdateAt: share.latest.capturedAt } : {}),
       })),
       received: [...received.entries()].map(([shareId, observation]) => ({
         shareId,
@@ -472,8 +486,11 @@ export const createSharingRuntime = (
               capacity: record.capacity,
               name: record.name,
               publication: record.publication,
-              battery: record.battery ?? 'balanced',
-              network: record.network ?? 'always',
+              ...backgroundSharePolicy(
+                record.publication,
+                record.battery ?? 'balanced',
+                record.network ?? 'always',
+              ),
               sessions: new Set(),
               redeemedNonces: new Set(),
               blockedPeerIds: new Set(record.blockedPeerIds ?? []),
@@ -555,6 +572,7 @@ export const createSharingRuntime = (
     share: SourceShare,
     subscriptionId: string,
   ): Promise<ConstellationMessage | undefined> => {
+    if (sharePauseReason(share, networkRestriction)) return undefined
     if (!share.latest) return undefined
     const observation = share.latest
     const payload = await encryptLocationPayload(
@@ -688,7 +706,12 @@ export const createSharingRuntime = (
             session.subscriptionId = randomToken()
             const initial = await encryptedObservationMessage(share, session.subscriptionId)
             if (initial) session.send(initial)
-            if (visible || share.publication === 'background') locationSource.refresh()
+            if (
+              (visible || share.publication === 'background') &&
+              !sharePauseReason(share, networkRestriction)
+            ) {
+              locationSource.refresh()
+            }
             return { subscriptionId: session.subscriptionId }
           },
           unsubscribe: ({ subscriptionId }) => {
@@ -786,6 +809,7 @@ export const createSharingRuntime = (
   }
 
   const updateShareLocation = (share: SourceShare, exact: LocationObservationV1): boolean => {
+    if (sharePauseReason(share, networkRestriction)) return false
     if (share.precision === 'exact') {
       share.latest = exact
       return false
@@ -932,6 +956,11 @@ export const createSharingRuntime = (
       publish()
       await Promise.all(sessions.map((session) => session.closeAfterFlush()))
     },
+    setNetworkState: (restriction) => {
+      if (restriction === networkRestriction) return
+      networkRestriction = restriction
+      publish()
+    },
     networkDiagnostics: () => ({
       peerStatus: state.peerStatus,
       sessionEvents,
@@ -1010,8 +1039,7 @@ export const createSharingRuntime = (
         capacity: capacityFor(draft),
         ...(draft.name ? { name: draft.name } : {}),
         publication: draft.publication,
-        battery: draft.battery,
-        network: draft.network,
+        ...backgroundSharePolicy(draft.publication, draft.battery, draft.network),
         sessions: new Set(),
         redeemedNonces: new Set(),
         blockedPeerIds: new Set(),

@@ -13,7 +13,7 @@ internal object ShareServiceContract {
   @Volatile var currentStatus: String? = null
   @Volatile var serviceRunning: Boolean = false
   @Volatile var startPending: Boolean = false
-  @Volatile var policyPauseReason: String? = null
+  @Volatile var networkRestriction: String? = null
   @Volatile var sampling: String = "balanced"
   const val ACTION_START = "space.taskyon.constellation.START_LOCATION_SHARE"
   const val ACTION_RESTORE = "space.taskyon.constellation.RESTORE_LOCATION_SHARES"

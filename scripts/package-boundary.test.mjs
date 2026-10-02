@@ -48,8 +48,7 @@ test('application code does not import sibling workspaces or build artifacts', (
         }
         assert.ok(
           !(
-            specifier.startsWith('.') &&
-            /(^|\/)(dist|dist-background|dist-tauri)\//.test(specifier)
+            specifier.startsWith('.') && /(^|\/)(dist|dist-background|dist-tauri)\//.test(specifier)
           ),
           `${file} imports a repository build artifact ${specifier}`,
         )
@@ -59,10 +58,7 @@ test('application code does not import sibling workspaces or build artifacts', (
 })
 
 test('vendored Taskyon snapshots record their upstream provenance', () => {
-  const upstream = fs.readFileSync(
-    path.join(repositoryRoot, 'vendor/taskyon/UPSTREAM.md'),
-    'utf8',
-  )
+  const upstream = fs.readFileSync(path.join(repositoryRoot, 'vendor/taskyon/UPSTREAM.md'), 'utf8')
   assert.match(upstream, /Source repository: Taskyon `frontend`/)
   assert.match(upstream, /Base revision: `[0-9a-f]{40}`/)
   assert.match(upstream, /Snapshot date: \d{4}-\d{2}-\d{2}/)

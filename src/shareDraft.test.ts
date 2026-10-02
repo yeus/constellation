@@ -43,6 +43,22 @@ test('battery and metered policy stay independent per link', () => {
   assert.notEqual(pausing, saver)
 })
 
+test('foreground-only sharing drops hidden background policy effects', () => {
+  const background = setNetworkPolicy(
+    setBatteryPolicy(setPublication(createShareDraft(), 'background'), 'saver'),
+    'pause-when-metered',
+  )
+  const foreground = setPublication(background, 'foreground')
+
+  assert.equal(foreground.publication, 'foreground')
+  assert.equal(foreground.battery, 'balanced')
+  assert.equal(foreground.network, 'always')
+
+  const backgroundAgain = setPublication(foreground, 'background')
+  assert.equal(backgroundAgain.battery, 'balanced')
+  assert.equal(backgroundAgain.network, 'always')
+})
+
 test('name and publication mode remain independent per link', () => {
   const initial = createShareDraft()
   const named = setName(initial, '  River  ')

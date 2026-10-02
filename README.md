@@ -107,18 +107,33 @@ This does not establish reliability across arbitrary networks.
 
 ## Hosted web deployment
 
-The standalone repository's `main` pipeline builds the web app and publishes
-`dist/` through GitLab Pages, with `404.html` for client-side routes. Configure
-`constellation.taskyon.space` as a public GitLab Pages custom domain with HTTPS
-and the required DNS record; the repository cannot configure those external
-settings itself. Share links keep their capability in the URL fragment, which
-the web server never receives.
+The standalone repository's `main` GitHub Actions workflow builds the web app
+and publishes `dist/` through GitHub Pages, with `404.html` for client-side
+routes. In GitHub repository settings, select **Pages → Source → GitHub Actions**
+once, configure `constellation.taskyon.space` as the custom domain, and point its
+DNS record at GitHub Pages. Share links keep their capability in the URL
+fragment, which the web server never receives.
+
+Reproduce the whole Pages path locally before deploying:
+
+```sh
+yarn test:pages
+```
+
+`yarn build:pages` runs the production build with
+`VITE_CONSTELLATION_PUBLIC_URL=https://constellation.taskyon.space/` and then
+`prepare-pages.mjs`; `yarn test:pages` adds a preflight that asserts the SPA
+fallback, root-host asset paths, baked public URL, map assets, and Android App
+Links consistency, then serves the built `dist/` with Pages-like 404 fallback
+through a dumb static server and checks boot, the synthetic fragment flow, and
+that the fragment never reaches the server. The GitHub Pages build and browser
+regression jobs invoke the same commands.
 
 On 2026-09-29, the public hostname still presented a TLS certificate valid only for
 `assets.taskyon.space`, not `constellation.taskyon.space`. Fix the domain's
 DNS/Pages certificate before testing hosted links or Android App Links.
 
-For verified Android App Links, set the GitLab CI variable
+For verified Android App Links, set the GitHub Actions repository secret
 `ANDROID_APP_LINK_SHA256` to the uppercase colon-separated SHA-256 fingerprint
 of the release signing certificate. If Play App Signing is used, use the Play
 app-signing certificate, not merely the upload key. The pipeline then writes
@@ -164,9 +179,36 @@ add the Flathub user remote if needed. Flatpak Builder needs permission to
 create its own build sandbox, which may be unavailable inside an outer
 container.
 
-The current manifest uses network access to resolve Yarn and Cargo dependencies
-during a local build. A source-pinned, offline manifest is still required
-before submission to Flathub.
+The Flatpak build is offline. Yarn and Cargo dependency sources are pinned with
+checksums in `packaging/flatpak/generated-sources.json` and
+`packaging/flatpak/cargo-sources.json`, and the Yarn CLI is pinned as a source
+file. Regenerate both with the flatpak-builder-tools generators after a lockfile
+change:
+
+```sh
+python3 flatpak-node-generator yarn -o packaging/flatpak/generated-sources.json yarn.lock
+python3 flatpak-cargo-generator.py src-tauri/Cargo.lock \
+  -o packaging/flatpak/cargo-sources.json
+```
+
+Validate the manifest, MetaInfo, and generated sources with:
+
+```sh
+yarn lint:flatpak
+```
+
+For release review, generate a pinned **review draft** from the local manifest:
+
+```sh
+node scripts/flatpak-submission-manifest.mjs --tag v0.1.0 --commit <40-char-sha>
+```
+
+The generated file is deliberately marked `REVIEW DRAFT ONLY`. Flathub's current
+submission policy forbids AI-generated or AI-assisted manifest content, so a
+human maintainer must independently author the final Flathub manifest rather
+than submitting this draft. The remaining submission work is external: cut and
+push the v0.1.0 tag, author the final manifest against that commit, and build and
+lint the bundle on a Flatpak-capable host.
 
 ## Android
 
@@ -235,6 +277,32 @@ The resulting artifacts are
 Before copying them there, the release command uses Android build tools to verify
 the APK signature and fails if verification fails or the verifier is missing.
 The checksum is generated only after that signature verification succeeds.
+
+## GitHub Actions releases
+
+`.github/workflows/ci.yml` owns the regular quality, browser-regression, and
+GitHub Pages jobs. `.github/workflows/release.yml` follows the same tagged
+release pattern as Syncpeer: a tag builds the AppImage, Flatpak, and signed
+arm64 APK in separate jobs, creates `SHA256SUMS`, and publishes all artifacts
+to one GitHub Release.
+
+The tag must use the application version from `package.json` and
+`src-tauri/tauri.conf.json`. A final tag can be `v0.1.0`; test releases may
+use a suffix such as `v0.1.0-test.1` without changing the application version.
+Tags with a suffix are published as GitHub prereleases.
+
+Configure these protected GitHub Actions repository secrets before pushing a
+release tag:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+The release workflow passes those values only to the tag-triggered Android job.
+Pull-request and ordinary branch CI never receive the signing key. The separate
+`ANDROID_APP_LINK_SHA256` secret is used only while building GitHub Pages.
+
 On systems without Linux Secret Service, provide the three signing credentials
 and either `ANDROID_KEYSTORE_BASE64` or `ANDROID_KEYSTORE_PATH`.
 Before Gradle starts, the release command checks that both the keystore
@@ -284,10 +352,12 @@ publishing, and verifies automatic resume with the same share identity.
 
 Background links offer a Balanced or Battery saver sampling preset and an
 optional "pause on metered networks and Data Saver" policy, off by default.
-While paused the link, grant, connected viewers, and absolute expiry remain, and
-collection resumes automatically once the network is unmetered or Data Saver is
-cleared. The pause reason appears in the map status, active-share sheet, Android
-notification, and diagnostics.
+Pausing applies per link: a link that opted in stops publishing while the
+restriction lasts, while other links keep updating at the strictest active
+sampling preset. The paused link, grant, connected viewers, and absolute expiry
+remain, and collection resumes automatically once the network is unmetered or
+Data Saver is cleared. The pause reason appears in the map status, active-share
+sheet, Android notification, and diagnostics.
 
 Android also declares a `text/plain` share target: sharing a Constellation link
 from a messenger opens a one-time in-app approval before the recipient connects.

@@ -4,6 +4,7 @@ export type ViewerCapacity = 1 | 10 | 50 | 'unlimited'
 export type SharePublication = 'foreground' | 'background'
 export type ShareBatteryPolicy = 'balanced' | 'saver'
 export type ShareNetworkPolicy = 'always' | 'pause-when-metered'
+export type SharePauseReason = 'metered' | 'data-saver'
 export const VERY_COARSE_RADIUS_METERS = 20_000
 
 export interface ShareDraft {
@@ -60,17 +61,20 @@ export const setName = (draft: ShareDraft, name: string): ShareDraft => ({
 export const setPublication = (draft: ShareDraft, publication: SharePublication): ShareDraft => ({
   ...draft,
   publication,
+  ...(publication === 'foreground'
+    ? { battery: 'balanced' as const, network: 'always' as const }
+    : {}),
 })
 
-export const setBatteryPolicy = (
-  draft: ShareDraft,
-  battery: ShareBatteryPolicy,
-): ShareDraft => ({ ...draft, battery })
+export const setBatteryPolicy = (draft: ShareDraft, battery: ShareBatteryPolicy): ShareDraft => ({
+  ...draft,
+  battery,
+})
 
-export const setNetworkPolicy = (
-  draft: ShareDraft,
-  network: ShareNetworkPolicy,
-): ShareDraft => ({ ...draft, network })
+export const setNetworkPolicy = (draft: ShareDraft, network: ShareNetworkPolicy): ShareDraft => ({
+  ...draft,
+  network,
+})
 
 export const canCreateShare = (draft: ShareDraft): boolean =>
   draft.name.length <= 32 && (draft.duration !== 'until-revoked' || draft.untilRevokedAcknowledged)

@@ -39,6 +39,7 @@ type BackgroundCommand =
   | { readonly type: 'stop-share'; readonly shareId: string }
   | { readonly type: 'stop-all' }
   | { readonly type: 'stop-foreground-only' }
+  | { readonly type: 'network-state'; readonly state: 'unmetered' | 'metered' | 'data-saver' }
   | { readonly type: 'set-visible'; readonly visible: boolean }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
   | {
@@ -126,6 +127,7 @@ const start = (): void => {
   })
   const runtime = createSharingRuntime(location, undefined, privateStore)
   runtime.setVisible(false, false)
+  runtime.setNetworkState('unknown')
 
   const report = (state: SharingRuntimeState): void => {
     const shareCount = state.shares.length
@@ -220,6 +222,10 @@ const start = (): void => {
     if (command.type === 'set-visible') {
       runtime.setVisible(command.visible, command.visible)
       if (!command.visible) await pauseForegroundOnly()
+      return
+    }
+    if (command.type === 'network-state') {
+      runtime.setNetworkState(command.state === 'unmetered' ? undefined : command.state)
       return
     }
     if (command.type === 'block-viewer') {

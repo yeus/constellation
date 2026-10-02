@@ -10,10 +10,34 @@
       Constellation shares a live exact or approximate location directly with
       people who receive a time-limited private link.
     </p>
+    <p>
+      Location updates travel over end-to-end encrypted peer connections, with a
+      relay only for reachability. Links can be revoked at any time and expire on
+      their own.
+    </p>
   </description>
   <launchable type="desktop-id">space.taskyon.constellation.desktop</launchable>
   <provides>
     <binary>constellation</binary>
   </provides>
-  <url type="homepage">https://gitlab.com/xyntopia/constellation</url>
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+  </categories>
+  <developer id="space.taskyon">
+    <name>Xyntopia</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <url type="homepage">https://github.com/yeus/constellation</url>
+  <url type="bugtracker">https://github.com/yeus/constellation/issues</url>
+  <url type="vcs-browser">https://github.com/yeus/constellation</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/yeus/constellation/main/packaging/flatpak/screenshots/constellation-desktop.png</image>
+      <caption>Share a private live-location link from the map</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.1.0" date="2026-10-02" />
+  </releases>
 </component>

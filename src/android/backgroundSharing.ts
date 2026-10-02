@@ -1,10 +1,8 @@
 import type { BrowserLocationState } from '../location/browser.ts'
-import { shareExpiryFor, type ShareDraft } from '../shareDraft.ts'
+import { shareExpiryFor, type ShareDraft, type SharePauseReason } from '../shareDraft.ts'
 import type { PrivateState } from '../sharing/privateStore.ts'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
-
-export type BackgroundPolicyPause = 'metered' | 'data-saver'
 
 export interface AndroidBackgroundStatus {
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
@@ -18,7 +16,7 @@ export interface AndroidBackgroundStatus {
   }[]
   readonly location: BrowserLocationState
   readonly message: string
-  readonly pauseReason?: BackgroundPolicyPause
+  readonly pauseReason?: SharePauseReason
   readonly sampling?: 'balanced' | 'saver'
 }
 

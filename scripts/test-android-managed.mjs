@@ -323,7 +323,17 @@ const main = async () => {
       }
     } else buildThreeWayApk()
     await runProfile('modern', undefined, ['--metered-policy-smoke'], threeWayApk)
-    console.log('Android metered/Data Saver policy paused and resumed with the share intact.')
+    console.log('Android per-link metered policy paused only the opted-in link.')
+    return
+  }
+  if (process.argv.includes('--restricted-start-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runProfile('modern', undefined, ['--restricted-start-smoke'], threeWayApk)
+    console.log('Android applied the network restriction before any restricted share published.')
     return
   }
   if (process.argv.includes('--reboot-smoke')) {
