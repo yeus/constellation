@@ -70,6 +70,9 @@ jobs:
       - name: Install dependencies
         run: corepack yarn install --immutable
 
+      - name: Build vendor packages
+        run: corepack yarn build:vendor
+
       - name: Share-flow regression
         run: corepack yarn playwright test tests/share-flow.spec.ts --workers=1
 

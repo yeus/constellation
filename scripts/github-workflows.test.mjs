@@ -29,6 +29,19 @@ test('GitHub Actions owns quality, browser regression, and Pages deployment', ()
   assert.match(workflow, /secrets\.ANDROID_APP_LINK_SHA256/)
 })
 
+test('browser regression builds vendor packages before starting Playwright', () => {
+  const workflow = ci()
+  const job = workflow.slice(
+    workflow.indexOf('browser-regression:'),
+    workflow.indexOf('pages-build:'),
+  )
+  const vendor = job.indexOf('corepack yarn build:vendor')
+  const playwright = job.indexOf('corepack yarn playwright test tests/share-flow.spec.ts')
+  assert.ok(vendor !== -1, 'browser regression must build the vendored packages')
+  assert.ok(playwright !== -1, 'browser regression must run the share-flow spec')
+  assert.ok(vendor < playwright, 'vendored packages must be built before Playwright starts')
+})
+
 test('tagged GitHub releases build Android and both Linux packages before publishing', () => {
   const workflow = release()
   assert.doesNotMatch(workflow, /\\\$\{/)

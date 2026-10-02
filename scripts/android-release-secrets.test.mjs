@@ -632,7 +632,10 @@ test('GitHub sync never creates a missing Constellation signing identity', (t) =
   const result = runSync(fixture, 'YES\n')
 
   assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /existing Constellation Android signing identity|new signing identity/i)
+  assert.match(
+    result.stderr,
+    /existing Constellation Android signing identity|new signing identity/i,
+  )
   assert.equal(fs.existsSync(fixture.githubWrites), false)
   assert.deepEqual(JSON.parse(fs.readFileSync(fixture.storePath, 'utf8')), {})
 })
