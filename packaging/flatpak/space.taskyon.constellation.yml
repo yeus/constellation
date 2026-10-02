@@ -36,9 +36,9 @@ modules:
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
     build-commands:
-      - node yarn-4.16.0.js plugin import flatpak-node/flatpak-yarn.js
-      - node yarn-4.16.0.js install --immutable
-      - node yarn-4.16.0.js tauri build --no-bundle
+      - node yarn-4.16.0.cjs plugin import flatpak-node/flatpak-yarn.js
+      - node yarn-4.16.0.cjs install --immutable
+      - node yarn-4.16.0.cjs tauri build --no-bundle
       - install -Dm755 src-tauri/target/release/constellation /app/bin/constellation
       - install -Dm644 packaging/flatpak/space.taskyon.constellation.desktop /app/share/applications/space.taskyon.constellation.desktop
       - install -Dm644 packaging/flatpak/space.taskyon.constellation.metainfo.xml /app/share/metainfo/space.taskyon.constellation.metainfo.xml
@@ -65,7 +65,7 @@ modules:
       - type: file
         url: https://repo.yarnpkg.com/4.16.0/packages/yarnpkg-cli/bin/yarn.js
         sha256: ba05224324578801b9cc98170d64aa50b9a36733b440fb0942306da3fbbdc7d1
-        dest-filename: yarn-4.16.0.js
+        dest-filename: yarn-4.16.0.cjs
       # Generated offline dependency sources (pinned URLs and checksums).
       # Regenerate with the flatpak-builder-tools generators after lockfile changes.
       - generated-sources.json

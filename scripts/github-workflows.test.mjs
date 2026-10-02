@@ -54,3 +54,19 @@ test('tagged GitHub releases build Android and both Linux packages before publis
   assert.match(workflow, /scripts\/publish-github-release\.sh/)
   assert.doesNotMatch(publisher(), /\\\$\{/)
 })
+
+test('release jobs install dependencies before invoking repository build tools', () => {
+  const workflow = release()
+  const appimage = workflow.slice(workflow.indexOf('appimage:'), workflow.indexOf('flatpak:'))
+  const install = appimage.indexOf('corepack yarn install --immutable')
+  const build = appimage.indexOf('nix run .#build-desktop-release-appimage')
+  assert.ok(install !== -1, 'the AppImage job must install dependencies')
+  assert.ok(build !== -1, 'the AppImage job must run the flake builder')
+  assert.ok(install < build, 'the AppImage job must install dependencies before nix run')
+})
+
+test('release jobs use the Android SDK action that skips the removed tools package', () => {
+  const workflow = release()
+  assert.match(workflow, /android-actions\/setup-android@v4/)
+  assert.doesNotMatch(workflow, /android-actions\/setup-android@v3/)
+})

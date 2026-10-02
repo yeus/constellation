@@ -60,6 +60,17 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+
       - name: Build AppImage
         run: nix run .#build-desktop-release-appimage
 
@@ -140,7 +151,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
