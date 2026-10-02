@@ -17,6 +17,7 @@ const createFixture = (t, secretStore = {}) => {
   const config = path.join(home, '.config')
   const storePath = path.join(root, 'secret-store.json')
   const keytoolCalls = path.join(root, 'keytool-calls')
+  const githubWrites = path.join(root, 'github-writes')
   fs.mkdirSync(bin)
   fs.mkdirSync(config, { recursive: true })
   fs.writeFileSync(storePath, JSON.stringify(secretStore))
@@ -64,6 +65,21 @@ if (process.argv[2] === 'search') {
     { mode: 0o755 },
   )
   fs.writeFileSync(
+    path.join(bin, 'gh'),
+    `#!/usr/bin/env node
+import fs from 'node:fs'
+const args = process.argv.slice(2)
+if (args[0] === 'auth' && args[1] === 'status') process.exit(0)
+if (args[0] === 'secret' && args[1] === 'set') {
+  for await (const _chunk of process.stdin) {}
+  fs.appendFileSync(process.env.CONSTELLATION_TEST_GITHUB_WRITES, args[2] + '\\n')
+  process.exit(0)
+}
+process.exit(2)
+`,
+    { mode: 0o755 },
+  )
+  fs.writeFileSync(
     path.join(bin, 'keytool'),
     `#!/usr/bin/env node
 import fs from 'node:fs'
@@ -103,6 +119,7 @@ process.exit(2)
     bin,
     config,
     home,
+    githubWrites,
     keytoolCalls,
     storePath,
     env: {
@@ -111,6 +128,7 @@ process.exit(2)
       XDG_CONFIG_HOME: config,
       CONSTELLATION_TEST_SECRET_STORE: storePath,
       CONSTELLATION_TEST_KEYTOOL_CALLS: keytoolCalls,
+      CONSTELLATION_TEST_GITHUB_WRITES: githubWrites,
     },
   }
 }
@@ -126,6 +144,17 @@ const runPrepare = (fixture, environment = {}, interactive = false, input = '') 
       interactive ? '1' : '0',
     ],
     { encoding: 'utf8', env: { ...fixture.env, ...environment }, input },
+  )
+
+const runSync = (fixture, input = '', environment = {}) =>
+  spawnSync(
+    'bash',
+    [path.join(projectRoot, 'scripts/sync-android-signing-secrets.sh'), 'synthetic/repo'],
+    {
+      encoding: 'utf8',
+      env: { ...fixture.env, ...environment },
+      input,
+    },
   )
 
 const runRestore = (fixture, environment = {}) =>
@@ -570,6 +599,42 @@ test('retries an unavailable Secret Service before offering a fresh identity', (
     typeof JSON.parse(fs.readFileSync(fixture.storePath, 'utf8')).android_keystore_base64,
     'string',
   )
+})
+
+test('uploads a validated existing Constellation signing identity only after confirmation', (t) => {
+  const secrets = {
+    android_keystore_base64: Buffer.from('synthetic-existing-keystore').toString('base64'),
+    android_keystore_password: 'synthetic-store-password',
+    android_key_alias: 'synthetic-release-alias',
+    android_key_password: 'synthetic-key-password',
+  }
+  const fixture = createFixture(t, secrets)
+
+  const declined = runSync(fixture, 'NO\n')
+  assert.equal(declined.status, 0, `${declined.stdout}\n${declined.stderr}`)
+  assert.equal(fs.existsSync(fixture.githubWrites), false)
+
+  const result = runSync(fixture, 'YES\n')
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  assert.deepEqual(fs.readFileSync(fixture.githubWrites, 'utf8').trim().split('\n'), [
+    'ANDROID_KEYSTORE_BASE64',
+    'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_ALIAS',
+    'ANDROID_KEY_PASSWORD',
+  ])
+  for (const value of Object.values(secrets)) {
+    assert.equal(`${result.stdout}\n${result.stderr}`.includes(value), false)
+  }
+})
+
+test('GitHub sync never creates a missing Constellation signing identity', (t) => {
+  const fixture = createFixture(t)
+  const result = runSync(fixture, 'YES\n')
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /existing Constellation Android signing identity|new signing identity/i)
+  assert.equal(fs.existsSync(fixture.githubWrites), false)
+  assert.deepEqual(JSON.parse(fs.readFileSync(fixture.storePath, 'utf8')), {})
 })
 
 test('rejects new identity setup when an existing local keystore is present', (t) => {

@@ -426,6 +426,7 @@ EOF
               openssl
               pkg-config
               ripgrep
+              gh
               xvfb-run
               jdk
               rustToolchain
