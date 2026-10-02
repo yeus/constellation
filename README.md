@@ -69,6 +69,24 @@ connections, transport types, viewer counts, and last-fix age. Peer IDs and
 addresses are hidden unless you explicitly reveal them; they are never copied
 into session logs. Treat revealed details and screenshots as sensitive.
 
+## Releases and downloads
+
+Tagged builds are published on GitHub Releases:
+
+- Latest release: <https://github.com/yeus/constellation/releases/latest>
+- All releases: <https://github.com/yeus/constellation/releases>
+
+A release contains the signed Android APK, Linux AppImage, Linux Flatpak, and a
+`SHA256SUMS` file. The artifact names are:
+
+- Android: `constellation-android-release-arm64-v8a.apk`
+- Linux AppImage: `constellation-desktop-<version>-x86_64.AppImage`
+- Linux Flatpak: `constellation-desktop-<version>-x86_64.flatpak`
+
+The hosted browser app is intended to be available at
+<https://constellation.taskyon.space>. Until GitHub Pages, DNS, and TLS are
+enabled for the repository, use the release assets or a local build instead.
+
 ## Development
 
 The locked Nix shell includes Node 22, Yarn 4, Rust, Java 17, Tauri's Linux
