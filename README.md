@@ -16,10 +16,18 @@ Constellation is a free, open-source app for live location sharing. Create a
 private link or QR code and send it to someone you trust. They can open it in
 their browser without creating an account.
 
-Your location travels over **end-to-end encrypted, peer-to-peer connections**:
-only the people with your private link can receive it. A relay may help the
-connection reach them, but cannot read the encrypted location updates. There
-is no central location-history service.
+> **No cloud location history.** Your location updates travel between your
+> device and the people you authorize over end-to-end encrypted,
+> peer-to-peer connections. If a direct connection is unavailable, a relay may
+> forward the encrypted traffic, but it cannot read your location.
+> Constellation has no cloud database for locations and keeps no server-side
+> location history.
+>
+> While sharing, the app holds the latest position temporarily in memory on
+> participating devices; it does not save a location timeline. Private app
+> data such as saved links and sharing settings may be kept in protected
+> storage on your device. People you share with can still copy or save what
+> they see.
 
 > **Early release:** Constellation 0.1 is under active development. Background
 > updates can be delayed by battery settings, GPS availability, or connectivity.
