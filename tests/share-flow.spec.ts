@@ -36,6 +36,61 @@ test('introduces encrypted P2P sharing and keeps the note dismissed', async ({ p
   await expect(page.getByRole('dialog')).toContainText(/no central location history/i)
 })
 
+test('offers direct app downloads to Android and Linux web visitors', async ({ browser }) => {
+  const releasesUrl = 'https://github.com/yeus/constellation/releases/latest'
+  const platforms = [
+    {
+      name: 'Android',
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36',
+      expectsHint: true,
+    },
+    {
+      name: 'Linux',
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+      expectsHint: true,
+    },
+    {
+      name: 'Windows',
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+      expectsHint: false,
+    },
+  ]
+
+  for (const { name, userAgent, expectsHint } of platforms) {
+    const context = await browser.newContext({
+      baseURL: 'http://127.0.0.1:4173',
+      userAgent,
+    })
+    const page = await context.newPage()
+    await page.goto('/')
+
+    const introduction = page.getByRole('region', { name: 'Privacy introduction' })
+    const downloadLink = introduction.getByRole('link', { name: 'Get Android and Linux apps' })
+    if (expectsHint) {
+      await expect(introduction, name).toContainText(
+        'Android app can keep sharing in the background',
+      )
+      await expect(downloadLink).toHaveAttribute('href', releasesUrl)
+    } else {
+      await expect(downloadLink, name).toHaveCount(0)
+    }
+
+    await page.getByRole('button', { name: 'Open menu' }).click()
+    await expect(page.getByRole('link', { name: 'GitHub project' })).toHaveAttribute(
+      'href',
+      'https://github.com/yeus/constellation',
+    )
+    await expect(page.getByRole('link', { name: 'Latest release' })).toHaveAttribute(
+      'href',
+      releasesUrl,
+    )
+    await context.close()
+  }
+})
+
 test('explains relay and local-storage limits in About', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Open menu' }).click()

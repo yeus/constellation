@@ -214,6 +214,16 @@ button {
   line-height: 1.4;
 }
 
+.intro-note__downloads {
+  margin-top: 0.65rem;
+}
+
+.intro-note__downloads a {
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
 .intro-note__actions {
   display: flex;
   justify-content: flex-end;
@@ -244,14 +254,22 @@ button {
   box-shadow: 0 0.6rem 1.8rem var(--sheet-shadow);
 }
 
-.app-menu button {
+.app-menu button,
+.app-menu a {
+  display: flex;
+  align-items: center;
   min-height: 2.5rem;
   padding: 0 0.65rem;
   border: 0;
   border-radius: 0.5rem;
   background: transparent;
+  color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.app-menu a {
+  text-decoration: none;
 }
 
 .app-menu button[aria-pressed='true'] {

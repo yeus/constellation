@@ -81,6 +81,22 @@
       <button type="button" @click="openFollowing">
         Following ({{ runtimeState.following.length }})
       </button>
+      <a
+        v-if="!isNative"
+        href="https://github.com/yeus/constellation/releases/latest"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Latest release
+      </a>
+      <a
+        v-if="!isNative"
+        href="https://github.com/yeus/constellation"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        GitHub project
+      </a>
     </section>
 
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
@@ -99,6 +115,19 @@
         Constellation uses end-to-end encrypted P2P connections, sometimes through a relay. There is
         no central location history.
       </p>
+      <div v-if="showNativeAppHint" class="intro-note__downloads">
+        <p>
+          On Android or Linux? The native apps add features. The Android app can keep sharing in the
+          background.
+        </p>
+        <a
+          href="https://github.com/yeus/constellation/releases/latest"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Get Android and Linux apps
+        </a>
+      </div>
       <div class="intro-note__actions">
         <button type="button" @click="openAbout">How it works</button>
         <button type="button" @click="dismissIntro">Got it</button>
@@ -438,6 +467,7 @@ const sessionLog = createSessionLog(
 sessionLog.record({ level: 'info', event: 'app.started' })
 
 const isNative = '__TAURI_INTERNALS__' in window
+const showNativeAppHint = !isNative && /Android|Linux/i.test(navigator.userAgent)
 const isAndroid = isNative && /Android/i.test(navigator.userAgent)
 const androidLocationApi = isAndroid ? createTauriAndroidLocationApi() : undefined
 const locationSource = createBrowserLocationSource({
