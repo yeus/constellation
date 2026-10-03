@@ -85,10 +85,11 @@ the GitHub project and app downloads.
 
 ## Screenshots
 
-Browser screenshots of the welcome screen, sharing choices, and Following list
-are generated in CI and attached to new releases. You can find them on the
-[release page](https://github.com/yeus/constellation/releases/latest). A reviewed
-gallery will be added here once those images are available.
+<p align="center">
+  <img src="https://github.com/yeus/constellation/releases/download/v0.1.0-test.8/constellation-welcome.png" height="400" alt="Browser privacy introduction over the map">
+  <img src="https://github.com/yeus/constellation/releases/download/v0.1.0-test.8/constellation-share.png" height="400" alt="Browser sharing settings for precision and duration">
+  <img src="https://github.com/yeus/constellation/releases/download/v0.1.0-test.8/constellation-following.png" height="400" alt="Browser Following list with two fictional locations">
+</p>
 
 ## Help and contribute
 
