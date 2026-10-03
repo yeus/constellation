@@ -1,5 +1,5 @@
 <template>
-  <div class="location-map">
+  <div class="location-map" :data-rendered="mapRendered">
     <div ref="mapElement" class="location-map__canvas" />
     <p v-if="mapNotice" class="location-map__notice" role="alert">
       {{ mapNotice }}
@@ -8,8 +8,7 @@
 </template>
 
 <script setup lang="ts">
-import type { GeoJSONSource } from 'maplibre-gl'
-import maplibregl from 'maplibre-gl'
+import { AttributionControl, Map, NavigationControl, type GeoJSONSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -47,12 +46,13 @@ const emit = defineEmits<{
 
 const mapElement = ref<HTMLDivElement | null>(null)
 const mapNotice = ref('')
+const mapRendered = ref(false)
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
 const runtime = createPmtilesRuntime()
-let map: maplibregl.Map | null = null
+let map: Map | null = null
 
-const addLocationLayers = (target: maplibregl.Map): void => {
+const addLocationLayers = (target: Map): void => {
   if (target.getSource(LOCATION_SOURCE_ID)) return
   target.addSource(LOCATION_SOURCE_ID, {
     type: 'geojson',
@@ -116,16 +116,16 @@ const initialize = (): void => {
     }
     runtime.setup()
     emit('diagnostic', { level: 'info', event: 'map.runtime.ready' })
-    map = new maplibregl.Map({
+    map = new Map({
       container: mapElement.value,
       style: createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value),
       center: [0, 20],
       zoom: 1.5,
       attributionControl: false,
     })
-    map.addControl(new maplibregl.NavigationControl(), 'bottom-right')
+    map.addControl(new NavigationControl(), 'bottom-right')
     map.addControl(
-      new maplibregl.AttributionControl({ compact: false, customAttribution: MAP_ATTRIBUTION }),
+      new AttributionControl({ compact: false, customAttribution: MAP_ATTRIBUTION }),
       'bottom-right',
     )
     map.on('click', (event) => {
@@ -140,6 +140,11 @@ const initialize = (): void => {
     map.on('style.load', () => {
       if (map) addLocationLayers(map)
       emit('diagnostic', { level: 'info', event: 'map.style.loaded' })
+    })
+    map.on('idle', () => {
+      mapRendered.value = Boolean(
+        map?.loaded() && map.queryRenderedFeatures().some((feature) => feature.source === 'world'),
+      )
     })
     map.on('zoom', updateLocations)
     map.on('error', ({ error }) => {
@@ -167,7 +172,8 @@ const initialize = (): void => {
 
 const updateLocations = (): void => {
   const source = map?.getSource<GeoJSONSource>(LOCATION_SOURCE_ID)
-  if (source && map) source.setData(createLocationFeatureCollection(props.locations, map.getZoom()))
+  if (source && map)
+    void source.setData(createLocationFeatureCollection(props.locations, map.getZoom()))
 }
 
 const updateTheme = (event: MediaQueryListEvent): void => {
