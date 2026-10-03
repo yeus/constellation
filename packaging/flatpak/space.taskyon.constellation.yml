@@ -36,7 +36,7 @@ modules:
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
     build-commands:
-      - node yarn-4.16.0.cjs plugin import flatpak-node/flatpak-yarn.js
+      - node yarn-4.16.0.cjs plugin import ./flatpak-node/flatpak-yarn.js
       - node yarn-4.16.0.cjs install --immutable
       - node yarn-4.16.0.cjs tauri build --no-bundle
       - install -Dm755 src-tauri/target/release/constellation /app/bin/constellation
