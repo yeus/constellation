@@ -7,6 +7,7 @@ const metainfo = fs.readFileSync(
   'packaging/flatpak/space.taskyon.constellation.metainfo.xml',
   'utf8',
 )
+const yarnLock = fs.readFileSync('yarn.lock', 'utf8')
 const yarnSources = JSON.parse(fs.readFileSync('packaging/flatpak/generated-sources.json', 'utf8'))
 const cargoSources = JSON.parse(fs.readFileSync('packaging/flatpak/cargo-sources.json', 'utf8'))
 
@@ -16,6 +17,7 @@ test('local Flatpak manifest builds offline from pinned dependency sources', () 
   assert.match(manifest, /CARGO_NET_OFFLINE: 'true'/)
   assert.match(manifest, /YARN_ENABLE_NETWORK: '0'/)
   assert.match(manifest, /YARN_ENABLE_GLOBAL_CACHE: '1'/)
+  assert.match(manifest, /secret-env:\s*\n\s*- CONSTELLATION_BUILD_COMMIT/)
   assert.match(manifest, /yarn-4\.16\.0\.cjs/)
   assert.doesNotMatch(manifest, /yarn-4\.16\.0\.js/)
   assert.match(manifest, /plugin import \.\/flatpak-node\/flatpak-yarn\.js/)
@@ -51,6 +53,24 @@ test('generated Yarn sources are pinned and include the Flatpak plugin', () => {
       assert.ok(entry.url && entry.sha512, 'file sources need a URL and checksum')
     }
   }
+})
+
+test('generated Yarn sources cover every registry locator in yarn.lock', () => {
+  const registryLocators = [...yarnLock.matchAll(/^ {2}resolution: "([^"]+)"$/gm)]
+    .map((match) => match[1])
+    .filter((resolution) => resolution.includes('@npm:'))
+  const generatedFilenames = yarnSources
+    .filter(
+      (entry) => entry.type === 'file' && entry.dest === 'flatpak-node/yarn-berry/cache/locator',
+    )
+    .map((entry) => entry['dest-filename'])
+  const missing = registryLocators.filter((resolution) => {
+    const encodedLocator = Buffer.from(resolution).toString('base64')
+    return !generatedFilenames.some((filename) => filename.includes(encodedLocator))
+  })
+
+  assert.ok(registryLocators.length > 0, 'yarn.lock must contain registry package locators')
+  assert.deepEqual(missing, [], 'every Yarn registry locator needs a generated offline source')
 })
 
 test('generated Cargo sources vendor every registry package with a checksum', () => {

@@ -141,11 +141,19 @@ python3 flatpak-cargo-generator.py \
   -o packaging/flatpak/cargo-sources.json
 ```
 
+The repository keeps a small adjustment in the generated `flatpak-node` Yarn
+plugin: its Yarn Classic CLI argument stays optional and fails explicitly only
+if a Yarn Classic Git dependency is added. Preserve that adjustment when
+regenerating the file; `yarn lint:flatpak` checks it along with source coverage.
+
 Validate the manifest, MetaInfo, and generated sources with:
 
 ```sh
 yarn lint:flatpak
 ```
+
+This check also confirms that every registry package in `yarn.lock` has a generated offline
+source, so a dependency update cannot silently leave the Flatpak cache stale.
 
 For release review, generate a pinned **review draft** from the local manifest:
 

@@ -1087,13 +1087,6 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/@mapbox/unitbezier/-/unitbezier-0.0.1.tgz",
-        "sha512": "9cc92e0d716feb4681afdb28506e6af86bd960bfb62991d5beca850b3aa790611fe3a5367ef9b2b4768455cd7f6196e22e7f17f9e4774335f5f9dc033b597197",
-        "dest-filename": "unitbezier-QG1hcGJveC91bml0YmV6aWVyQG5wbTowLjAuMQ==-97f39d4fbd.tgz",
-        "dest": "flatpak-node/yarn-berry/cache/locator"
-    },
-    {
-        "type": "file",
         "url": "https://registry.npmjs.org/@mapbox/unitbezier/-/unitbezier-1.0.0.tgz",
         "sha512": "7ea779d797e306600d2861ac436f3a1365af8ff5ef0c5a46cf0271ab8088ea3310b9ee8ecb4e2e08aa7e256285d34c514e693a704bb58cf27da77c6a1fc616a9",
         "dest-filename": "unitbezier-QG1hcGJveC91bml0YmV6aWVyQG5wbToxLjAuMA==-40749dd7f4.tgz",
@@ -1101,16 +1094,9 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/@mapbox/vector-tile/-/vector-tile-2.0.5.tgz",
-        "sha512": "a578fc9bb293b2a66dfb58ec134c48a46bea4d26db95f92e1092ff34998d78f32d130c4ef15dd7303a3d58c49f0dea87bc2b4123d2e6b78986706475d3379c9b",
-        "dest-filename": "vector-tile-QG1hcGJveC92ZWN0b3ItdGlsZUBucG06Mi4wLjU=-e8e856551c.tgz",
-        "dest": "flatpak-node/yarn-berry/cache/locator"
-    },
-    {
-        "type": "file",
-        "url": "https://registry.npmjs.org/@mapbox/whoots-js/-/whoots-js-3.1.0.tgz",
-        "sha512": "12ce96703d273b997ed813904b8b8b7cd3d841a3437dba2ddd7d57528968cfec7498f0d2dde78e459265d3a1d78f0046d5f386c02467ccaf3c2cc771291adde9",
-        "dest-filename": "whoots-js-QG1hcGJveC93aG9vdHMtanNAbnBtOjMuMS4w-fe9e959a90.tgz",
+        "url": "https://registry.npmjs.org/@mapbox/vector-tile/-/vector-tile-3.0.0.tgz",
+        "sha512": "41fd744b5b881cc936d2b8bf215067a52f9eb1412455a4791dfb66cfcf234c89eba665a03c625f3dedcb5638e513beedacbc7cb47eaa8d31bbb961fd848abfd1",
+        "dest-filename": "vector-tile-QG1hcGJveC92ZWN0b3ItdGlsZUBucG06My4wLjA=-ccede78496.tgz",
         "dest": "flatpak-node/yarn-berry/cache/locator"
     },
     {
@@ -1122,9 +1108,9 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/@maplibre/maplibre-gl-style-spec/-/maplibre-gl-style-spec-24.10.0.tgz",
-        "sha512": "962721c5289a80c10106ba87174b6bb4c407f512a1fbd8d4948265d2a5b4407bedd87fed6ef516744f99cc8d89774fe94fb8ff89abcba2794fbbb110fe2c533b",
-        "dest-filename": "maplibre-gl-style-spec-QG1hcGxpYnJlL21hcGxpYnJlLWdsLXN0eWxlLXNwZWNAbnBtOjI0LjEwLjA=-43ababa29c.tgz",
+        "url": "https://registry.npmjs.org/@maplibre/maplibre-gl-style-spec/-/maplibre-gl-style-spec-26.4.4.tgz",
+        "sha512": "846e11651e0f05dffee80dce0dd677027411175d3a650935cb76e1c0383c6c7fc0e0ecf6b67454255556b3d0596ba81767577750a7bcf42f8c9bea2518110bbc",
+        "dest-filename": "maplibre-gl-style-spec-QG1hcGxpYnJlL21hcGxpYnJlLWdsLXN0eWxlLXNwZWNAbnBtOjI2LjQuNA==-a5af3e5c7e.tgz",
         "dest": "flatpak-node/yarn-berry/cache/locator"
     },
     {
@@ -2487,9 +2473,9 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/earcut/-/earcut-3.2.3.tgz",
-        "sha512": "be74b8015c29d4a1c0175de2d6fa75ff60f97af5b2de4e6efe25bf07cd5056c519b55f1cbf6b54d1bd9534596abe1e24630ac53037633c27c099fc895bdcb5e1",
-        "dest-filename": "earcut-ZWFyY3V0QG5wbTozLjIuMw==-38660ec1ce.tgz",
+        "url": "https://registry.npmjs.org/earcut/-/earcut-3.2.4.tgz",
+        "sha512": "14773ac8da674ce441d2d339926674de20f6983b8d6a40c4da5bdfe07c355e47f1b441c81958b4d41fc6a944b0c7e35c0b55868e27407e94d7cde00bb4fb5fa6",
+        "dest-filename": "earcut-ZWFyY3V0QG5wbTozLjIuNA==-c50c93a6a0.tgz",
         "dest": "flatpak-node/yarn-berry/cache/locator"
     },
     {
@@ -3257,9 +3243,9 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/maplibre-gl/-/maplibre-gl-5.23.0.tgz",
-        "sha512": "6a8bbc6013454bcb95b435855add16ffaa28adf975f30b7ea0803c7e75e4d648af8e46ed5e2f601ab42f7e54e9c2b477846d7769674875b61678dd0d14c57b6a",
-        "dest-filename": "maplibre-gl-bWFwbGlicmUtZ2xAbnBtOjUuMjMuMA==-9c244e5a87.tgz",
+        "url": "https://registry.npmjs.org/maplibre-gl/-/maplibre-gl-6.4.1.tgz",
+        "sha512": "2b3c502ad7c1bbfa52cf50bec96d61352f5eca3da1da50bbb9f7408bafd212dd7bee7de801f0df9949ac9517c975763b45e00505c9efc2caa68b2a0386d03d19",
+        "dest-filename": "maplibre-gl-bWFwbGlicmUtZ2xAbnBtOjYuNC4x-622aa7d247.tgz",
         "dest": "flatpak-node/yarn-berry/cache/locator"
     },
     {
@@ -3561,13 +3547,6 @@
         "url": "https://registry.npmjs.org/pathe/-/pathe-2.0.3.tgz",
         "sha512": "5948c6700a8fd6041a72841ef8e049b0503b2dde03c97b9422367971cef970b1ef27b76d36c4ee8298712000f0b294be02b68051e3c22ab495b4f2c58ff17cf3",
         "dest-filename": "pathe-cGF0aGVAbnBtOjIuMC4z-c118dc5a8b.tgz",
-        "dest": "flatpak-node/yarn-berry/cache/locator"
-    },
-    {
-        "type": "file",
-        "url": "https://registry.npmjs.org/pbf/-/pbf-4.0.2.tgz",
-        "sha512": "2746a3c4046165fa5411e6f162cd6f84c18cb8b497b417b57be7c53c3adfdae036860a3e52c84a7cd5163b3f761c9373ebf345117b1e40f75d9c7913ade591aa",
-        "dest-filename": "pbf-cGJmQG5wbTo0LjAuMg==-c59674bf6f.tgz",
         "dest": "flatpak-node/yarn-berry/cache/locator"
     },
     {
