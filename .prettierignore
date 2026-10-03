@@ -13,3 +13,5 @@ packaging/flatpak/cargo-sources.json
 public/map-assets/sprites/v4/
 test-results/
 yarn.lock
+/.screenshots/
+/.ci-logs/

@@ -61,3 +61,21 @@ printf 'flatpak-builder %s\n' "$*" >> "$FLATPAK_CALL_LOG"
     /flatpak build-bundle .*constellation-desktop-0\.1\.0-x86_64\.flatpak space\.taskyon\.constellation stable /,
   )
 })
+
+test('Nix Flatpak build environments provide elfutils', () => {
+  const flake = fs.readFileSync(path.join(projectRoot, 'flake.nix'), 'utf8')
+  const appStart = flake.indexOf('buildFlatpakScript =')
+  const appEnd = flake.indexOf('\n      in', appStart)
+  const shellStart = flake.indexOf('devShells.default = pkgs.mkShell')
+  const shellEnd = flake.indexOf(
+    '++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.libsecret',
+    shellStart,
+  )
+  const app = flake.slice(appStart, appEnd)
+  const shell = flake.slice(shellStart, shellEnd)
+
+  assert.ok(appStart !== -1 && appEnd !== -1, 'the flake must define its Flatpak app')
+  assert.ok(shellStart !== -1 && shellEnd !== -1, 'the flake must define its development shell')
+  assert.match(app, /\$\{pkgs\.elfutils\}\/bin/, 'the Flatpak app must expose eu-strip')
+  assert.match(shell, /^\s+elfutils\s*$/m, 'the development shell must provide elfutils')
+})

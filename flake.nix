@@ -413,7 +413,7 @@ EOF
         buildFlatpakScript = pkgs.writeShellScriptBin "constellation-build-flatpak" ''
           set -euo pipefail
           repo_root="$PWD"
-          export PATH="${pkgs.appstream}/bin:${pkgs.flatpak}/bin:${pkgs.flatpak-builder}/bin:${pkgs.nodejs_22}/bin:$PATH"
+          export PATH="${pkgs.appstream}/bin:${pkgs.elfutils}/bin:${pkgs.flatpak}/bin:${pkgs.flatpak-builder}/bin:${pkgs.nodejs_22}/bin:$PATH"
           exec "$repo_root/scripts/build-flatpak.sh"
         '';
       in
@@ -432,6 +432,7 @@ EOF
               rustToolchain
               androidComposition.androidsdk
               androidComposition.platform-tools
+              elfutils
               flatpak
               flatpak-builder
             ])

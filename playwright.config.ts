@@ -4,6 +4,7 @@ import { browserProcessEnvironment } from './scripts/browser-environment.mjs'
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: 'screenshots.spec.ts',
   fullyParallel: true,
   use: {
     baseURL: 'http://127.0.0.1:4173',

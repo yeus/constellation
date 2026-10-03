@@ -60,9 +60,13 @@ while IFS= read -r -d '' asset; do
       >/dev/null
   fi
 
+  content_type="application/octet-stream"
+  if [[ "$asset_name" == *.png ]]; then
+    content_type="image/png"
+  fi
   github_api \
     --request POST \
-    --header 'Content-Type: application/octet-stream' \
+    --header "Content-Type: $content_type" \
     --data-binary "@$asset" \
     "$upload_url?name=$encoded_name" \
     >/dev/null

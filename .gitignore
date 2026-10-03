@@ -19,6 +19,7 @@ src-tauri/icons/*
 vendor/taskyon/*/dist/
 playwright-report/
 test-results/
+/.ci-logs/
 .yarn/install-state.gz
 *.local
 *.log
@@ -27,3 +28,4 @@ test-results/
 /phonelogs.txt
 /cierror.txt
 .winx/
+/.screenshots/

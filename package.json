@@ -47,7 +47,8 @@
     "test:vendor": "yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test",
     "test": "yarn build:vendor && yarn test:vendor && yarn test:unit && yarn test:scripts",
     "test:e2e": "yarn build:vendor && playwright test",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "screenshots": "yarn build:vendor && playwright test --config screenshots.config.ts"
   },
   "dependencies": {
     "@libp2p/crypto": "5.1.23",

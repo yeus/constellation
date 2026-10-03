@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
+import { withTwoSources } from './fixtures/two-sources.ts'
 
 test('a viewer privately offers a separately consented return share to the source', async ({
   browser,
@@ -551,57 +552,7 @@ test('follows two independent sources and stops one without removing the other',
   test.skip(testInfo.project.name !== 'desktop')
   if (!baseURL) throw new Error('The test requires a configured base URL.')
 
-  const firstContext = await browser.newContext({
-    baseURL,
-    geolocation: { latitude: 48.1372, longitude: 11.5756 },
-    permissions: ['geolocation'],
-  })
-  const secondContext = await browser.newContext({
-    baseURL,
-    geolocation: { latitude: 52.52, longitude: 13.405 },
-    permissions: ['geolocation'],
-  })
-  const viewerContext = await browser.newContext({ baseURL })
-  const first = await firstContext.newPage()
-  const second = await secondContext.newPage()
-  const viewer = await viewerContext.newPage()
-
-  try {
-    const links = await test.step('create two source links', () =>
-      Promise.all(
-        (
-          [
-            [first, 'River'],
-            [second, 'Forest'],
-          ] as const
-        ).map(async ([source, name]) => {
-          await source.goto('/')
-          await expect(source.getByRole('button', { name: 'Center on my location' })).toBeVisible()
-          await source.getByRole('button', { name: 'Share location' }).click()
-          await source.getByRole('textbox', { name: 'Share a name' }).fill(name)
-          await source.getByRole('button', { name: 'Create private link' }).click()
-          const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
-          await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
-          return url
-        }),
-      ))
-    parseShareInvitation(links[1]!)
-
-    await test.step('open first source', async () => {
-      await viewer.goto(links[0]!)
-      await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
-        timeout: 30_000,
-      })
-      await expect(viewer.getByText('Seeing 1')).toBeVisible()
-    })
-    await test.step('open second source', async () => {
-      await viewer.getByRole('button', { name: 'Open menu' }).click({ timeout: 5_000 })
-      await viewer.getByRole('button', { name: 'Follow a link' }).click({ timeout: 5_000 })
-      await viewer.getByRole('textbox', { name: 'Paste location link' }).fill(links[1]!)
-      await viewer.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
-      await expect(viewer.getByText('Seeing 2')).toBeVisible({ timeout: 30_000 })
-    })
-
+  await withTwoSources(browser, baseURL, {}, async ({ first, second, viewer }) => {
     await test.step('manage and stop one follow', async () => {
       await viewer.getByRole('button', { name: 'Open menu' }).click()
       await viewer.getByRole('button', { name: 'Following (2)' }).click()
@@ -627,11 +578,7 @@ test('follows two independent sources and stops one without removing the other',
       )
       await expect(following.getByText('Forest', { exact: true })).toBeVisible()
     })
-  } finally {
-    await viewerContext.close()
-    await secondContext.close()
-    await firstContext.close()
-  }
+  })
 })
 
 test('independent links from one source use unlinkable source peer identities', async ({

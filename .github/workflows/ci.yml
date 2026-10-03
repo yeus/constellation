@@ -1,4 +1,4 @@
-name: CI
+name: Checks and Deploy Website
 
 on:
   push:
@@ -84,6 +84,39 @@ jobs:
 
       - name: GitHub Pages preflight
         run: corepack yarn test:pages
+
+  screenshots:
+    name: Capture browser screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+
+      - name: Capture screenshots
+        run: corepack yarn screenshots
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-previews
+          path: .screenshots/*.png
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
   pages-build:
     name: Build GitHub Pages

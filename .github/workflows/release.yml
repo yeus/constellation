@@ -1,4 +1,4 @@
-name: Release
+name: Build and Publish Apps
 
 on:
   push:
@@ -96,6 +96,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             appstream \
+            elfutils \
             flatpak \
             flatpak-builder
 
@@ -191,6 +192,40 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  screenshots:
+    name: Capture browser screenshots
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+
+      - name: Capture screenshots
+        run: corepack yarn screenshots
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-screenshots
+          path: .screenshots/*.png
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish GitHub release
     needs:
@@ -198,6 +233,7 @@ jobs:
       - appimage
       - flatpak
       - android
+      - screenshots
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -223,6 +259,9 @@ jobs:
           test -s "$appimage"
           test -s "$flatpak"
           test -s "$apk"
+          test -s "release-assets/constellation-welcome.png"
+          test -s "release-assets/constellation-share.png"
+          test -s "release-assets/constellation-following.png"
           (
             cd release-assets
             sha256sum \

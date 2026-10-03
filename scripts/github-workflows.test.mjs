@@ -6,6 +6,32 @@ const ci = () => fs.readFileSync('.github/workflows/ci.yml', 'utf8')
 const release = () => fs.readFileSync('.github/workflows/release.yml', 'utf8')
 const publisher = () => fs.readFileSync('scripts/publish-github-release.sh', 'utf8')
 
+test('workflow names identify website deployment and application publishing', () => {
+  assert.match(ci(), /^name: Checks and Deploy Website\n/)
+  assert.match(release(), /^name: Build and Publish Apps\n/)
+})
+
+test('screenshots are previews in CI and required image assets in releases', () => {
+  for (const workflow of [ci(), release()]) {
+    const job = workflow.slice(
+      workflow.indexOf('  screenshots:'),
+      workflow.indexOf('  screenshots:') + 1800,
+    )
+    assert.match(job, /corepack yarn screenshots/)
+    assert.match(job, /include-hidden-files: true/)
+    assert.match(job, /path: \.screenshots\/\*\.png/)
+    assert.match(job, /if-no-files-found: error/)
+  }
+  const pages = ci().slice(ci().indexOf('  pages-build:'))
+  assert.doesNotMatch(pages, /- screenshots/)
+  const publish = release().slice(release().indexOf('  publish:'))
+  assert.match(publish, /- screenshots/)
+  for (const name of ['welcome', 'share', 'following']) {
+    assert.ok(publish.includes(`test -s "release-assets/constellation-${name}.png"`))
+  }
+  assert.match(publisher(), /image\/png/)
+})
+
 test('GitHub Actions owns quality, browser regression, and Pages deployment', () => {
   assert.equal(fs.existsSync('.gitlab-ci.yml'), false)
 
@@ -76,6 +102,19 @@ test('release jobs install dependencies before invoking repository build tools',
   assert.ok(install !== -1, 'the AppImage job must install dependencies')
   assert.ok(build !== -1, 'the AppImage job must run the flake builder')
   assert.ok(install < build, 'the AppImage job must install dependencies before nix run')
+})
+
+test('Flatpak release job installs elfutils for Flatpak debug-info processing', () => {
+  const workflow = release()
+  const flatpak = workflow.slice(workflow.indexOf('  flatpak:'), workflow.indexOf('  android:'))
+  const installStart = flatpak.indexOf('sudo apt-get install')
+  const installEnd = flatpak.indexOf('- name: Setup Node.js')
+  const install = flatpak.slice(installStart, installEnd)
+  const build = flatpak.indexOf('corepack yarn build:desktop:release:flatpak')
+  assert.ok(installStart !== -1 && installEnd !== -1, 'the Flatpak job must install its tools')
+  assert.match(install, /\belfutils\b/, 'the install step must include elfutils')
+  assert.ok(build !== -1, 'the Flatpak job must build the package')
+  assert.ok(installEnd < build, 'Flatpak build tools must be installed before building')
 })
 
 test('release jobs use the Android SDK action that skips the removed tools package', () => {
