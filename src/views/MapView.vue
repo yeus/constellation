@@ -76,6 +76,7 @@
       </button>
       <button type="button" @click="openAbout">Privacy and licenses</button>
       <button type="button" @click="copyLogs">Copy logs</button>
+      <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
       <button type="button" @click="openDiagnostics">P2P diagnostics</button>
       <button type="button" @click="openFollowInput">Follow a link</button>
       <button type="button" @click="openFollowing">
@@ -100,6 +101,7 @@
     </section>
 
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
+    <DiagnosticsSheet v-if="browserDiagnosticsOpen" @close="browserDiagnosticsOpen = false" />
     <NetworkDiagnosticsSheet
       v-if="diagnosticsOpen"
       :foreground="networkDiagnostics"
@@ -385,6 +387,7 @@ import {
 } from '../android/backgroundSharing.ts'
 import LocationMap from '../components/LocationMap.vue'
 import NetworkDiagnosticsSheet from '../components/NetworkDiagnosticsSheet.vue'
+import DiagnosticsSheet from '../components/DiagnosticsSheet.vue'
 import CloseIcon from '../components/icons/CloseIcon.vue'
 import AboutSheet from '../components/AboutSheet.vue'
 import FollowingSheet from '../components/FollowingSheet.vue'
@@ -552,6 +555,7 @@ const closeMenuOnOutsideClick = (event: MouseEvent): void => {
   menuOpen.value = false
 }
 const aboutOpen = ref(false)
+const browserDiagnosticsOpen = ref(false)
 const diagnosticsOpen = ref(false)
 const sharesOpen = ref(false)
 const followInputOpen = ref(false)
@@ -816,6 +820,10 @@ const selectMapFamily = (family: MapFamily): void => {
 }
 const openAbout = (): void => {
   aboutOpen.value = true
+  menuOpen.value = false
+}
+const openBrowserDiagnostics = (): void => {
+  browserDiagnosticsOpen.value = true
   menuOpen.value = false
 }
 const openDiagnostics = (): void => {

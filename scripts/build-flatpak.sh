@@ -17,6 +17,13 @@ cleanup() {
 trap cleanup EXIT
 version="$(node -p "require('./package.json').version")"
 branch="stable"
+if [[ -z "${CONSTELLATION_BUILD_COMMIT:-}" ]]; then
+  CONSTELLATION_BUILD_COMMIT="${GITHUB_SHA:-}"
+fi
+if [[ -z "${CONSTELLATION_BUILD_COMMIT:-}" ]]; then
+  CONSTELLATION_BUILD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || printf 'unknown')"
+fi
+export CONSTELLATION_BUILD_COMMIT
 
 command -v flatpak >/dev/null || {
   echo "Missing required command: flatpak" >&2

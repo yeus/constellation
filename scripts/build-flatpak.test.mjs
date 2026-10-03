@@ -38,6 +38,7 @@ esac
     `#!/usr/bin/env bash
 set -euo pipefail
 printf 'flatpak-builder %s\n' "$*" >> "$FLATPAK_CALL_LOG"
+printf 'build-commit=%s\n' "\${CONSTELLATION_BUILD_COMMIT-unset}" >> "$FLATPAK_CALL_LOG"
 `,
   )
   fs.chmodSync(path.join(fakeBin, 'flatpak'), 0o755)
@@ -49,6 +50,7 @@ printf 'flatpak-builder %s\n' "$*" >> "$FLATPAK_CALL_LOG"
     env: {
       PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
       FLATPAK_CALL_LOG: callLog,
+      GITHUB_SHA: 'a'.repeat(40),
     },
   })
 
@@ -56,6 +58,7 @@ printf 'flatpak-builder %s\n' "$*" >> "$FLATPAK_CALL_LOG"
   const calls = fs.readFileSync(callLog, 'utf8')
   assert.match(calls, /flatpak remote-add --user --if-not-exists flathub /)
   assert.match(calls, /flatpak-builder .*--default-branch=stable /)
+  assert.match(calls, new RegExp(`build-commit=${'a'.repeat(40)}`))
   assert.match(
     calls,
     /flatpak build-bundle .*constellation-desktop-0\.1\.0-x86_64\.flatpak space\.taskyon\.constellation stable /,

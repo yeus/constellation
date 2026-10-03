@@ -134,6 +134,40 @@ test('copies bounded session diagnostics from the top-left menu', async ({ page 
   await expect(page.getByRole('status').last()).toContainText('Copied logs to clipboard')
 })
 
+test('shows and copies build and browser diagnostics from the top-left menu', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (value: string) => {
+          ;(window as typeof window & { copiedDiagnostics?: string }).copiedDiagnostics = value
+        },
+      },
+    })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
+
+  const diagnostics = page.getByRole('dialog', { name: 'Diagnostics' })
+  await expect(diagnostics).toContainText('Built (UTC)')
+  await expect(diagnostics).toContainText('Built (local)')
+  await expect(diagnostics).toContainText('User agent')
+  await expect(diagnostics).toContainText('Browser environment')
+  await expect(diagnostics).toContainText('does not include locations')
+  await diagnostics.getByRole('button', { name: 'Copy diagnostics' }).click()
+
+  const copied = await page.evaluate(
+    () => (window as typeof window & { copiedDiagnostics?: string }).copiedDiagnostics,
+  )
+  expect(copied).toContain('Constellation build')
+  expect(copied).toContain('Built (UTC):')
+  expect(copied).toContain('Built (local):')
+  expect(copied).toContain('Browser environment')
+  expect(copied).toContain('User agent:')
+  expect(copied).not.toMatch(/share link|peer ID|location coordinates/i)
+  await expect(diagnostics.getByRole('status')).toContainText('Copied diagnostics to clipboard')
+})
+
 test('explains when the clipboard cannot accept logs', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {

@@ -34,6 +34,8 @@ modules:
         CARGO_HOME: /run/build/constellation/cargo
         CARGO_NET_OFFLINE: 'true'
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      secret-env:
+        - CONSTELLATION_BUILD_COMMIT
       append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
     build-commands:
       - node yarn-4.16.0.cjs plugin import ./flatpak-node/flatpak-yarn.js
