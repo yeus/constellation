@@ -42,6 +42,19 @@ test('browser regression builds vendor packages before starting Playwright', () 
   assert.ok(vendor < playwright, 'vendored packages must be built before Playwright starts')
 })
 
+test('quality job builds vendor packages before linting', () => {
+  const workflow = ci()
+  const job = workflow.slice(
+    workflow.indexOf('  quality:'),
+    workflow.indexOf('  browser-regression:'),
+  )
+  const vendor = job.indexOf('corepack yarn build:vendor')
+  const lint = job.indexOf('corepack yarn lint')
+  assert.ok(vendor !== -1, 'quality must build the vendored packages')
+  assert.ok(lint !== -1, 'quality must run lint')
+  assert.ok(vendor < lint, 'vendored packages must be built before lint runs')
+})
+
 test('tagged GitHub releases build Android and both Linux packages before publishing', () => {
   const workflow = release()
   assert.doesNotMatch(workflow, /\\\$\{/)

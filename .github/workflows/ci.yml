@@ -37,6 +37,9 @@ jobs:
       - name: Check formatting
         run: corepack yarn format:check
 
+      - name: Build vendor packages
+        run: corepack yarn build:vendor
+
       - name: Lint and typecheck
         run: corepack yarn lint
 

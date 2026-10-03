@@ -29,7 +29,7 @@ modules:
         npm_config_cache: /run/build/constellation/npm-cache
         XDG_CACHE_HOME: /run/build/constellation/flatpak-node/cache
         YARN_ENABLE_NETWORK: '0'
-        YARN_ENABLE_GLOBAL_CACHE: '0'
+        YARN_ENABLE_GLOBAL_CACHE: '1'
         YARN_GLOBAL_FOLDER: /run/build/constellation/flatpak-node/yarn-berry
         CARGO_HOME: /run/build/constellation/cargo
         CARGO_NET_OFFLINE: 'true'
@@ -37,6 +37,7 @@ modules:
       append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
     build-commands:
       - node yarn-4.16.0.cjs plugin import ./flatpak-node/flatpak-yarn.js
+      - node yarn-4.16.0.cjs convertToZip
       - node yarn-4.16.0.cjs install --immutable
       - node yarn-4.16.0.cjs tauri build --no-bundle
       - install -Dm755 src-tauri/target/release/constellation /app/bin/constellation
