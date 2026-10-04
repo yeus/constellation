@@ -6,7 +6,11 @@ import test from 'node:test'
 const repositoryRoot = path.resolve(import.meta.dirname, '..')
 const scopedDirectories = ['src', 'scripts', 'tests']
 const sourceExtensions = new Set(['.ts', '.vue', '.mjs'])
-const supportedTaskyonPackages = new Set(['@taskyon/protocol', '@taskyon/p2p-core'])
+const supportedTaskyonPackages = new Set([
+  '@taskyon/protocol',
+  '@taskyon/p2p-core',
+  '@taskyon/diagnostics',
+])
 
 const sourceFiles = (directory) =>
   fs
@@ -37,7 +41,7 @@ test('application code does not import sibling workspaces or build artifacts', (
   const forbidden = [
     /(^|\/)\.\.\/(frontend|taskyon)(\/|$)/,
     /^\/workspace\//,
-    /(^|\/)vendor\/taskyon\/(?:p2p-core|protocol)\//,
+    /(^|\/)vendor\/taskyon\/(?:p2p-core|protocol|diagnostics)\//,
   ]
   for (const directory of scopedDirectories) {
     for (const file of sourceFiles(directory)) {
@@ -63,7 +67,7 @@ test('vendored Taskyon snapshots record their upstream provenance', () => {
   assert.match(upstream, /Base revision: `[0-9a-f]{40}`/)
   assert.match(upstream, /Snapshot date: \d{4}-\d{2}-\d{2}/)
 
-  for (const packageDirectory of ['p2p-core', 'protocol']) {
+  for (const packageDirectory of ['p2p-core', 'protocol', 'diagnostics']) {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repositoryRoot, 'vendor/taskyon', packageDirectory, 'package.json'),

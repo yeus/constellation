@@ -2071,6 +2071,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@taskyon/diagnostics@workspace:*, @taskyon/diagnostics@workspace:vendor/taskyon/diagnostics":
+  version: 0.0.0-use.local
+  resolution: "@taskyon/diagnostics@workspace:vendor/taskyon/diagnostics"
+  dependencies:
+    tsup: "npm:^8.5.0"
+    typescript: "npm:^5.9.2"
+  languageName: unknown
+  linkType: soft
+
 "@taskyon/p2p-core@workspace:*, @taskyon/p2p-core@workspace:vendor/taskyon/p2p-core":
   version: 0.0.0-use.local
   resolution: "@taskyon/p2p-core@workspace:vendor/taskyon/p2p-core"
@@ -3004,6 +3013,7 @@ __metadata:
     "@multiformats/multiaddr": "npm:13.0.3"
     "@playwright/test": "npm:1.61.1"
     "@protomaps/basemaps": "npm:5.7.2"
+    "@taskyon/diagnostics": "workspace:*"
     "@taskyon/p2p-core": "workspace:*"
     "@taskyon/protocol": "workspace:*"
     "@tauri-apps/api": "npm:2.11.1"

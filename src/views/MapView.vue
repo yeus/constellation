@@ -75,7 +75,17 @@
     </section>
 
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
-    <DiagnosticsSheet v-if="browserDiagnosticsOpen" @close="browserDiagnosticsOpen = false" />
+    <DiagnosticsSheet
+      v-if="browserDiagnosticsOpen"
+      @close="browserDiagnosticsOpen = false"
+      @run="openSharingDiagnostics"
+    />
+    <SharingDiagnosticsSheet
+      v-if="sharingDiagnosticsOpen"
+      :native="backgroundSharing"
+      :share-base-url="shareBaseUrl"
+      @close="returnToBrowserDiagnostics"
+    />
     <NetworkDiagnosticsSheet
       v-if="diagnosticsOpen"
       :foreground="networkDiagnostics"
@@ -380,6 +390,7 @@ import LocationMap from '../components/LocationMap.vue'
 import QrScannerSheet from '../components/QrScannerSheet.vue'
 import NetworkDiagnosticsSheet from '../components/NetworkDiagnosticsSheet.vue'
 import DiagnosticsSheet from '../components/DiagnosticsSheet.vue'
+import SharingDiagnosticsSheet from '../components/SharingDiagnosticsSheet.vue'
 import CloseIcon from '../components/icons/CloseIcon.vue'
 import AboutSheet from '../components/AboutSheet.vue'
 import FollowingSheet from '../components/FollowingSheet.vue'
@@ -552,6 +563,15 @@ const closeMenuOnOutsideClick = (event: MouseEvent): void => {
 }
 const aboutOpen = ref(false)
 const browserDiagnosticsOpen = ref(false)
+const sharingDiagnosticsOpen = ref(false)
+const openSharingDiagnostics = () => {
+  browserDiagnosticsOpen.value = false
+  sharingDiagnosticsOpen.value = true
+}
+const returnToBrowserDiagnostics = () => {
+  sharingDiagnosticsOpen.value = false
+  browserDiagnosticsOpen.value = true
+}
 const diagnosticsOpen = ref(false)
 const sharesOpen = ref(false)
 const followInputOpen = ref(false)

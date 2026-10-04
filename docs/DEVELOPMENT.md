@@ -450,3 +450,14 @@ MIT. See `LICENSE`. The map visibly credits OpenStreetMap contributors,
 Protomaps, and ESA WorldCover. Bundled map asset notices are in
 `THIRD_PARTY_NOTICES.md` and the app's About screen. A complete final-artifact
 dependency license inventory is still required before publication.
+
+## Runnable sharing diagnostics
+
+The production Diagnostics sheet opens a categorized executable suite using the standalone
+Taskyon diagnostics runner. See [0.1 acceptance](RELEASE_0_1_ACCEPTANCE.md) for two-device
+synthetic pairing, guided native checks and external release gates. Browser regression:
+
+```sh
+yarn playwright test \
+  tests/sharing-diagnostics.spec.ts
+```

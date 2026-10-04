@@ -12,7 +12,7 @@
     "node": ">=22.13 <23"
   },
   "scripts": {
-    "build:vendor": "yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build",
+    "build:vendor": "yarn workspace @taskyon/diagnostics build && yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build",
     "icons:generate": "tauri icon assets/icon-manifest.json -o src-tauri/icons",
     "dev": "yarn build:vendor && vite",
     "dev:tauri:frontend": "yarn build:vendor && vite --mode tauri",
@@ -23,6 +23,8 @@
     "build:desktop:release:appimage": "constellation-build-release-appimage",
     "build:desktop:release:appimage:internal": "tauri build --bundles appimage",
     "build:desktop:release:flatpak": "bash scripts/build-flatpak.sh",
+    "release": "node scripts/release.mjs",
+    "release:check": "node scripts/release.mjs --check",
     "build:android:background-runtime": "yarn build:vendor && vite build --config vite.background.config.ts",
     "tauri": "tauri",
     "android:init": "tauri android init",
@@ -44,7 +46,7 @@
     "licenses:artifacts": "node scripts/artifact-license-inventory.mjs",
     "lint:flatpak": "node scripts/flatpak-lint.mjs",
     "test:unit": "node --experimental-strip-types --test 'src/**/*.test.ts'",
-    "test:vendor": "yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test",
+    "test:vendor": "yarn workspace @taskyon/diagnostics test && yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test",
     "test": "yarn build:vendor && yarn test:vendor && yarn test:unit && yarn test:scripts",
     "test:e2e": "yarn build:vendor && playwright test",
     "preview": "vite preview",
@@ -56,6 +58,7 @@
     "@lucide/vue": "^1.50.0",
     "@multiformats/multiaddr": "13.0.3",
     "@protomaps/basemaps": "5.7.2",
+    "@taskyon/diagnostics": "workspace:*",
     "@taskyon/p2p-core": "workspace:*",
     "@taskyon/protocol": "workspace:*",
     "@tauri-apps/api": "2.11.1",
@@ -90,5 +93,3 @@
     "vue-tsc": "3.0.7"
   }
 }
-    "release": "node scripts/release.mjs",
-    "release:check": "node scripts/release.mjs --check",

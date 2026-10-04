@@ -82,6 +82,12 @@ jobs:
       - name: P2P regression
         run: corepack yarn playwright test tests/p2p-share.spec.ts --project=desktop --workers=1
 
+      - name: Map UI regression
+        run: corepack yarn playwright test tests/map-ui.spec.ts --workers=1
+
+      - name: Sharing diagnostics regression
+        run: corepack yarn playwright test tests/sharing-diagnostics.spec.ts --workers=1
+
       - name: GitHub Pages preflight
         run: corepack yarn test:pages
 

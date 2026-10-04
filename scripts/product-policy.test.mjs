@@ -38,3 +38,21 @@ test('active and followed location surfaces expose explicit status controls', ()
   assert.match(shares, /Revoke link/)
   assert.match(following, /follow\.status/)
 })
+
+test('0.1 includes field fixes, uniform markers and executable sharing diagnostics', () => {
+  const catalog = fs.readFileSync(new URL('../SYSTEM_DEFINITION.csv', import.meta.url), 'utf8')
+  for (const id of [
+    'share-back-individual',
+    'share-back-group-approval',
+    'share-lifecycle-history',
+    'transient-status-notices',
+    'android-background-share-status',
+    'diagnostics-sharing-suite',
+  ]) {
+    const row = catalog.split('\n').find((line) => line.startsWith(`${id},`))
+    assert.ok(row, `${id} is missing from the catalog`)
+    assert.ok(row.endsWith(',0.1'), `${id} must target 0.1`)
+  }
+  const mapRow = catalog.split('\n').find((line) => line.startsWith('maplibre-component,'))
+  assert.match(mapRow, /own and followed/)
+})

@@ -32,6 +32,9 @@
         </dl>
       </section>
 
+      <button class="secondary-action" type="button" @click="emit('run')">
+        Run sharing diagnostics
+      </button>
       <button class="primary-action diagnostics-copy" type="button" @click="copyDiagnostics">
         Copy diagnostics
       </button>
@@ -46,7 +49,7 @@ import { ref } from 'vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import { createDiagnosticSections, formatDiagnosticReport } from '../diagnostics/buildInfo.ts'
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; run: [] }>()
 const yesNo = (supported: boolean): string => (supported ? 'Yes' : 'No')
 const browser = {
   runtime: '__TAURI_INTERNALS__' in window ? 'Tauri native app' : 'Web browser',
