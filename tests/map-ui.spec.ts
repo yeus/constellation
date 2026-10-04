@@ -275,6 +275,65 @@ test('uses the shared Taskyon light and dark theme neutrals', async ({ page }) =
     })
 })
 
+test('centers the close icon inside sheet close buttons', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 860 })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.getByRole('button', { name: 'Privacy and licenses' }).click()
+
+  const button = page.getByRole('dialog', { name: 'Constellation' }).getByRole('button', {
+    name: 'Close',
+  })
+  const icon = button.locator('svg')
+  await expect(button).toBeVisible()
+  const [buttonBox, iconBox] = await Promise.all([button.boundingBox(), icon.boundingBox()])
+  if (!buttonBox || !iconBox) throw new Error('Expected the close button and icon to be laid out.')
+  const centerDelta = {
+    x: Math.abs(buttonBox.x + buttonBox.width / 2 - (iconBox.x + iconBox.width / 2)),
+    y: Math.abs(buttonBox.y + buttonBox.height / 2 - (iconBox.y + iconBox.height / 2)),
+  }
+  expect(centerDelta.x).toBeLessThanOrEqual(0.5)
+  expect(centerDelta.y).toBeLessThanOrEqual(0.5)
+})
+
+test('uses centered SVG icons for icon buttons', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.getByRole('button', { name: 'Privacy and licenses' }).click()
+  const buttons = page.locator('.top-bar button, .dock-add, .icon-button')
+  const count = await buttons.count()
+  expect(count).toBeGreaterThanOrEqual(2)
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index)
+    await expect(button.locator('svg')).toHaveCount(1)
+    const [buttonBox, iconBox] = await Promise.all([
+      button.boundingBox(),
+      button.locator('svg').boundingBox(),
+    ])
+    if (!buttonBox || !iconBox) throw new Error('Expected each icon button to be laid out.')
+    expect(
+      Math.abs(buttonBox.x + buttonBox.width / 2 - (iconBox.x + iconBox.width / 2)),
+    ).toBeLessThanOrEqual(0.5)
+    expect(
+      Math.abs(buttonBox.y + buttonBox.height / 2 - (iconBox.y + iconBox.height / 2)),
+    ).toBeLessThanOrEqual(0.5)
+  }
+})
+
+test('keeps status notes near the screen edge and hides them after six seconds', async ({
+  page,
+}) => {
+  await page.goto('/#share=invalid')
+  const notice = page.locator('.toast')
+  await expect(notice).toBeVisible()
+  const bounds = await notice.boundingBox()
+  const viewport = page.viewportSize()
+  if (!bounds || !viewport) throw new Error('Expected the status note to be laid out.')
+  expect(bounds.y + bounds.height / 2).toBeLessThan(viewport.height / 3)
+  expect(bounds.x + bounds.width / 2).toBeGreaterThan(viewport.width / 2)
+  await expect(notice).toBeHidden({ timeout: 8_000 })
+})
+
 test('keeps map credit visible and persists the selected basemap family', async ({ page }) => {
   await page.route('**/*.pmtiles*', (route) => route.abort())
   await page.goto('/')

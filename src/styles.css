@@ -477,19 +477,20 @@ button {
 }
 
 .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 2.5rem;
   height: 2.5rem;
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--control-fill);
-  font-size: 1.4rem;
   cursor: pointer;
 }
 
 .icon-button svg {
   width: 1.15rem;
   height: 1.15rem;
-  vertical-align: middle;
 }
 
 fieldset {
@@ -653,11 +654,11 @@ legend {
 
 .toast {
   position: fixed;
-  z-index: 20;
-  left: 50%;
-  bottom: calc(6.8rem + env(safe-area-inset-bottom));
+  z-index: 8;
+  top: calc(4.25rem + env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
   width: max-content;
-  max-width: calc(100% - 2rem);
+  max-width: min(24rem, calc(100% - 2rem));
   margin: 0;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -665,11 +666,7 @@ legend {
   background: var(--toast-background);
   color: var(--toast-text);
   font-size: 0.8rem;
-  transform: translateX(-50%);
-}
-
-.map-screen--actions-open .toast {
-  bottom: calc(10.6rem + env(safe-area-inset-bottom));
+  box-shadow: 0 8px 24px var(--sheet-shadow);
 }
 
 @media (min-width: 700px) {

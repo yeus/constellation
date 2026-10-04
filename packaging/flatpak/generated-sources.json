@@ -4579,5 +4579,19 @@
         "only-arches": [
             "x86_64"
         ]
+    },
+    {
+        "type": "file",
+        "url": "https://registry.npmjs.org/@lucide/vue/-/vue-1.50.0.tgz",
+        "sha512": "fdc60062a1c83147156e11983e4f86aa03ea96a4ca0857f21aba57bc7ffacf9bfbb164685811d5898c0eddc3609aea5908163ee16074d7ac0de8291735ccb463",
+        "dest-filename": "vue-QGx1Y2lkZS92dWVAbnBtOjEuNTAuMA==-2790893c97.tgz",
+        "dest": "flatpak-node/yarn-berry/cache/locator"
+    },
+    {
+        "type": "file",
+        "url": "https://registry.npmjs.org/jsqr/-/jsqr-1.4.0.tgz",
+        "sha512": "7712e86fbabae578360efb2d624469918b662a6dac3c9f68161ae19ae753d5d66f34515396ba1a8b70164a92decbfc39bcc70b057460389b1b5e974df47cd4fc",
+        "dest-filename": "jsqr-anNxckBucG06MS40LjA=-69fbfe4c86.tgz",
+        "dest": "flatpak-node/yarn-berry/cache/locator"
     }
 ]

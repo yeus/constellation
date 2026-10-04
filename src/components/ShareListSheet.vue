@@ -26,6 +26,16 @@
         and resume automatically.
       </p>
       <p v-if="shares.length === 0" class="field-help">You are not sharing with anyone.</p>
+      <details v-if="oldShares.length" class="old-shares">
+        <summary>Old sharing links ({{ oldShares.length }})</summary>
+        <div v-for="share in oldShares" :key="share.shareId" class="share-list-item">
+          <strong>{{ share.name || 'Private link' }}</strong>
+          <span
+            >{{ share.reason === 'revoked' ? 'Revoked by you' : 'Share expired' }} ·
+            {{ new Date(share.endedAt).toLocaleString() }}</span
+          >
+        </div>
+      </details>
       <article v-for="share in shares" :key="share.shareId" class="share-list-item">
         <strong>{{ share.name || 'Private link' }}</strong>
         <span
@@ -73,15 +83,7 @@
               :aria-label="`Edit device name for connection ${viewer.fingerprint}`"
               @click="editName(share.shareId, viewer.fingerprint, viewer.localName || '')"
             >
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="m4 20 4.2-.8L19 8.4 15.6 5 4.8 15.8 4 20ZM14.4 6.2l3.4 3.4"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
+              <PencilLine aria-hidden="true" />
               Edit name
             </button>
             <button
@@ -106,12 +108,19 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { LucidePencilLine as PencilLine } from '@lucide/vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 
 const props = defineProps<{
   shares: readonly ShareSummary[]
   pauseReason?: 'metered' | 'data-saver'
+  oldShares: readonly {
+    shareId: string
+    name?: string
+    endedAt: number
+    reason: 'revoked' | 'expired'
+  }[]
 }>()
 const pausedShares = computed(() => props.shares.filter((share) => share.paused))
 const emit = defineEmits<{

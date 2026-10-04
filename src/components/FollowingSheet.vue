@@ -11,6 +11,16 @@
         </button>
       </header>
       <p v-if="visible.length === 0" class="field-help">No shared locations yet.</p>
+      <details v-if="oldFollowing.length" class="old-shares">
+        <summary>Old seeing shares ({{ oldFollowing.length }})</summary>
+        <div v-for="share in oldFollowing" :key="share.shareId" class="follow-item">
+          <strong>{{ share.name || 'Shared location' }}</strong>
+          <span
+            >{{ share.reason === 'revoked' ? 'Revoked by sender' : 'Share expired' }} ·
+            {{ new Date(share.endedAt).toLocaleString() }}</span
+          >
+        </div>
+      </details>
       <button
         v-if="visible.length > 1"
         class="secondary-action"
@@ -45,6 +55,16 @@
           · Time left:
           {{ follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt) }}</span
         >
+        <button
+          v-if="!follow.returnPromptSeen"
+          class="secondary-action"
+          type="button"
+          :disabled="shareBackBusy"
+          :aria-label="`Share approximate location for 1 hour back to ${follow.localName}`"
+          @click="emit('shareBack', follow.shareId)"
+        >
+          Share back · approximate · 1 hour
+        </button>
         <div v-if="editingId === follow.shareId" class="nickname-edit">
           <input
             v-model="nameDraft"
@@ -68,15 +88,7 @@
           :aria-label="`Edit nickname for ${follow.localName}`"
           @click="editName(follow.shareId, follow.localName)"
         >
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="m4 20 4.2-.8L19 8.4 15.6 5 4.8 15.8 4 20ZM14.4 6.2l3.4 3.4"
-              stroke="currentColor"
-              stroke-width="1.7"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
+          <PencilLine aria-hidden="true" />
           Edit nickname
         </button>
         <div class="follow-item__colors" aria-label="Location color">
@@ -116,6 +128,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { LucidePencilLine as PencilLine } from '@lucide/vue'
 import CloseIcon from './icons/CloseIcon.vue'
 
 import { FOLLOW_COLORS, type FollowSummary } from '../sharing/sharingRuntime.ts'
@@ -124,6 +137,13 @@ const props = defineProps<{
   following: readonly FollowSummary[]
   viewableIds: readonly string[]
   selectedId?: string
+  shareBackBusy: boolean
+  oldFollowing: readonly {
+    shareId: string
+    name?: string
+    endedAt: number
+    reason: 'revoked' | 'expired'
+  }[]
 }>()
 const emit = defineEmits<{
   close: []
@@ -133,6 +153,7 @@ const emit = defineEmits<{
   focusAll: []
   stop: [shareId: string]
   keep: [shareId: string]
+  shareBack: [shareId: string]
 }>()
 const editingId = ref<string>()
 const nameDraft = ref('')

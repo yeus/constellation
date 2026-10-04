@@ -21,14 +21,7 @@
         aria-label="Open menu"
         @click="menuOpen = !menuOpen"
       >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M4 7h16M4 12h16M4 17h16"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-          />
-        </svg>
+        <Menu aria-hidden="true" />
       </button>
       <span class="brand-wordmark">Constellation</span>
       <button
@@ -37,24 +30,7 @@
         aria-label="Center on my location"
         @click="centerOnOwnLocation"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.4" />
-          <path
-            d="M12 1.7v2.1M12 20.2v2.1M1.7 12h2.1m16.4 0h2.1"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-          />
-          <path
-            d="m12 6.8 1.2 4 4 1.2-4 1.2-1.2 4-1.2-4-4-1.2 4-1.2 1.2-4Z"
-            fill="var(--accent)"
-            stroke="currentColor"
-            stroke-width="0.55"
-            stroke-linejoin="round"
-          />
-          <circle cx="12" cy="12" r="1.1" fill="var(--surface-strong)" />
-        </svg>
+        <LocateFixed aria-hidden="true" />
       </button>
     </header>
 
@@ -79,9 +55,7 @@
       <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
       <button type="button" @click="openDiagnostics">P2P diagnostics</button>
       <button type="button" @click="openFollowInput">Follow a link</button>
-      <button type="button" @click="openFollowing">
-        Following ({{ runtimeState.following.length }})
-      </button>
+      <button type="button" @click="openFollowing">Following ({{ activeFollowing.length }})</button>
       <a
         v-if="!isNative"
         href="https://github.com/yeus/constellation/releases/latest"
@@ -180,12 +154,17 @@
       <p class="eyebrow">Optional return share</p>
       <strong>Share yours back with {{ shareBackPrompt.name }}?</strong>
       <p>
-        Choose your own duration and precision. Your private return link goes only to the original
-        sender over the encrypted connection. Nothing is shared until you create it.
+        This creates an approximate location link for one hour and sends it only to the original
+        sender over the encrypted connection.
       </p>
       <div class="preview-actions">
-        <button class="primary-action" type="button" @click="openReturnShare">
-          Share mine back
+        <button
+          class="primary-action"
+          type="button"
+          :disabled="creatingShare"
+          @click="openReturnShare"
+        >
+          Share approximate location for 1 hour
         </button>
         <button class="secondary-action" type="button" @click="shareBackPrompt = undefined">
           Not now
@@ -200,16 +179,28 @@
       aria-label="Return location offered"
     >
       <p class="eyebrow">Private return share</p>
-      <strong>A connected viewer offered a private location link</strong>
+      <strong>A viewer wants to share their location back</strong>
       <p>
-        Open it only if you expect this return share. The link does not prove who owns the location;
-        other viewers cannot see it.
+        Accept this share and allow other viewers of the same link to share their locations back
+        automatically. Viewers do not see one another or each other’s locations.
       </p>
       <div class="preview-actions">
-        <button class="primary-action" type="button" @click="acceptReturnOffer">
-          View return location
+        <button
+          class="primary-action"
+          type="button"
+          :disabled="changingReturnOffer"
+          @click="acceptReturnOffer"
+        >
+          Accept this and future shares from this link
         </button>
-        <button class="secondary-action" type="button" @click="dismissReturnOffer">Dismiss</button>
+        <button
+          class="secondary-action"
+          type="button"
+          :disabled="changingReturnOffer"
+          @click="dismissReturnOffer"
+        >
+          Dismiss
+        </button>
       </div>
     </section>
 
@@ -232,15 +223,7 @@
       </div>
       <div class="dock-buttons">
         <button class="dock-side" type="button" @click="sharesOpen = true">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M12 3v12m0 0-4-4m4 4 4-4M4 18h16"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
+          <Share2 aria-hidden="true" />
           <span>{{ sharingLabel }}</span>
         </button>
         <button
@@ -250,26 +233,11 @@
           :aria-expanded="actionsExpanded"
           @click="toggleActions"
         >
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M12 4v16M4 12h16"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
-          </svg>
+          <Plus aria-hidden="true" />
         </button>
         <button class="dock-side" type="button" @click="openFollowing">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M12 21V9m0 0-4 4m4-4 4 4M4 6h16"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-          <span>Seeing {{ runtimeState.following.length }}</span>
+          <Eye aria-hidden="true" />
+          <span>Seeing {{ activeFollowing.length }}</span>
         </button>
       </div>
     </footer>
@@ -301,6 +269,7 @@
     <ShareListSheet
       v-if="sharesOpen"
       :shares="activeShares"
+      :old-shares="oldSharing"
       :pause-reason="backgroundStatus?.pauseReason"
       @close="sharesOpen = false"
       @show="showExistingShare"
@@ -331,17 +300,28 @@
           aria-label="Paste location link"
           placeholder="Paste a location link"
         />
+        <button
+          v-if="canScanQr"
+          class="secondary-action"
+          type="button"
+          @click="qrScannerOpen = true"
+        >
+          <QrCode aria-hidden="true" /> Scan QR code
+        </button>
         <button class="primary-action" type="button" @click="acceptPastedLink">
           View location
         </button>
       </section>
     </div>
+    <QrScannerSheet v-if="qrScannerOpen" @close="qrScannerOpen = false" @scan="acceptScannedLink" />
 
     <FollowingSheet
       v-if="followingOpen"
-      :following="runtimeState.following"
+      :following="activeFollowing"
+      :old-following="runtimeState.oldSeeing"
       :viewable-ids="viewableIds"
       :selected-id="selectedFollowId"
+      :share-back-busy="creatingShare"
       @close="followingOpen = false"
       @name="runtime.setFollowName"
       @color="runtime.setFollowColor"
@@ -349,6 +329,7 @@
       @focus-all="focusAllFollowing"
       @stop="stopFollowing"
       @keep="keepFollowing"
+      @share-back="shareBackFromFollowing"
     />
 
     <div v-if="nicknamePrompt" class="sheet-backdrop" @click.self="nicknamePrompt = undefined">
@@ -372,12 +353,22 @@
       @stop="stopReadyShare"
     />
 
-    <p v-if="statusMessage" class="toast" role="status">{{ statusMessage }}</p>
+    <p v-if="statusNoticeVisible && statusMessage" class="toast" role="status">
+      {{ statusMessage }}
+    </p>
   </main>
 </template>
 
 <script setup lang="ts">
 import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
+import {
+  LucideEye as Eye,
+  LucideLocateFixed as LocateFixed,
+  LucideMenu as Menu,
+  LucidePlus as Plus,
+  LucideQrCode as QrCode,
+  LucideShare2 as Share2,
+} from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -386,6 +377,7 @@ import {
   type AndroidBackgroundStatus,
 } from '../android/backgroundSharing.ts'
 import LocationMap from '../components/LocationMap.vue'
+import QrScannerSheet from '../components/QrScannerSheet.vue'
 import NetworkDiagnosticsSheet from '../components/NetworkDiagnosticsSheet.vue'
 import DiagnosticsSheet from '../components/DiagnosticsSheet.vue'
 import CloseIcon from '../components/icons/CloseIcon.vue'
@@ -563,6 +555,8 @@ const browserDiagnosticsOpen = ref(false)
 const diagnosticsOpen = ref(false)
 const sharesOpen = ref(false)
 const followInputOpen = ref(false)
+const qrScannerOpen = ref(false)
+const canScanQr = Boolean(window.isSecureContext && navigator.mediaDevices)
 const followingOpen = ref(false)
 const selectedFollowId = ref<string>()
 const pastedLink = ref('')
@@ -580,6 +574,8 @@ const returnTarget = ref<string>()
 const localError = ref('')
 const copyNotice = ref('')
 let copyNoticeTimeout: number | undefined
+let statusNoticeTimeout: number | undefined
+const statusNoticeVisible = ref(true)
 
 const offerInvitation = (url: string): void => {
   try {
@@ -701,6 +697,17 @@ const activeShares = computed(() =>
     })),
   })),
 )
+const oldSharing = computed(() => {
+  const records = [...runtimeState.value.oldSharing, ...(backgroundStatus.value?.oldSharing ?? [])]
+  return [...new Map(records.map((record) => [record.shareId, record])).values()].sort(
+    (left, right) => right.endedAt - left.endedAt,
+  )
+})
+const activeFollowing = computed(() =>
+  runtimeState.value.following.filter(
+    (entry) => entry.status !== 'expired' && entry.status !== 'revoked',
+  ),
+)
 const sharingLabel = computed(() => {
   const shares = activeShares.value
   if (shares.length === 0) return 'Sharing 0'
@@ -714,7 +721,7 @@ const sharingLabel = computed(() => {
   })
   return `Sharing ${shares.length} · next ends ${nextExpiry}`
 })
-const previewFollow = computed(() => runtimeState.value.following.find((entry) => !entry.saved))
+const previewFollow = computed(() => activeFollowing.value.find((entry) => !entry.saved))
 
 const locations = computed(() => {
   const own = backgroundStatus.value?.shares.length
@@ -736,7 +743,11 @@ const locations = computed(() => {
     }),
   ]
 })
-const viewableIds = computed(() => runtimeState.value.received.map(({ shareId }) => shareId))
+const viewableIds = computed(() =>
+  runtimeState.value.received
+    .filter((entry) => activeFollowing.value.some((follow) => follow.shareId === entry.shareId))
+    .map(({ shareId }) => shareId),
+)
 
 const effectivePeerStatus = computed(() => {
   if (backgroundStatus.value?.state === 'sharing') return 'online'
@@ -791,6 +802,19 @@ const statusMessage = computed(
     policyPauseMessage.value ||
     backgroundStatus.value?.message ||
     runtimeState.value.message,
+)
+watch(
+  statusMessage,
+  (message) => {
+    statusNoticeVisible.value = Boolean(message)
+    if (statusNoticeTimeout !== undefined) window.clearTimeout(statusNoticeTimeout)
+    if (!message) return
+    statusNoticeTimeout = window.setTimeout(() => {
+      statusNoticeVisible.value = false
+      statusNoticeTimeout = undefined
+    }, 6_000)
+  },
+  { immediate: true },
 )
 
 const copyLogs = async (): Promise<void> => {
@@ -934,13 +958,21 @@ const acceptPastedLink = (): void => {
   }
 }
 
+const acceptScannedLink = (url: string): void => {
+  followInputOpen.value = false
+  pastedLink.value = ''
+  offerInvitation(url)
+}
+
 const createShare = async (): Promise<void> => {
+  if (creatingShare.value) return
+  const shareBackTarget = returnTarget.value
   browserLocationDeferred.value = false
   creatingShare.value = true
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.share.create.started' })
   try {
-    if (backgroundSharing) {
+    if (backgroundSharing && !shareBackTarget) {
       await refreshBackgroundStatus()
       let deadline = Date.now() + 30_000
       while (backgroundStatus.value?.state === 'starting' && Date.now() < deadline) {
@@ -972,14 +1004,14 @@ const createShare = async (): Promise<void> => {
     } else {
       readyShare.value = await runtime.createShare(shareDraft.value)
     }
-    if (returnTarget.value && readyShare.value) {
+    if (shareBackTarget && readyShare.value) {
       try {
-        await runtime.offerReturnShare(returnTarget.value, readyShare.value.url)
+        await runtime.offerReturnShare(shareBackTarget, readyShare.value.url)
+        await runtime.markReturnPromptSeen(shareBackTarget)
       } catch (error) {
         localError.value =
           error instanceof Error ? error.message : 'Send this return link to the sender manually.'
       }
-      returnTarget.value = undefined
     }
     shareSheetOpen.value = false
     shareDraft.value = createShareDraft()
@@ -988,7 +1020,12 @@ const createShare = async (): Promise<void> => {
   } catch (error) {
     sessionLog.record({ level: 'error', event: 'sharing.share.create.failed' })
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'
+    if (shareBackTarget) {
+      const follow = runtimeState.value.following.find((entry) => entry.shareId === shareBackTarget)
+      if (follow) shareBackPrompt.value = { shareId: shareBackTarget, name: follow.localName }
+    }
   } finally {
+    if (returnTarget.value === shareBackTarget) returnTarget.value = undefined
     creatingShare.value = false
     if (backgroundSharing) updateLocationOwnership()
   }
@@ -1053,11 +1090,10 @@ const saveNickname = async (): Promise<void> => {
   try {
     const { shareId, name } = nicknamePrompt.value
     await runtime.saveFollowing(shareId, name)
-    shareBackPrompt.value = {
-      shareId,
-      name:
-        runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
-        'this person',
+    const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
+    if (follow && !follow.returnPromptSeen) {
+      await runtime.markReturnPromptSeen(shareId)
+      shareBackPrompt.value = { shareId, name: follow.localName || 'this person' }
     }
     nicknamePrompt.value = undefined
     browserLocationDeferred.value = false
@@ -1068,10 +1104,23 @@ const saveNickname = async (): Promise<void> => {
 }
 
 const openReturnShare = (): void => {
-  returnTarget.value = shareBackPrompt.value?.shareId
+  const target = shareBackPrompt.value?.shareId
+  if (!target) return
+  returnTarget.value = target
   shareBackPrompt.value = undefined
   shareDraft.value = createShareDraft()
-  shareSheetOpen.value = true
+  browserLocationDeferred.value = false
+  void createShare()
+}
+
+const shareBackFromFollowing = (shareId: string): void => {
+  const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
+  if (!follow || follow.returnPromptSeen || creatingShare.value) return
+  returnTarget.value = shareId
+  shareDraft.value = createShareDraft()
+  browserLocationDeferred.value = false
+  followingOpen.value = false
+  void createShare()
 }
 
 const closeShareSheet = (): void => {
@@ -1079,21 +1128,78 @@ const closeShareSheet = (): void => {
   returnTarget.value = undefined
 }
 
+const changingReturnOffer = ref(false)
+
 const dismissReturnOffer = (): void => {
   const offer = pendingReturnOffer.value
-  if (!offer) return
-  if (runtimeState.value.returnOffers.includes(offer)) {
-    runtime.dismissReturnOffer(offer.shareId, offer.viewerFingerprint)
-  } else {
-    dismissedBackgroundOffers.value.set(`${offer.shareId}:${offer.viewerFingerprint}`, offer.url)
-  }
+  if (!offer || changingReturnOffer.value) return
+  changingReturnOffer.value = true
+  localError.value = ''
+  void (async () => {
+    try {
+      if (runtimeState.value.returnOffers.includes(offer)) {
+        await runtime.dismissReturnOffer(offer.shareId, offer.viewerFingerprint)
+      } else {
+        if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+        await backgroundSharing.dismissReturnOffer(offer.shareId, offer.viewerFingerprint)
+        dismissedBackgroundOffers.value.set(
+          `${offer.shareId}:${offer.viewerFingerprint}`,
+          offer.url,
+        )
+        await refreshBackgroundStatus()
+      }
+    } catch (error) {
+      localError.value =
+        error instanceof Error ? error.message : 'Could not dismiss this return offer.'
+    } finally {
+      changingReturnOffer.value = false
+    }
+  })()
 }
 
 const acceptReturnOffer = (): void => {
   const offer = pendingReturnOffer.value
-  if (!offer) return
-  dismissReturnOffer()
-  offerInvitation(offer.url)
+  if (!offer || changingReturnOffer.value) return
+  changingReturnOffer.value = true
+  localError.value = ''
+  const backgroundOffer = Boolean(
+    backgroundStatus.value?.returnOffers?.some(
+      (candidate) =>
+        candidate.shareId === offer.shareId &&
+        candidate.viewerFingerprint === offer.viewerFingerprint &&
+        candidate.url === offer.url,
+    ),
+  )
+  void (async () => {
+    try {
+      const returned = parseShareInvitation(offer.url)
+      if (
+        !runtimeState.value.following.some(
+          (entry) => entry.shareId === returned.shareId && entry.connected,
+        )
+      ) {
+        await runtime.acceptShare(offer.url, { saved: true, returnOwnerPeerId: offer.ownerPeerId })
+      }
+      if (backgroundOffer) {
+        if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+        await backgroundSharing.approveReturnLink(offer.shareId)
+        dismissedBackgroundOffers.value.set(
+          `${offer.shareId}:${offer.viewerFingerprint}`,
+          offer.url,
+        )
+        await refreshBackgroundStatus()
+      } else {
+        await runtime.approveReturnLink(offer.shareId)
+      }
+      localError.value =
+        'Return location accepted. Future shares from this link will be accepted automatically.'
+    } catch (error) {
+      localError.value =
+        error instanceof Error ? error.message : 'Could not accept this return link.'
+    } finally {
+      changingReturnOffer.value = false
+    }
+  })()
 }
 
 const stopReadyShare = async (): Promise<void> => {
@@ -1195,6 +1301,7 @@ onBeforeUnmount(() => {
   if (backgroundPoll !== undefined) window.clearInterval(backgroundPoll)
   if (sharedTextPoll !== undefined) window.clearInterval(sharedTextPoll)
   if (copyNoticeTimeout !== undefined) window.clearTimeout(copyNoticeTimeout)
+  if (statusNoticeTimeout !== undefined) window.clearTimeout(statusNoticeTimeout)
   void runtime.stop()
 })
 </script>

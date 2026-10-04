@@ -53,6 +53,7 @@
   "dependencies": {
     "@libp2p/crypto": "5.1.23",
     "@libp2p/interface": "3.3.0",
+    "@lucide/vue": "^1.50.0",
     "@multiformats/multiaddr": "13.0.3",
     "@protomaps/basemaps": "5.7.2",
     "@taskyon/p2p-core": "workspace:*",
@@ -60,6 +61,7 @@
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-deep-link": "2.4.10",
     "@tauri-apps/plugin-geolocation": "2.3.3",
+    "jsqr": "^1.4.0",
     "maplibre-gl": "6.4.1",
     "pmtiles": "4.4.1",
     "qrcode": "1.5.4",

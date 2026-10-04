@@ -1219,6 +1219,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@lucide/vue@npm:^1.50.0":
+  version: 1.50.0
+  resolution: "@lucide/vue@npm:1.50.0"
+  peerDependencies:
+    vue: ">=3.0.1"
+  checksum: 10c0/2790893c97363426b716ba38ce7e8e410f673be807418d404e10051091d3fb47db7164571357eea99db7d025aaf89e7e6d912cb915f4c669f6cc2025cbd686f9
+  languageName: node
+  linkType: hard
+
 "@mapbox/jsonlint-lines-primitives@npm:^2.0.3":
   version: 2.0.3
   resolution: "@mapbox/jsonlint-lines-primitives@npm:2.0.3"
@@ -2991,6 +3000,7 @@ __metadata:
     "@eslint/js": "npm:9.17.0"
     "@libp2p/crypto": "npm:5.1.23"
     "@libp2p/interface": "npm:3.3.0"
+    "@lucide/vue": "npm:^1.50.0"
     "@multiformats/multiaddr": "npm:13.0.3"
     "@playwright/test": "npm:1.61.1"
     "@protomaps/basemaps": "npm:5.7.2"
@@ -3010,6 +3020,7 @@ __metadata:
     eslint: "npm:9.14.0"
     eslint-plugin-vue: "npm:10.4.0"
     globals: "npm:16.4.0"
+    jsqr: "npm:^1.4.0"
     maplibre-gl: "npm:6.4.1"
     pmtiles: "npm:4.4.1"
     prettier: "npm:3.3.3"
@@ -4303,6 +4314,13 @@ __metadata:
   version: 4.0.0
   resolution: "json-stringify-pretty-compact@npm:4.0.0"
   checksum: 10c0/505781b4be7c72047ae8dfa667b520d20461ceac451b6516cb8ac5e12a758fbd7491d99d5e3f7e60423ce9d26ed4e4bcaccab3420bf651298901635c849017cf
+  languageName: node
+  linkType: hard
+
+"jsqr@npm:^1.4.0":
+  version: 1.4.0
+  resolution: "jsqr@npm:1.4.0"
+  checksum: 10c0/69fbfe4c866a04c97b377901a166544a583bfc76b838c275efa9af058d64e5612267079b1e96ea7b6434385803571b1c6a97a43c85f4373e8afa4f4034fc916c
   languageName: node
   linkType: hard
 

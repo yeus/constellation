@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { createShareInvitation } from '../src/sharing/shareLink.ts'
 
 test('rejects an expired pasted link before opening a viewer session', async ({ page }) => {
-  const expired = createShareInvitation({
+  const expired = await createShareInvitation({
     baseUrl: 'http://127.0.0.1:4173/',
     sourcePeerId: 'synthetic-source',
     addresses: ['/dns4/relay.example/tcp/443/wss/p2p/synthetic'],
