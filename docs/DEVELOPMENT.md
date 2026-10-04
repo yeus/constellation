@@ -165,9 +165,9 @@ node scripts/flatpak-submission-manifest.mjs \
 The generated file is deliberately marked `REVIEW DRAFT ONLY`. Flathub's current
 submission policy forbids AI-generated or AI-assisted manifest content, so a
 human maintainer must independently author the final Flathub manifest rather
-than submitting this draft. The remaining submission work is external: cut and
-push the v0.1.0 tag, author the final manifest against that commit, and build and
-lint the bundle on a Flatpak-capable host.
+than submitting this draft. The remaining submission work is external: prepare
+and push a release with `yarn release <version>`, author the final manifest
+against that commit, and build and lint the bundle on a Flatpak-capable host.
 
 ## Android
 
@@ -313,10 +313,31 @@ adding a README gallery. Pin all three image URLs to the reviewed tag using
 Caption the gallery as the browser interface, and update the pinned tag only
 after reviewing new images. Do not commit these generated screenshot binaries.
 
-The tag must use the application version from `package.json` and
-`src-tauri/tauri.conf.json`. A final tag can be `v0.1.0`; test releases may
-use a suffix such as `v0.1.0-test.1` without changing the application version.
-Tags with a suffix are published as GitHub prereleases.
+`package.json` is the canonical application version. Prepare a release from a
+clean checkout with:
+
+```sh
+yarn release 0.1.1
+```
+
+The command checks metadata, updates Tauri and Cargo versions and Cargo.lock,
+adds a dated Flatpak AppStream release while preserving prior entries, then
+creates a release commit and annotated local tag after confirmation. Use
+`yarn release --dry-run 0.1.1` to preview or `yarn release --check` to validate
+the current metadata. It prints the command to push the branch and tag, but does
+not push them. Browser build metadata and AppImage/Flatpak artifact names derive
+from `package.json`. During Android builds, the Tauri CLI regenerates the ignored
+`tauri.properties` with the configured application version and its derived version
+code; the release command does not edit that generated file directly.
+
+If the tag does not exist yet, the current version can be tagged as-is. For
+example, `yarn release 0.1.0` creates `v0.1.0` at the clean current commit
+without rewriting its already-consistent metadata. A higher version such as
+`0.1.1` updates the version files and creates a release commit before tagging.
+
+The pushed tag must use the application version, such as `v0.1.1`; test
+releases may use a suffix such as `v0.1.1-test.1` without changing the
+application version. Tags with a suffix are published as GitHub prereleases.
 
 Configure these protected GitHub Actions repository secrets before pushing a
 release tag:

@@ -28,17 +28,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Check tag and application versions
         id: version
         shell: bash
         run: |
           set -euo pipefail
+          node scripts/release.mjs --check
           package_version="$(jq -er '.version' package.json)"
-          tauri_version="$(jq -er '.version' src-tauri/tauri.conf.json)"
-          if [[ "$package_version" != "$tauri_version" ]]; then
-            echo "package.json version $package_version does not match Tauri version $tauri_version." >&2
-            exit 1
-          fi
           case "$GITHUB_REF_NAME" in
             "v$package_version"|"v$package_version"-*) ;;
             *)

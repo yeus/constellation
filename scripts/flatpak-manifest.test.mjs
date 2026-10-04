@@ -10,6 +10,7 @@ const metainfo = fs.readFileSync(
 const yarnLock = fs.readFileSync('yarn.lock', 'utf8')
 const yarnSources = JSON.parse(fs.readFileSync('packaging/flatpak/generated-sources.json', 'utf8'))
 const cargoSources = JSON.parse(fs.readFileSync('packaging/flatpak/cargo-sources.json', 'utf8'))
+const applicationVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version
 
 test('local Flatpak manifest builds offline from pinned dependency sources', () => {
   assert.match(manifest, /runtime-version: '51'/)
@@ -110,7 +111,10 @@ test('generated Cargo sources vendor every registry package with a checksum', ()
 test('MetaInfo carries release, screenshot, and identity metadata', () => {
   assert.match(metainfo, /<id>space\.taskyon\.constellation<\/id>/)
   assert.match(metainfo, /<project_license>MIT<\/project_license>/)
-  assert.match(metainfo, /<release version="0\.1\.0" date="\d{4}-\d{2}-\d{2}" \/>/)
+  const release = metainfo.match(/<release version="([^"]+)" date="([^"]+)" \/>/)
+  assert.ok(release, 'MetaInfo must include a release entry')
+  assert.equal(release[1], applicationVersion)
+  assert.match(release[2], /^\d{4}-\d{2}-\d{2}$/)
   assert.match(
     metainfo,
     /<image>https:\/\/raw\.githubusercontent\.com\/yeus\/constellation\/main\/packaging\/flatpak\/screenshots\/constellation-desktop\.png<\/image>/,

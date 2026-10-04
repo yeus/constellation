@@ -29,3 +29,6 @@ test-results/
 /cierror.txt
 .winx/
 /.screenshots/
+
+# Private release acceptance reports
+release-acceptance-*.json

@@ -84,6 +84,16 @@ test('quality job builds vendor packages before linting', () => {
 test('tagged GitHub releases build Android and both Linux packages before publishing', () => {
   const workflow = release()
   assert.doesNotMatch(workflow, /\\\$\{/)
+  const validateTag = workflow.slice(
+    workflow.indexOf('  validate-tag:'),
+    workflow.indexOf('  appimage:'),
+  )
+  const nodeSetup = validateTag.indexOf('actions/setup-node@v4')
+  const releaseCheck = validateTag.indexOf('node scripts/release.mjs --check')
+  assert.ok(nodeSetup !== -1, 'tag validation must select the project Node runtime')
+  assert.ok(releaseCheck !== -1, 'tag validation must check synchronized release versions')
+  assert.ok(nodeSetup < releaseCheck, 'Node must be set up before the release check runs')
+  assert.match(workflow, /node scripts\/release\.mjs --check/)
   assert.match(workflow, /tags:\s*\n\s*- ['"]v\*['"]/)
   assert.match(workflow, /nix run \.#build-desktop-release-appimage/)
   assert.match(workflow, /corepack yarn build:desktop:release:flatpak/)
