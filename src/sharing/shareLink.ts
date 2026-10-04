@@ -1,6 +1,8 @@
 import { z } from 'zod'
+import type { PrivateKey } from '@libp2p/interface'
+import { peerIdFromPrivateKey, peerIdFromString } from '@libp2p/peer-id'
 
-import { base64UrlToText, bytesToBase64Url, textToBase64Url } from './encoding.ts'
+import { base64UrlToBytes, base64UrlToText, bytesToBase64Url, textToBase64Url } from './encoding.ts'
 
 export const SHARE_LINK_VERSION = 1 as const
 export const MAX_SHARE_FRAGMENT_LENGTH = 1_800
@@ -13,27 +15,65 @@ const ShareCapabilitySchema = z
     sourcePeerId: z.string().min(1).max(256),
     addresses: z.array(z.string().min(1).max(512)).max(4),
     expiresAt: z.number().int().positive().nullable(),
+    ownerPeerId: z.string().min(1).max(256).optional(),
+    ownerProof: z.string().min(40).max(256).optional(),
   })
   .strict()
 
 export type ShareCapability = z.output<typeof ShareCapabilitySchema>
 
-export const createShareInvitation = (options: {
+export const returnOwnerMessage = (shareId: string, sourcePeerId: string): Uint8Array =>
+  new TextEncoder().encode(`constellation-return-owner-v1:${shareId}:${sourcePeerId}`)
+
+export const verifyReturnOwner = async (
+  capability: ShareCapability,
+  expectedOwnerPeerId?: string,
+): Promise<boolean> => {
+  if (!capability.ownerPeerId || !capability.ownerProof) return false
+  if (expectedOwnerPeerId && capability.ownerPeerId !== expectedOwnerPeerId) return false
+  try {
+    const owner = peerIdFromString(capability.ownerPeerId)
+    if (!owner.publicKey) return false
+    return await owner.publicKey.verify(
+      returnOwnerMessage(capability.shareId, capability.sourcePeerId),
+      base64UrlToBytes(capability.ownerProof),
+    )
+  } catch {
+    return false
+  }
+}
+
+export const createShareInvitation = async (options: {
   baseUrl: string
   sourcePeerId: string
   addresses: readonly string[]
   expiresAt: number | null
   randomBytes?: (length: number) => Uint8Array
-}): { url: string; capability: ShareCapability } => {
+  ownerPrivateKey?: PrivateKey
+}): Promise<{ url: string; capability: ShareCapability }> => {
   const randomBytes =
     options.randomBytes ?? ((length) => crypto.getRandomValues(new Uint8Array(length)))
-  const capability = ShareCapabilitySchema.parse({
+  const unsigned = {
     v: SHARE_LINK_VERSION,
     shareId: bytesToBase64Url(randomBytes(16)),
     secret: bytesToBase64Url(randomBytes(32)),
     sourcePeerId: options.sourcePeerId,
     addresses: [...options.addresses],
     expiresAt: options.expiresAt,
+  }
+  const ownerPeerId = options.ownerPrivateKey
+    ? peerIdFromPrivateKey(options.ownerPrivateKey).toString()
+    : undefined
+  const ownerProof = options.ownerPrivateKey
+    ? bytesToBase64Url(
+        await options.ownerPrivateKey.sign(
+          returnOwnerMessage(unsigned.shareId, unsigned.sourcePeerId),
+        ),
+      )
+    : undefined
+  const capability = ShareCapabilitySchema.parse({
+    ...unsigned,
+    ...(ownerPeerId && ownerProof ? { ownerPeerId, ownerProof } : {}),
   })
   const fragment = textToBase64Url(JSON.stringify(capability))
   if (fragment.length > MAX_SHARE_FRAGMENT_LENGTH) {

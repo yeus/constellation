@@ -42,7 +42,6 @@ class LocationShareService : Service(), LocationListener {
   private val pendingCommands = mutableListOf<JSONObject>()
   private val pendingCreateIds = mutableSetOf<String>()
   private var runtimeReady = false
-  private var runtimeError = false
   private var lastPersistedStatus: String? = null
   private var lastShares: JSONArray? = null
   private var lastViewerCount = 0
@@ -121,6 +120,27 @@ class LocationShareService : Service(), LocationListener {
           queueCommand(
             JSONObject()
               .put("type", "block-viewer")
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
+              .put("fingerprint", intent?.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_APPROVE_RETURN_LINK -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "approve-return-link")
+              .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_DISMISS_RETURN_OFFER -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "dismiss-return-offer")
+              .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
               .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
               .put("fingerprint", intent?.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)),
           )
@@ -319,6 +339,15 @@ class LocationShareService : Service(), LocationListener {
         updatePolicyState(forceSend = true)
         stopWhenIdle()
       }
+      "command-complete" -> {
+        val result = Intent(ShareServiceContract.ACTION_COMMAND_COMPLETE)
+          .setPackage(packageName)
+          .putExtra(ShareServiceContract.EXTRA_REQUEST_ID, parsed.optString("requestId"))
+        if (parsed.has("error")) {
+          result.putExtra(ShareServiceContract.EXTRA_ERROR, "Could not save the return-sharing change.")
+        }
+        sendBroadcast(result)
+      }
       "create-complete" -> {
         pendingCreateIds.remove(parsed.optString("requestId"))
         stopWhenIdle()
@@ -340,9 +369,8 @@ class LocationShareService : Service(), LocationListener {
         }
         lastShares = shares
         lastViewerCount = viewers
-        runtimeError = status.optString("state") == "error" && (shares?.length() ?: 0) == 0
         updatePolicyState()
-        ShareNotification.update(this, notificationBody(shares, viewers))
+        ShareNotification.update(this, notificationBody(shares, viewers), (shares?.length() ?: 0) > 0)
         stopWhenIdle()
       }
       "idle", "stopped" -> finishStop()
@@ -352,7 +380,7 @@ class LocationShareService : Service(), LocationListener {
 
   private fun notificationBody(shares: JSONArray?, viewers: Int): String {
     val count = shares?.length() ?: 0
-    if (count == 0) return "No active links"
+    if (count == 0) return "Notifying peers that location links have ended"
     val precisions = linkedSetOf<String>()
     var nearestExpiry: Long? = null
     for (index in 0 until count) {
@@ -493,7 +521,7 @@ class LocationShareService : Service(), LocationListener {
       stopLocationUpdates()
       startLocationUpdates()
     }
-    ShareNotification.update(this, notificationBody(shares, lastViewerCount))
+    ShareNotification.update(this, notificationBody(shares, lastViewerCount), (shares?.length() ?: 0) > 0)
   }
 
   private fun clearRefresh() {
@@ -565,13 +593,9 @@ class LocationShareService : Service(), LocationListener {
     if (!runtimeReady || pendingCreateIds.isNotEmpty()) return
     val status = ShareServiceContract.currentStatus?.let { runCatching { JSONObject(it) }.getOrNull() }
       ?: return
-    if ((status.optJSONArray("shares")?.length() ?: 0) > 0) return
-    if (runtimeError) {
-      ShareServiceContract.serviceRunning = false
-      stopForeground(STOP_FOREGROUND_REMOVE)
-      stopSelf()
-      finishStop()
-    }
+    if ((status.optJSONArray("shares")?.length() ?: 0) > 0 ||
+        status.optInt("endNotificationCount", 0) > 0) return
+    finishStop()
   }
 
   private fun redactRuntimeError(message: String): String = message
@@ -617,8 +641,14 @@ class LocationShareService : Service(), LocationListener {
     lastViewerCount = 0
     networkRestriction = null
     ShareServiceContract.networkRestriction = null
-    runCatching { store.saveStatus(STOPPED_STATUS) }
-    ShareServiceContract.currentStatus = STOPPED_STATUS
+    val stopped = JSONObject(STOPPED_STATUS)
+    ShareServiceContract.currentStatus?.let { current ->
+      runCatching { JSONObject(current).optJSONArray("oldSharing") }.getOrNull()
+        ?.let { stopped.put("oldSharing", it) }
+    }
+    val stoppedStatus = stopped.toString()
+    runCatching { store.saveStatus(stoppedStatus) }
+    ShareServiceContract.currentStatus = stoppedStatus
     ShareServiceContract.serviceRunning = false
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()

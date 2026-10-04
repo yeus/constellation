@@ -179,6 +179,43 @@ async fn android_import_source_state(
 }
 
 #[tauri::command]
+async fn android_approve_background_return_link(
+    app: tauri::AppHandle,
+    share_id: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .approve_return_link(&share_id)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_dismiss_background_return_offer(
+    app: tauri::AppHandle,
+    share_id: String,
+    fingerprint: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .dismiss_return_offer(&share_id, &fingerprint)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id, fingerprint);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_set_background_viewer_name(
     app: tauri::AppHandle,
     share_id: String,
@@ -313,6 +350,8 @@ pub fn run() {
             android_stop_background_share,
             android_set_background_visibility,
             android_import_source_state,
+            android_approve_background_return_link,
+            android_dismiss_background_return_offer,
             android_set_background_viewer_name,
             android_block_background_viewer,
             android_take_shared_text,

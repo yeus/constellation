@@ -3,6 +3,10 @@ package space.taskyon.constellation.plugin
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import java.util.UUID
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
@@ -288,7 +292,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       }
       ShareServiceContract.startPending = true
       ensureService(ShareServiceContract.ACTION_START, request = request.toString())
-      invoke.resolve(JSObject(initial))
+      invoke.resolve(statusWithPolicy(initial))
     } catch (error: Exception) {
       ShareServiceContract.startPending = false
       invoke.reject(error.message ?: "Could not start background location sharing.")
@@ -339,7 +343,23 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   private fun statusWithPolicy(json: String): JSObject {
-    val status = runCatching { JSONObject(json) }.getOrNull() ?: return JSObject(json)
+    val status = runCatching { JSONObject(json) }.getOrNull() ?: JSONObject()
+    if (!status.has("state")) status.put("state", "error")
+    if (status.optString("state") !in setOf("starting", "sharing", "paused", "stopped", "error")) {
+      status.put("state", "error")
+    }
+    if (!status.has("shares") || status.isNull("shares")) status.put("shares", org.json.JSONArray())
+    if (status.opt("shares") !is org.json.JSONArray) status.put("shares", org.json.JSONArray())
+    if (!status.has("message") || status.isNull("message")) status.put("message", "")
+    if (status.opt("message") !is String) status.put("message", "")
+    val location = status.optJSONObject("location")
+    if (location == null || location.optString("status") !in setOf(
+        "permission-required", "acquiring", "live", "delayed", "stale", "denied",
+        "unavailable", "error",
+      )
+    ) {
+      status.put("location", JSONObject().put("status", "unavailable"))
+    }
     val shares = status.optJSONArray("shares")
     val pausedCount = (0 until (shares?.length() ?: 0)).count { index ->
       shares?.optJSONObject(index)?.isNull("paused") == false
@@ -357,7 +377,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       val args = invoke.parseArgs(ShareIdArgs::class.java)
       check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
       ensureService(ShareServiceContract.ACTION_STOP_SHARE, shareId = args.shareId)
-      invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
+      invoke.resolve(statusWithPolicy(ShareServiceContract.currentStatus ?: STARTING_STATUS))
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not revoke this location link.")
     }
@@ -395,6 +415,33 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   @Command
+  fun approveBackgroundReturnLink(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(ShareIdArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      runReturnCommand(invoke, ShareServiceContract.ACTION_APPROVE_RETURN_LINK, args.shareId)
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not approve return shares for this link.")
+    }
+  }
+
+  @Command
+  fun dismissBackgroundReturnOffer(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(BlockViewerArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      check(args.fingerprint.matches(Regex("[A-Za-z0-9_-]{1,32}"))) {
+        "Invalid device fingerprint."
+      }
+      runReturnCommand(
+        invoke, ShareServiceContract.ACTION_DISMISS_RETURN_OFFER, args.shareId, args.fingerprint,
+      )
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not dismiss this return offer.")
+    }
+  }
+
+  @Command
   fun blockBackgroundViewer(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(BlockViewerArgs::class.java)
@@ -407,7 +454,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         shareId = args.shareId,
         fingerprint = args.fingerprint,
       )
-      invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
+      invoke.resolve(statusWithPolicy(ShareServiceContract.currentStatus ?: STARTING_STATUS))
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not block this device.")
     }
@@ -428,9 +475,43 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         fingerprint = args.fingerprint,
         name = args.name,
       )
-      invoke.resolve(JSObject(ShareServiceContract.currentStatus ?: STARTING_STATUS))
+      invoke.resolve(statusWithPolicy(ShareServiceContract.currentStatus ?: STARTING_STATUS))
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not save this device name.")
+    }
+  }
+
+  private fun runReturnCommand(
+    invoke: Invoke, action: String, shareId: String, fingerprint: String? = null,
+  ) {
+    val requestId = UUID.randomUUID().toString()
+    val context = activity.applicationContext
+    var completed = false
+    lateinit var receiver: BroadcastReceiver
+    lateinit var timeout: Runnable
+    fun finish(error: String?) {
+      if (completed) return
+      completed = true
+      locationHandler.removeCallbacks(timeout)
+      context.unregisterReceiver(receiver)
+      if (error == null) invoke.resolve(JSObject()) else invoke.reject(error)
+    }
+    receiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID) != requestId) return
+        finish(intent.getStringExtra(ShareServiceContract.EXTRA_ERROR))
+      }
+    }
+    timeout = Runnable { finish("The return-sharing change was not confirmed. Try again.") }
+    ContextCompat.registerReceiver(
+      context, receiver, IntentFilter(ShareServiceContract.ACTION_COMMAND_COMPLETE),
+      ContextCompat.RECEIVER_NOT_EXPORTED,
+    )
+    locationHandler.postDelayed(timeout, 30_000L)
+    try {
+      ensureService(action, shareId = shareId, fingerprint = fingerprint, requestId = requestId)
+    } catch (_: Exception) {
+      finish("Could not send the return-sharing change.")
     }
   }
 
@@ -441,9 +522,11 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     fingerprint: String? = null,
     name: String? = null,
     visible: Boolean? = null,
+    requestId: String? = null,
   ) {
     val intent = Intent(activity, LocationShareService::class.java).setAction(action)
     request?.let { intent.putExtra(ShareServiceContract.EXTRA_REQUEST, it) }
+    requestId?.let { intent.putExtra(ShareServiceContract.EXTRA_REQUEST_ID, it) }
     shareId?.let { intent.putExtra(ShareServiceContract.EXTRA_SHARE_ID, it) }
     fingerprint?.let { intent.putExtra(ShareServiceContract.EXTRA_FINGERPRINT, it) }
     name?.let { intent.putExtra(ShareServiceContract.EXTRA_NAME, it) }

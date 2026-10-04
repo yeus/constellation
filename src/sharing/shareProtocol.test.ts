@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { constellationProtocolV1, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import { constellationProtocolV2, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
 
 test('combines share authorization and Taskyon sensor operations on one versioned stream', () => {
-  assert.equal(SHARE_STREAM_PROTOCOL, '/constellation/location-share/1.0.0')
+  assert.equal(SHARE_STREAM_PROTOCOL, '/constellation/location-share/2.0.0')
   assert.equal(
-    constellationProtocolV1.message.safeParse({
+    constellationProtocolV2.message.safeParse({
       type: 'share.redeemRequest',
       requestId: 'request-1',
       shareId: 'synthetic-share-id',
@@ -16,7 +16,7 @@ test('combines share authorization and Taskyon sensor operations on one versione
     true,
   )
   assert.equal(
-    constellationProtocolV1.message.safeParse({
+    constellationProtocolV2.message.safeParse({
       type: 'sensor.subscribeRequest',
       requestId: 'request-2',
       sensorId: 'location',
@@ -24,23 +24,24 @@ test('combines share authorization and Taskyon sensor operations on one versione
     true,
   )
   assert.equal(
-    constellationProtocolV1.message.safeParse({
+    constellationProtocolV2.message.safeParse({
       type: 'share.offerReturnRequest',
       requestId: 'request-3',
       sessionId: 'synthetic-session-id',
       url: 'https://example.invalid/#share=synthetic-return-capability',
+      ownerPeerId: 'synthetic-owner-peer',
     }).success,
     true,
   )
   assert.equal(
-    constellationProtocolV1.message.safeParse({ type: 'location.dumpAll' }).success,
+    constellationProtocolV2.message.safeParse({ type: 'location.dumpAll' }).success,
     false,
   )
 })
 
 test('rejects unknown required semantics instead of silently accepting them', () => {
   assert.equal(
-    constellationProtocolV1.message.safeParse({
+    constellationProtocolV2.message.safeParse({
       type: 'share.redeemRequest',
       requestId: 'request-unknown-field',
       shareId: 'synthetic-share-id',
@@ -50,5 +51,16 @@ test('rejects unknown required semantics instead of silently accepting them', ()
     }).success,
     false,
   )
-  assert.equal(SHARE_STREAM_PROTOCOL, '/constellation/location-share/1.0.0')
+  assert.equal(SHARE_STREAM_PROTOCOL, '/constellation/location-share/2.0.0')
+})
+
+test('redeeming an ended link returns a terminal reason without a live session', () => {
+  assert.equal(
+    constellationProtocolV2.message.safeParse({
+      type: 'share.redeemResponse',
+      requestId: 'ended-request',
+      result: { ended: true, reason: 'revoked', endedAt: 1000 },
+    }).success,
+    true,
+  )
 })

@@ -12,7 +12,14 @@ export interface AndroidBackgroundStatus {
   readonly returnOffers?: readonly {
     shareId: string
     viewerFingerprint: string
+    ownerPeerId: string
     url: string
+  }[]
+  readonly oldSharing?: readonly {
+    shareId: string
+    name?: string
+    endedAt: number
+    reason: 'revoked' | 'expired'
   }[]
   readonly location: BrowserLocationState
   readonly message: string
@@ -64,7 +71,26 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
       !['offline', 'connecting', 'online', 'error'].includes(candidate.peerStatus)) ||
     (candidate.pauseReason !== undefined &&
       !['metered', 'data-saver'].includes(candidate.pauseReason)) ||
-    (candidate.sampling !== undefined && !['balanced', 'saver'].includes(candidate.sampling))
+    (candidate.sampling !== undefined && !['balanced', 'saver'].includes(candidate.sampling)) ||
+    (candidate.returnOffers !== undefined &&
+      (!Array.isArray(candidate.returnOffers) ||
+        candidate.returnOffers.some(
+          (offer) =>
+            !offer ||
+            typeof offer.shareId !== 'string' ||
+            typeof offer.viewerFingerprint !== 'string' ||
+            typeof offer.ownerPeerId !== 'string' ||
+            typeof offer.url !== 'string',
+        ))) ||
+    (candidate.oldSharing !== undefined &&
+      (!Array.isArray(candidate.oldSharing) ||
+        candidate.oldSharing.some(
+          (record) =>
+            !record ||
+            typeof record.shareId !== 'string' ||
+            typeof record.endedAt !== 'number' ||
+            !['revoked', 'expired'].includes(record.reason),
+        )))
   ) {
     throw new Error('Invalid background sharing status.')
   }
@@ -83,6 +109,8 @@ export const createAndroidBackgroundSharing = (
       status: () => Promise<AndroidBackgroundStatus>
       stop: (shareId: string) => Promise<AndroidBackgroundStatus>
       setVisible: (visible: boolean) => Promise<void>
+      approveReturnLink: (shareId: string) => Promise<void>
+      dismissReturnOffer: (shareId: string, fingerprint: string) => Promise<void>
       importSourceState: (state: PrivateState) => Promise<void>
       setViewerName: (
         shareId: string,
@@ -129,6 +157,15 @@ export const createAndroidBackgroundSharing = (
       parseStatus(await dependencies.invoke('android_stop_background_share', { shareId })),
     setVisible: async (visible) => {
       await dependencies.invoke('android_set_background_visibility', { visible })
+    },
+    approveReturnLink: async (shareId) => {
+      await dependencies.invoke('android_approve_background_return_link', { shareId })
+    },
+    dismissReturnOffer: async (shareId, fingerprint) => {
+      await dependencies.invoke('android_dismiss_background_return_offer', {
+        shareId,
+        fingerprint,
+      })
     },
     importSourceState: async (state) => {
       await dependencies.invoke('android_import_source_state', {

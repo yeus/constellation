@@ -9,15 +9,15 @@ import type { Connection, PrivateKey, Stream } from '@libp2p/interface'
 import { multiaddr } from '@multiformats/multiaddr'
 import type { ProtocolMessage } from '@taskyon/protocol'
 
-import { constellationProtocolV1 } from './shareProtocol.ts'
+import { constellationProtocolV2 } from './shareProtocol.ts'
 
-export type ConstellationMessage = ProtocolMessage<typeof constellationProtocolV1>
+export type ConstellationMessage = ProtocolMessage<typeof constellationProtocolV2>
 
 const jsonCodec = {
   encode: (message: ConstellationMessage): Uint8Array =>
     new TextEncoder().encode(JSON.stringify(message)),
   decode: (bytes: Uint8Array): ConstellationMessage =>
-    constellationProtocolV1.message.parse(
+    constellationProtocolV2.message.parse(
       JSON.parse(new TextDecoder().decode(bytes)),
     ) as ConstellationMessage,
 }

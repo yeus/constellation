@@ -1,3 +1,7 @@
+import {
+  executeBackgroundReturnCommand,
+  type BackgroundReturnCommand,
+} from './backgroundReturnCommand.ts'
 import { shouldSignalIdleAfterShareUpdate } from './backgroundRuntimePolicy.ts'
 import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
 import type { ShareDraft } from '../shareDraft.ts'
@@ -42,6 +46,7 @@ type BackgroundCommand =
   | { readonly type: 'network-state'; readonly state: 'unmetered' | 'metered' | 'data-saver' }
   | { readonly type: 'set-visible'; readonly visible: boolean }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
+  | BackgroundReturnCommand
   | {
       readonly type: 'set-viewer-name'
       readonly shareId: string
@@ -131,17 +136,26 @@ const start = (): void => {
 
   const report = (state: SharingRuntimeState): void => {
     const shareCount = state.shares.length
-    const becameIdle = shouldSignalIdleAfterShareUpdate(previousShareCount, shareCount)
-    previousShareCount = shareCount
+    const workCount = shareCount + state.endNotifications.length
+    const becameIdle = shouldSignalIdleAfterShareUpdate(previousShareCount, workCount)
+    previousShareCount = workCount
     latestState = state
     post({
       type: 'status',
       status: {
-        state: shareCount ? 'sharing' : state.peerStatus === 'error' ? 'error' : 'starting',
+        state: shareCount
+          ? 'sharing'
+          : state.peerStatus === 'error'
+            ? 'error'
+            : workCount
+              ? 'stopped'
+              : 'starting',
+        endNotificationCount: state.endNotifications.length,
         peerStatus: state.peerStatus,
         diagnostics: runtime.networkDiagnostics(),
         shares: state.shares,
         returnOffers: state.returnOffers,
+        oldSharing: state.oldSharing,
         location: state.location,
         message: state.message,
       },
@@ -202,15 +216,21 @@ const start = (): void => {
     if (command.type === 'stop-all') {
       try {
         const shares = latestState?.shares ?? []
-        await Promise.all(shares.map(({ shareId }) => runtime.stopShare(shareId)))
+        for (const { shareId } of shares) await runtime.stopShare(shareId)
+        await runtime.stopEndNotifications()
       } catch (error) {
         sendError(error, 'Could not stop all location links.')
       }
-      if (!latestState?.shares.length) post({ type: 'idle' })
+      if (!latestState?.shares.length && !latestState?.endNotifications.length)
+        post({ type: 'idle' })
       return
     }
     const pauseForegroundOnly = async (): Promise<void> => {
-      if (latestState?.shares.some((share) => share.publication === 'background')) return
+      if (
+        latestState?.shares.some((share) => share.publication === 'background') ||
+        latestState?.endNotifications.some((share) => share.publication === 'background')
+      )
+        return
       await runtime.stop()
       post({ type: 'paused' })
     }
@@ -234,6 +254,10 @@ const start = (): void => {
       } catch (error) {
         sendError(error, 'Could not block this device.')
       }
+      return
+    }
+    if (command.type === 'approve-return-link' || command.type === 'dismiss-return-offer') {
+      await executeBackgroundReturnCommand(runtime, command, post)
       return
     }
     try {

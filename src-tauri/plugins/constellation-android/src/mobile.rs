@@ -102,6 +102,30 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub async fn approve_return_link(&self, share_id: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async(
+                "approveBackgroundReturnLink",
+                json!({ "shareId": share_id }),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn dismiss_return_offer(
+        &self,
+        share_id: &str,
+        fingerprint: &str,
+    ) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async(
+                "dismissBackgroundReturnOffer",
+                json!({ "shareId": share_id, "fingerprint": fingerprint }),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn set_viewer_name(
         &self,
         share_id: &str,

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
+import { bytesToBase64Url } from './encoding.ts'
+import { createShareInvitation } from './shareLink.ts'
+import type { PrivateState } from './privateStore.ts'
 
 import { createBrowserLocationSource } from '../location/browser.ts'
 import {
@@ -10,6 +14,7 @@ import {
   rememberRedeemedNonce,
   savedFollowRecords,
   sessionSweepReason,
+  type SharingRuntimeState,
 } from './sharingRuntime.ts'
 
 test('session diagnostics are bounded and contain only safe lifecycle details', () => {
@@ -130,4 +135,96 @@ test('classifies heartbeat and expiry cleanup deterministically', () => {
   assert.equal(sessionSweepReason(null, 10_000, 45_001), 'heartbeat-timeout')
   assert.equal(sessionSweepReason(30_000, 29_000, 30_000), 'expired')
   assert.equal(sessionSweepReason(30_000, 0, 70_000), 'expired')
+})
+
+test('failed group approval keeps the offer and permits a persisted retry', async () => {
+  const source = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: [],
+    expiresAt: null,
+  })
+  const returned = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-return-peer',
+    addresses: [],
+    expiresAt: null,
+  })
+  const offer = {
+    shareId: source.capability.shareId,
+    viewerFingerprint: 'synthetic-viewer',
+    ownerPeerId: 'synthetic-owner',
+    url: returned.url,
+  }
+  const initial = {
+    version: 1 as const,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(await generateKeyPair('Ed25519'))),
+    shares: [
+      {
+        url: source.url,
+        precision: 'approximate' as const,
+        capacity: 1,
+        publication: 'foreground' as const,
+      },
+    ],
+    followed: [],
+    returnOffers: [offer],
+    oldSeeing: [
+      { shareId: returned.capability.shareId, reason: 'revoked' as const, endedAt: Date.now() },
+    ],
+  }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  let fail = true
+  let saved = initial as PrivateState
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => initial,
+      save: async (value) => {
+        if (fail) throw new Error('Synthetic private storage failure')
+        saved = value
+      },
+    },
+  )
+  try {
+    await assert.rejects(runtime.approveReturnLink(source.capability.shareId), /storage failure/)
+    let state!: SharingRuntimeState
+    const unsubscribe = runtime.subscribe((value) => {
+      state = value
+    })
+    assert.deepEqual(state.approvedReturnLinks, [])
+    assert.deepEqual(state.returnOffers, [offer])
+    fail = false
+    await runtime.approveReturnLink(source.capability.shareId)
+    assert.deepEqual(saved.approvedReturnLinks, [source.capability.shareId])
+    assert.deepEqual(saved.returnOffers, [offer])
+    assert.deepEqual(state.returnOffers, [offer])
+    fail = true
+    await assert.rejects(runtime.stopShare(source.capability.shareId), /storage failure/)
+    fail = false
+    await runtime.approveReturnLink(source.capability.shareId)
+    assert.equal(state.shares.length, 1)
+    assert.deepEqual(state.endNotifications, [])
+    assert.equal(saved.endedShares?.length, 0)
+    await runtime.stopShare(source.capability.shareId)
+    assert.equal(state.shares.length, 0)
+    assert.equal(state.endNotifications.length, 1)
+    assert.equal(saved.endedShares?.[0]?.reason, 'revoked')
+    assert.deepEqual(Object.keys(saved.endedShares?.[0] ?? {}).sort(), [
+      'endedAt',
+      'publication',
+      'reason',
+      'url',
+    ])
+    await runtime.stopEndNotifications()
+    assert.deepEqual(saved.endedShares, [])
+    assert.equal(saved.oldSharing?.[0]?.reason, 'revoked')
+    unsubscribe()
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
 })

@@ -4,8 +4,8 @@ import test from 'node:test'
 import { createShareInvitation } from '../sharing/shareLink.ts'
 import { invitationFromSharedText } from './sharedText.ts'
 
-test('extracts an invitation from a message without retaining surrounding text', () => {
-  const { url } = createShareInvitation({
+test('extracts an invitation from a message without retaining surrounding text', async () => {
+  const { url } = await createShareInvitation({
     baseUrl: 'https://constellation.taskyon.space/',
     sourcePeerId: 'peer-a',
     addresses: ['/ip4/127.0.0.1/tcp/9111/ws/p2p/peer-a'],

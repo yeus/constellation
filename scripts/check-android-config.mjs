@@ -34,6 +34,8 @@ const locationAccess = fs.readFileSync(
   'utf8',
 )
 const backgroundEntry = fs.readFileSync('src/android/backgroundEntry.ts', 'utf8')
+const returnCommand = fs.readFileSync('src/android/backgroundReturnCommand.ts', 'utf8')
+const mapView = fs.readFileSync('src/views/MapView.vue', 'utf8')
 const backgroundGradle = fs.readFileSync(
   'src-tauri/plugins/constellation-android/android/build.gradle.kts',
   'utf8',
@@ -153,7 +155,43 @@ assert.match(locationService, /networkRestriction/)
 assert.match(locationService, /fun allKnownSharesPaused\(\): Boolean/)
 assert.match(locationService, /"network-state"/)
 assert.match(manifest, /android\.permission\.ACCESS_NETWORK_STATE/)
+assert.match(manifest, /android\.permission\.CAMERA/)
 assert.match(androidPlugin, /fun statusWithPolicy\(json: String\): JSObject/)
+assert.match(androidPlugin, /invoke\.resolve\(statusWithPolicy\(initial\)\)/)
+assert.match(
+  androidPlugin,
+  /const val STARTING_STATUS = "\{\\"state\\":\\"starting\\",\\"shares\\":\[\]/,
+)
+assert.match(androidPlugin, /if \(!status\.has\("shares"\).*org\.json\.JSONArray\(\)/)
+assert.match(androidPlugin, /if \(!status\.has\("message"\).*status\.put\("message", ""\)/)
+assert.match(mapView, /if \(creatingShare\.value\) return/)
+assert.match(androidPlugin, /fun approveBackgroundReturnLink\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun dismissBackgroundReturnOffer\(invoke: Invoke\)/)
+assert.match(locationService, /"approve-return-link"/)
+assert.match(locationService, /"dismiss-return-offer"/)
+assert.match(backgroundEntry, /await executeBackgroundReturnCommand\(runtime, command, post\)/)
+assert.match(returnCommand, /await runtime\.approveReturnLink\(command\.shareId\)/)
+assert.match(
+  returnCommand,
+  /await runtime\.dismissReturnOffer\(command\.shareId, command\.fingerprint\)/,
+)
+assert.match(
+  androidPlugin,
+  /runReturnCommand\(invoke, ShareServiceContract.ACTION_APPROVE_RETURN_LINK/,
+)
+assert.match(
+  androidPlugin,
+  /intent\?\.getStringExtra\(ShareServiceContract.EXTRA_REQUEST_ID\) != requestId/,
+)
+assert.match(androidPlugin, /postDelayed\(timeout, 30_000L\)/)
+assert.match(locationService, /"command-complete"/)
+assert.match(locationService, /sendBroadcast\(result\)/)
+assert.match(backgroundEntry, /shareCount \+ state.endNotifications.length/)
+assert.match(locationService, /status.optInt\("endNotificationCount", 0\) > 0/)
+assert.match(mobileBridge, /"approveBackgroundReturnLink"/)
+assert.match(mobileBridge, /"dismissBackgroundReturnOffer"/)
+assert.match(tauriCommands, /android_approve_background_return_link/)
+assert.match(tauriCommands, /android_dismiss_background_return_offer/)
 assert.doesNotMatch(
   locationService,
   /checkSelfPermission\(this, Manifest\.permission\.ACCESS_FINE_LOCATION\)/,

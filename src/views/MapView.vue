@@ -528,6 +528,10 @@ const runtimeState = ref<SharingRuntimeState>({
   received: [],
   following: [],
   returnOffers: [],
+  approvedReturnLinks: [],
+  oldSharing: [],
+  oldSeeing: [],
+  endNotifications: [],
   message: '',
   canSave: true,
 })

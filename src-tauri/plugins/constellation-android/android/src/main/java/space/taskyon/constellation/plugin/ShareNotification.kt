@@ -22,6 +22,11 @@ internal object ShareServiceContract {
   const val ACTION_SET_VIEWER_NAME = "space.taskyon.constellation.SET_LOCATION_VIEWER_NAME"
   const val ACTION_STOP = "space.taskyon.constellation.STOP_LOCATION_SHARE"
   const val ACTION_BLOCK_VIEWER = "space.taskyon.constellation.BLOCK_LOCATION_VIEWER"
+  const val ACTION_APPROVE_RETURN_LINK = "space.taskyon.constellation.APPROVE_RETURN_LINK"
+  const val ACTION_DISMISS_RETURN_OFFER = "space.taskyon.constellation.DISMISS_RETURN_OFFER"
+  const val ACTION_COMMAND_COMPLETE = "space.taskyon.constellation.RETURN_COMMAND_COMPLETE"
+  const val EXTRA_REQUEST_ID = "space.taskyon.constellation.REQUEST_ID"
+  const val EXTRA_ERROR = "space.taskyon.constellation.COMMAND_ERROR"
   const val EXTRA_REQUEST = "space.taskyon.constellation.SHARE_REQUEST"
   const val EXTRA_VISIBLE = "space.taskyon.constellation.VISIBLE"
   const val EXTRA_SHARE_ID = "space.taskyon.constellation.SHARE_ID"
@@ -32,7 +37,7 @@ internal object ShareServiceContract {
 }
 
 internal object ShareNotification {
-  fun build(context: Context, body: String): Notification {
+  fun build(context: Context, body: String, sharing: Boolean = true): Notification {
     ensureChannel(context)
     val stopIntent = Intent(context, LocationShareService::class.java)
       .setAction(ShareServiceContract.ACTION_STOP)
@@ -44,14 +49,14 @@ internal object ShareNotification {
     )
     val builder = NotificationCompat.Builder(context, ShareServiceContract.CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_constellation)
-      .setContentTitle("Constellation is sharing your location")
+      .setContentTitle(if (sharing) "Constellation is sharing your location" else "Constellation is sending ended-link notices")
       .setContentText(body)
       .setCategory(Notification.CATEGORY_SERVICE)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
-      .addAction(0, "Stop sharing", stopPending)
+      .addAction(0, if (sharing) "Stop sharing" else "Stop notices", stopPending)
     context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
       launch.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
       builder.setContentIntent(PendingIntent.getActivity(
@@ -64,9 +69,9 @@ internal object ShareNotification {
     return builder.build()
   }
 
-  fun update(context: Context, body: String) {
+  fun update(context: Context, body: String, sharing: Boolean = true) {
     context.getSystemService(NotificationManager::class.java)
-      .notify(ShareServiceContract.NOTIFICATION_ID, build(context, body))
+      .notify(ShareServiceContract.NOTIFICATION_ID, build(context, body, sharing))
   }
 
   private fun ensureChannel(context: Context) {

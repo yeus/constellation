@@ -2,12 +2,12 @@ import { defineFrpServiceProtocol, mergeFrpProtocols } from '@taskyon/protocol'
 import { sensorProtocolV1 } from '@taskyon/protocol/sensor'
 import { z } from 'zod'
 
-export const SHARE_STREAM_PROTOCOL = '/constellation/location-share/1.0.0' as const
+export const SHARE_STREAM_PROTOCOL = '/constellation/location-share/2.0.0' as const
 
-export const shareProtocolV1 = defineFrpServiceProtocol({
+export const shareProtocolV2 = defineFrpServiceProtocol({
   service: 'share',
   id: 'dev.constellation.share',
-  version: '1',
+  version: '2',
   commands: {
     redeem: {
       request: z
@@ -18,15 +18,24 @@ export const shareProtocolV1 = defineFrpServiceProtocol({
           label: z.string().trim().min(1).max(32).optional(),
         })
         .strict(),
-      response: z
-        .object({
-          sessionId: z.string().min(16).max(64),
-          expiresAt: z.number().int().positive().nullable(),
-          precision: z.enum(['exact', 'approximate']),
-          sourceName: z.string().max(32).optional(),
-          heartbeatIntervalMs: z.number().int().min(5_000).max(60_000),
-        })
-        .strict(),
+      response: z.union([
+        z
+          .object({
+            sessionId: z.string().min(16).max(64),
+            expiresAt: z.number().int().positive().nullable(),
+            precision: z.enum(['exact', 'approximate']),
+            sourceName: z.string().max(32).optional(),
+            heartbeatIntervalMs: z.number().int().min(5_000).max(60_000),
+          })
+          .strict(),
+        z
+          .object({
+            ended: z.literal(true),
+            reason: z.enum(['revoked', 'expired']),
+            endedAt: z.number().int().positive(),
+          })
+          .strict(),
+      ]),
       defaultTimeoutMs: 10_000,
     },
     heartbeat: {
@@ -43,6 +52,7 @@ export const shareProtocolV1 = defineFrpServiceProtocol({
         .object({
           sessionId: z.string().min(16).max(64),
           url: z.string().url().max(4_096),
+          ownerPeerId: z.string().min(1).max(256),
         })
         .strict(),
       defaultTimeoutMs: 10_000,
@@ -60,9 +70,9 @@ export const shareProtocolV1 = defineFrpServiceProtocol({
   },
 })
 
-export const constellationProtocolV1 = mergeFrpProtocols({
+export const constellationProtocolV2 = mergeFrpProtocols({
   id: 'dev.constellation.location-share',
-  version: '1',
+  version: '2',
   base: sensorProtocolV1,
-  extension: shareProtocolV1,
+  extension: shareProtocolV2,
 })

@@ -32,15 +32,21 @@ internal class EncryptedShareStore(
   fun loadPrivateState(): String? = load("private-state")
 
   @Synchronized
-  fun hasSavedShares(): Boolean =
-    (loadPrivateState()?.let { state -> JSONObject(state).optJSONArray("shares")?.length() } ?: 0) > 0
+  fun hasSavedShares(): Boolean {
+    val state = loadPrivateState()?.let(::JSONObject) ?: return false
+    return listOf("shares", "endedShares").any { key ->
+      (state.optJSONArray(key)?.length() ?: 0) > 0
+    }
+  }
 
   @Synchronized
   fun hasBackgroundShares(): Boolean {
-    val shares = loadPrivateState()?.let { state -> JSONObject(state).optJSONArray("shares") }
-      ?: return false
-    return (0 until shares.length()).any { index ->
-      shares.optJSONObject(index)?.optString("publication") == "background"
+    val state = loadPrivateState()?.let(::JSONObject) ?: return false
+    return listOf("shares", "endedShares").any { key ->
+      val shares = state.optJSONArray(key)
+      (0 until (shares?.length() ?: 0)).any { index ->
+        shares?.optJSONObject(index)?.optString("publication") == "background"
+      }
     }
   }
 

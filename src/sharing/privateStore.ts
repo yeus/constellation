@@ -1,3 +1,4 @@
+import { MAX_END_NOTIFICATIONS } from './shareLifecycle.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
 
@@ -12,6 +13,8 @@ const ShareRecord = z.object({
   publication: z.enum(['foreground', 'background']),
   battery: z.enum(['balanced', 'saver']).optional(),
   network: z.enum(['always', 'pause-when-metered']).optional(),
+  endedAt: z.number().int().positive().optional(),
+  endReason: z.enum(['revoked', 'expired']).optional(),
   blockedPeerIds: z.array(z.string().min(10).max(200)).max(128).optional(),
   approximation: z
     .object({
@@ -29,6 +32,9 @@ const FollowRecord = z.object({
   localName: z.string().max(32),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
   followedAt: z.number().int().positive().optional(),
+  returnPromptSeen: z.boolean().optional(),
+  endedAt: z.number().int().positive().optional(),
+  endReason: z.enum(['revoked', 'expired']).optional(),
 })
 
 const ViewerLabelRecord = z.object({
@@ -37,12 +43,48 @@ const ViewerLabelRecord = z.object({
   name: z.string().min(1).max(32),
 })
 
+const LifecycleRecord = z.object({
+  shareId: z.string().min(16).max(64),
+  name: z.string().max(32).optional(),
+  endedAt: z.number().int().positive(),
+  reason: z.enum(['revoked', 'expired']),
+})
+
+const PendingReturnRecord = z.object({
+  shareId: z.string().min(16).max(64),
+  url: z.string().url().max(4_096),
+})
+
+const ReturnOfferRecord = z.object({
+  shareId: z.string().min(16).max(64),
+  viewerFingerprint: z.string().min(1).max(32),
+  ownerPeerId: z.string().min(1).max(256),
+  url: z.string().url().max(4_096),
+})
+
 const PrivateStateSchema = z.object({
   version: z.literal(1),
   privateKey: z.string().min(40).max(1_024),
   shares: z.array(ShareRecord).max(128),
   followed: z.array(FollowRecord).max(128),
   viewerLabels: z.array(ViewerLabelRecord).max(1_024).optional(),
+  approvedReturnLinks: z.array(z.string().min(16).max(64)).max(128).optional(),
+  pendingReturns: z.array(PendingReturnRecord).max(128).optional(),
+  returnOffers: z.array(ReturnOfferRecord).max(128).optional(),
+  oldSharing: z.array(LifecycleRecord).max(128).optional(),
+  oldSeeing: z.array(LifecycleRecord).max(128).optional(),
+  endedShares: z
+    .array(
+      z.object({
+        url: z.string().url().max(4_096),
+        sourcePrivateKey: z.string().min(40).max(1_024).optional(),
+        publication: z.enum(['foreground', 'background']),
+        reason: z.enum(['revoked', 'expired']),
+        endedAt: z.number().int().positive(),
+      }),
+    )
+    .max(MAX_END_NOTIFICATIONS)
+    .optional(),
 })
 
 const EncryptedPrivateStateSchema = z.object({

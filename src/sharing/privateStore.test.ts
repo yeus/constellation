@@ -57,6 +57,33 @@ test('encrypted private state cannot be opened with another key', async () => {
   await assert.rejects(() => decryptPrivateState(encrypted, otherKey))
 })
 
+test('preserves return approval, prompt history and old-share lifecycle records', () => {
+  const current = parsePrivateState({
+    ...state,
+    followed: [
+      {
+        url: 'https://example.test/#share=synthetic',
+        localName: 'River',
+        color: '#438ec9',
+        returnPromptSeen: true,
+        terminal: 'revoked',
+        endedAt: 1000,
+      },
+    ],
+    approvedReturnLinks: ['synthetic-share-id'],
+    pendingReturns: [{ shareId: 'synthetic-share-id', url: 'https://example.test/#share=return' }],
+    oldSeeing: [{ shareId: 'synthetic-share-id', name: 'River', reason: 'revoked', endedAt: 1000 }],
+    oldSharing: [
+      { shareId: 'synthetic-share-id', name: 'River', reason: 'expired', endedAt: 2000 },
+    ],
+  })
+  assert.equal(current.followed[0]?.returnPromptSeen, true)
+  assert.deepEqual(current.approvedReturnLinks, ['synthetic-share-id'])
+  assert.equal(current.pendingReturns?.length, 1)
+  assert.equal(current.oldSeeing?.[0]?.reason, 'revoked')
+  assert.equal(current.oldSharing?.[0]?.reason, 'expired')
+})
+
 test('share battery and network policy stay optional for existing protected state', () => {
   const legacy = parsePrivateState({
     version: 1,
@@ -87,4 +114,17 @@ test('share battery and network policy stay optional for existing protected stat
   })
   assert.equal(current.shares[0]?.battery, 'saver')
   assert.equal(current.shares[0]?.network, 'pause-when-metered')
+})
+
+test('preserves protected ended-link notification endpoints', () => {
+  const endedShares = [
+    {
+      url: 'https://example.test/#share=synthetic',
+      sourcePrivateKey: 'A'.repeat(64),
+      publication: 'background',
+      reason: 'revoked',
+      endedAt: 1000,
+    },
+  ]
+  assert.deepEqual(parsePrivateState({ ...state, endedShares }).endedShares, endedShares)
 })
