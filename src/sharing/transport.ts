@@ -1,10 +1,12 @@
-export type TransportKind =
-  | 'relay circuit'
-  | 'WebRTC over relay'
-  | 'WebRTC'
-  | 'WebTransport'
-  | 'WebSocket'
-  | 'other'
+export const TRANSPORT_KINDS = [
+  'relay circuit',
+  'WebRTC over relay',
+  'WebRTC',
+  'WebTransport',
+  'WebSocket',
+  'other',
+] as const
+export type TransportKind = (typeof TRANSPORT_KINDS)[number]
 
 export const classifyTransport = (address: string): TransportKind => {
   if (address.includes('/p2p-circuit/webrtc')) return 'WebRTC over relay'

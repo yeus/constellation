@@ -40,7 +40,7 @@ test('keeps map zoom controls outside the share button hit area', async ({ page 
   })
 })
 
-test('resizes the map canvas when sharing actions fold', async ({ page }) => {
+test('preserves the map viewport when sharing actions fold', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 860 })
   await page.goto('/')
   const canvas = page.locator('.maplibregl-canvas')
@@ -53,7 +53,7 @@ test('resizes the map canvas when sharing actions fold', async ({ page }) => {
       const bounds = await surface.boundingBox()
       return bounds?.height ?? 0
     })
-    .toBeGreaterThan(initial?.height ?? 0)
+    .toBe(initial?.height ?? 0)
   await expect
     .poll(async () => {
       const bounds = await canvas.boundingBox()
@@ -104,15 +104,16 @@ test('keeps map attribution clear of sharing actions and at the lower-right when
   )
 })
 
-test('keeps the title high in the top-right corner above connection status', async ({ page }) => {
+test('keeps the wordmark high at the right above the menu and recenter row', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 860 })
   await page.goto('/')
-
   const title = await page.getByText('Constellation', { exact: true }).boundingBox()
-  const connection = await page.locator('.connection-state').boundingBox()
-  if (!title || !connection) throw new Error('Expected title and connection status.')
+  const menu = await page.getByRole('button', { name: 'Open menu' }).boundingBox()
+  const recenter = await page.getByRole('button', { name: 'Center on my location' }).boundingBox()
+  if (!title || !menu || !recenter) throw new Error('Expected the complete top row.')
   expect(title.x + title.width).toBeGreaterThan(400)
-  expect(title.y + title.height).toBeLessThanOrEqual(connection.y)
+  expect(title.y + title.height).toBeLessThanOrEqual(menu.y)
+  expect(Math.abs(menu.y - recenter.y)).toBeLessThan(2)
 })
 
 test('frames the first acquired accuracy area without following later updates', async ({
@@ -148,7 +149,7 @@ test('frames the first acquired accuracy area without following later updates', 
       .getEntriesByType('resource')
       .find((entry) => entry.name.includes('/node_modules/.vite/deps/maplibre-gl.js'))?.name
     if (!moduleUrl) throw new Error('MapLibre module was not loaded.')
-    const maplibre = (await import(/* @vite-ignore */ moduleUrl)).default
+    const maplibre = await import(/* @vite-ignore */ moduleUrl)
     const originalFitBounds = maplibre.Map.prototype.fitBounds
     testWindow.cameraCalls = []
     maplibre.Map.prototype.fitBounds = function (bounds: [[number, number], [number, number]]) {
@@ -341,6 +342,8 @@ test('keeps map credit visible and persists the selected basemap family', async 
   await expect(page.getByText('© OpenStreetMap contributors')).toBeVisible()
   await page.getByRole('button', { name: 'Open menu' }).click()
   await page.getByRole('button', { name: 'Minimalist map' }).click()
+  await expect(page.getByRole('region', { name: 'App menu' })).toBeHidden()
+  await page.getByRole('button', { name: 'Open menu' }).click()
   await expect(page.getByRole('button', { name: 'Minimalist map' })).toHaveAttribute(
     'aria-pressed',
     'true',

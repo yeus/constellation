@@ -120,7 +120,7 @@ const pointFeature = (
 })
 
 const areaFitsInsideMarker = (location: MapLocation, radius: number, zoom?: number): boolean => {
-  if (!location.isOwn || zoom === undefined) return false
+  if (zoom === undefined) return false
   const latitude = (location.latitude * Math.PI) / 180
   const circumference = WEB_MERCATOR_CIRCUMFERENCE_METERS * Math.cos(latitude)
   const radiusPixels = (radius * 512 * 2 ** zoom) / circumference

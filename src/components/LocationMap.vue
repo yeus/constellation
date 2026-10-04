@@ -81,13 +81,8 @@ const addLocationLayers = (target: Map): void => {
     source: LOCATION_SOURCE_ID,
     filter: ['==', ['geometry-type'], 'Point'],
     paint: {
-      'circle-color': [
-        'match',
-        ['get', 'state'],
-        'stale',
-        '#7b8794',
-        ['coalesce', ['get', 'color'], '#f78f3b'],
-      ],
+      'circle-color': ['coalesce', ['get', 'color'], '#f78f3b'],
+      'circle-opacity': ['match', ['get', 'state'], 'stale', 0.45, 'delayed', 0.7, 1],
       'circle-radius': LOCATION_MARKER_RADIUS_PX,
       'circle-stroke-color': theme.value === 'dark' ? '#ffffff' : '#2a3548',
       'circle-stroke-width': LOCATION_MARKER_STROKE_PX,

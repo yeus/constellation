@@ -111,7 +111,7 @@ test('uses the same zoom-dependent fallback for a GPS accuracy area', () => {
   assert.equal(near?.geometry.type, 'Polygon')
 })
 
-test('keeps received areas unchanged when zooming out', () => {
+test('switches received areas to points when they are smaller than the marker', () => {
   const features = createLocationFeatureCollection(
     [
       {
@@ -128,7 +128,7 @@ test('keeps received areas unchanged when zooming out', () => {
 
   assert.deepEqual(
     features.map(({ geometry }) => geometry.type),
-    ['Polygon', 'Polygon'],
+    ['Point', 'Point'],
   )
 })
 
@@ -192,4 +192,28 @@ test('carries owner and peer colors into exact points and approximate areas', ()
 
   assert.equal(features.features[0]?.properties?.color, '#f78f3b')
   assert.equal(features.features[1]?.properties?.color, '#438ec9')
+})
+
+test('own and followed locations share the same threshold and retain color and stale state', () => {
+  const peer = {
+    id: 'synthetic-peer',
+    latitude: 40,
+    longitude: 20,
+    precision: 'approximate' as const,
+    radiusMeters: 500,
+    color: '#289a82',
+    state: 'stale' as const,
+  }
+  for (const zoom of [8, 13, 8]) {
+    const features = createLocationFeatureCollection(
+      [peer, { ...peer, id: 'synthetic-own', isOwn: true }],
+      zoom,
+    ).features
+    assert.equal(features.length, 2)
+    assert.equal(features[0]?.geometry.type, features[1]?.geometry.type)
+    for (const feature of features) {
+      assert.equal(feature.properties.color, peer.color)
+      assert.equal(feature.properties.state, 'stale')
+    }
+  }
 })
