@@ -197,6 +197,49 @@ yarn test:android:config
 yarn test:android:managed
 ```
 
+Run Android commands in Constellation's `nix develop` shell, which supplies
+adb, the SDK and the emulator. For sharing, return approval and revocation
+with an owned local relay (API 29 Play and API 36 also test process recovery):
+
+```sh
+yarn test:android:managed --local-share-flow
+# Repeat on Android 10 with the same fixture APK:
+yarn test:android:managed --local-share-flow \
+  --compat-only --skip-build
+# AOSP without Google Play services:
+yarn test:android:managed --local-share-flow \
+  --no-gms-smoke --skip-build
+```
+
+This mode builds the separate local-relay APK, owns its relay and emulator,
+and supplies the matching relay configuration to the browser viewer. The
+default managed suite retains its hosted-relay path and Android policy tests;
+local sharing acceptance does not prove hosted connectivity, power/network
+policy behaviour, or physical-device compatibility.
+
+The Android emulator results differ between configurations:
+
+| Test environment                                                      | Recorded result (2026-10-05)                                                    |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Android 10 / API 29 with Google Play services and its bundled WebView | Sharing and recovery tests passed.                                              |
+| Android 10 / API 29 AOSP without Google services, stock WebView 74    | Scoped sharing tests passed on some runs; repeated runs intermittently crashed. |
+| Android 16 / API 36                                                   | Managed sharing and policy tests passed; this GPU crash was not observed.       |
+
+In the AOSP/WebView 74 fixture, share creation can abort Chromium's native GPU
+thread with `SIGABRT` inside `libwebviewchromium.so`. The app stops responding
+and WebView automation times out. The exact cause remains unproven: these
+results do not establish that Google services cause or prevent the crash.
+Emulator graphics changes and a map-startup experiment did not reliably fix it
+and were reverted. Timeout diagnostics report only allowlisted crash categories.
+
+The maintainer accepts this as a documented known limitation for 0.1. The
+existing legacy fixture remains available and failures must still be reported.
+The AOSP/no-GMS flow excludes process recovery and shared-text intake. Passing
+API 29 Play and API 36 tests does not establish compatibility with every Android
+version or physical device; intermediate versions and affected physical devices
+remain unverified. Changing the fixture's WebView version would change its
+legacy coverage and requires a separate compatibility decision.
+
 On Linux, the release command uses Secret Service (`secret-tool`) for Android
 signing. The desktop session must provide a working, unlocked Secret Service;
 the Nix shell provides its `secret-tool` client. Run `nix develop` from
@@ -394,7 +437,10 @@ classifies a direct transport for a browser viewer, then stops the local relay
 and requires location updates to continue over the surviving direct path.
 `--captive-transport-smoke` answers the configured relay endpoint with an HTTP
 302 captive response, requires a fail-closed result with no share or service,
-then verifies sharing recovers with the real relay. `--metered-policy-smoke`
+then verifies sharing recovers with the real relay. It also blocks a second
+creation while the first link stays active, requires one successful retry
+without losing or duplicating that link, and verifies a creation failure
+preserves pending revocation notices and ended history. `--metered-policy-smoke`
 checks both the metered and Data Saver pauses, proves that a paused link stops
 publishing, and verifies automatic resume with the same share identity.
 

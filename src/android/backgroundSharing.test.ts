@@ -217,6 +217,23 @@ test('Android status carries an in-memory private return offer', async () => {
   assert.deepEqual((await controller.status()).returnOffers, [offer])
 })
 
+test('Android status carries validated source group approval', async () => {
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, approvedReturnLinks: ['synthetic-share-id'] }),
+  })
+  assert.ok(controller)
+  assert.deepEqual((await controller.status()).approvedReturnLinks, ['synthetic-share-id'])
+  const malformed = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, approvedReturnLinks: [false] }),
+  })
+  assert.ok(malformed)
+  await assert.rejects(malformed.status(), /invalid background sharing status/i)
+})
+
 test('Android status carries ended source links and rejects malformed return offers', async () => {
   const record = {
     shareId: 'synthetic-share-id',

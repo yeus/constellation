@@ -15,6 +15,7 @@ export interface AndroidBackgroundStatus {
     ownerPeerId: string
     url: string
   }[]
+  readonly approvedReturnLinks?: readonly string[]
   readonly oldSharing?: readonly {
     shareId: string
     name?: string
@@ -82,6 +83,9 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
             typeof offer.ownerPeerId !== 'string' ||
             typeof offer.url !== 'string',
         ))) ||
+    (candidate.approvedReturnLinks !== undefined &&
+      (!Array.isArray(candidate.approvedReturnLinks) ||
+        candidate.approvedReturnLinks.some((shareId) => typeof shareId !== 'string'))) ||
     (candidate.oldSharing !== undefined &&
       (!Array.isArray(candidate.oldSharing) ||
         candidate.oldSharing.some(

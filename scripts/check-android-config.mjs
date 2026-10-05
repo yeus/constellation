@@ -34,6 +34,7 @@ const locationAccess = fs.readFileSync(
   'utf8',
 )
 const backgroundEntry = fs.readFileSync('src/android/backgroundEntry.ts', 'utf8')
+const backgroundStatus = fs.readFileSync('src/android/backgroundRuntimeStatus.ts', 'utf8')
 const returnCommand = fs.readFileSync('src/android/backgroundReturnCommand.ts', 'utf8')
 const mapView = fs.readFileSync('src/views/MapView.vue', 'utf8')
 const backgroundGradle = fs.readFileSync(
@@ -215,6 +216,6 @@ assert.doesNotMatch(
   'Injected Android service JavaScript must remain parseable by the API 29 WebView.',
 )
 assert.match(locationService, /remove\("returnOffers"\)/)
-assert.match(backgroundEntry, /returnOffers: state\.returnOffers/)
+assert.match(backgroundStatus, /returnOffers: state\?\.returnOffers/)
 
 console.log('Android configuration checks passed.')

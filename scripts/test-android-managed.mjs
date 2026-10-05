@@ -52,10 +52,16 @@ const onlineSerials = () =>
 
 const waitForBoot = async (child, avdName, previousSerials) => {
   const deadline = Date.now() + 180_000
+  let onlineDevices = 0
+  let newDevices = 0
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`${avdName} exited before booting.`)
     try {
-      const serial = onlineSerials().find((candidate) => !previousSerials.has(candidate))
+      const available = onlineSerials()
+      onlineDevices = available.length
+      const candidates = available.filter((candidate) => !previousSerials.has(candidate))
+      newDevices = candidates.length
+      const serial = candidates[0]
       if (
         serial &&
         adb(['shell', 'getprop', 'sys.boot_completed'], { timeout: 10_000 }, serial).trim() === '1'
@@ -72,7 +78,9 @@ const waitForBoot = async (child, avdName, previousSerials) => {
     }
     await wait(1_000)
   }
-  throw new Error(`${avdName} did not finish booting.`)
+  throw new Error(
+    `${avdName} did not finish booting (online devices: ${onlineDevices}; newly discovered: ${newDevices}).`,
+  )
 }
 
 const stopEmulator = async (child, serial) => {
@@ -134,7 +142,15 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
     run(adbPath, ['start-server'], { env: adbEnvironment })
     run(adbPath, ['-s', device.serial, 'install', '-r', selectedApk], { env: adbEnvironment })
     run(process.execPath, ['scripts/test-android.mjs', ...testArgs], {
-      env: { ...adbEnvironment, ANDROID_SERIAL: device.serial },
+      env: {
+        ...adbEnvironment,
+        ANDROID_SERIAL: device.serial,
+        ...(testArgs.some((argument) =>
+          ['--local-share-flow', '--direct-transport-smoke'].includes(argument),
+        )
+          ? { VITE_CONSTELLATION_RELAY_ADDRS: localRelayAddress }
+          : {}),
+      },
     })
   } finally {
     await stopEmulator(device.child, device.serial)
@@ -253,6 +269,23 @@ const main = async () => {
     if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
     await runProfile('modern', undefined, ['--native-store-smoke'], threeWayApk)
     console.log('Two sequential Android protected-state saves completed.')
+    return
+  }
+  if (process.argv.includes('--local-share-flow')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    const selected = process.argv.includes('--compat-only')
+      ? 'compat'
+      : process.argv.includes('--no-gms-smoke')
+        ? 'aosp'
+        : 'modern'
+    await runProfile(
+      selected,
+      undefined,
+      ['--local-share-flow', ...(selected === 'aosp' ? ['--no-gms-flow'] : [])],
+      threeWayApk,
+    )
+    console.log('Android sharing and return approval passed with the owned local relay.')
     return
   }
   if (process.argv.includes('--three-way')) {

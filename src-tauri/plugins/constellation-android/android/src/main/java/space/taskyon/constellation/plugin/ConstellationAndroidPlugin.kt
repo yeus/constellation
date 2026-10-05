@@ -285,11 +285,22 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       val request = validateRequest(args.request)
       requireLocationPermission(request.optString("publication") == "background")
       requireNotificationPermission()
-      val initial = if (serviceRunning()) {
-        ShareServiceContract.currentStatus ?: store.loadStatus() ?: STARTING_STATUS
+      val running = serviceRunning()
+      val initial = if (running) {
+        JSONObject(ShareServiceContract.currentStatus ?: store.loadStatus() ?: STARTING_STATUS)
+          .apply {
+            // A new request must not acknowledge the previous creation's failure.
+            // Keep the active grants, history and pending end notifications intact.
+            if (optString("state") == "error") {
+              put("state", "starting")
+              put("peerStatus", "connecting")
+              put("message", "")
+            }
+          }.toString()
       } else {
         STARTING_STATUS
       }
+      ShareServiceContract.currentStatus = initial
       ShareServiceContract.startPending = true
       ensureService(ShareServiceContract.ACTION_START, request = request.toString())
       invoke.resolve(statusWithPolicy(initial))

@@ -7,6 +7,7 @@ import type { PrivateState } from './privateStore.ts'
 
 import { createBrowserLocationSource } from '../location/browser.ts'
 import {
+  acceptReturnShare,
   appendSessionEvent,
   followStatusFor,
   createSharingRuntime,
@@ -16,6 +17,35 @@ import {
   sessionSweepReason,
   type SharingRuntimeState,
 } from './sharingRuntime.ts'
+
+test('retrying a received return after acknowledgement failure preserves its single viewer', async () => {
+  const returned = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-return-peer',
+    addresses: [],
+    expiresAt: null,
+  })
+  const offer = {
+    shareId: 'synthetic-original-share',
+    viewerFingerprint: 'synthetic-viewer',
+    ownerPeerId: 'synthetic-owner',
+    url: returned.url,
+  }
+  let connected = false
+  let joins = 0
+  const receiver = {
+    acceptShare: async (url: string, options?: { saved?: boolean; returnOwnerPeerId?: string }) => {
+      assert.equal(url === returned.url, true)
+      assert.equal(options?.saved, true)
+      assert.equal(options?.returnOwnerPeerId === offer.ownerPeerId, true)
+      connected = true
+      joins += 1
+    },
+  }
+  await acceptReturnShare(receiver, offer, () => connected)
+  await acceptReturnShare(receiver, offer, () => connected)
+  assert.equal(joins, 1)
+})
 
 test('session diagnostics are bounded and contain only safe lifecycle details', () => {
   let events: ReturnType<typeof appendSessionEvent> = []
@@ -222,6 +252,57 @@ test('failed group approval keeps the offer and permits a persisted retry', asyn
     assert.deepEqual(saved.endedShares, [])
     assert.equal(saved.oldSharing?.[0]?.reason, 'revoked')
     unsubscribe()
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('an external return receiver preserves saved follows without restoring viewer sessions', async () => {
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-return-peer',
+    addresses: [],
+    expiresAt: null,
+  })
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(await generateKeyPair('Ed25519'))),
+    shares: [],
+    followed: [
+      {
+        url: invitation.url,
+        localName: 'Synthetic returned location',
+        color: '#438ec9',
+        followedAt: 1_000,
+      },
+    ],
+  }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  let saved = initial
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => initial,
+      save: async (value) => {
+        saved = value
+      },
+    },
+    'external',
+  )
+  const acceptShare = runtime.acceptShare
+  let joins = 0
+  runtime.acceptShare = async () => {
+    joins += 1
+  }
+  try {
+    await runtime.initialize()
+    assert.equal(joins, 0)
+    assert.deepEqual(saved.followed, initial.followed)
+    await assert.rejects(acceptShare('invalid invitation'), /foreground receiver/)
   } finally {
     await runtime.stop()
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)

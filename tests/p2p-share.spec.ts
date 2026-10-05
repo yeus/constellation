@@ -4,6 +4,15 @@ import QRCode from 'qrcode'
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
 import { withTwoSources } from './fixtures/two-sources.ts'
 
+test('revocation during viewer admission preserves ended history', async ({ page }) => {
+  await page.goto('/')
+  const result = await page.evaluate(async () => {
+    const { probeRevocationDuringAdmission } = await import('../tests/fixtures/share-probe.ts')
+    return probeRevocationDuringAdmission()
+  })
+  expect(result).toEqual({ following: ['revoked'], history: ['revoked'] })
+})
+
 test('private peers do not announce themselves through public discovery', async ({ page }) => {
   await page.goto('/')
   const announcements = await page.evaluate(async () => {
@@ -816,6 +825,14 @@ test('a disconnected viewer learns revocation after the source restarts', async 
     await viewer.goto(url)
     await viewer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
     await viewer.getByRole('button', { name: 'Save location' }).click()
+    await expect
+      .poll(() =>
+        viewer.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          return (await createBrowserPrivateStore().load())?.followed?.length
+        }),
+      )
+      .toBe(1)
     await viewer.close()
     await source.getByRole('button', { name: /Sharing 1/ }).click()
     await source.getByRole('button', { name: 'Revoke link' }).click()

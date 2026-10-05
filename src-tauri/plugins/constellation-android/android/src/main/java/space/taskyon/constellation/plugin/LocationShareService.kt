@@ -42,6 +42,7 @@ class LocationShareService : Service(), LocationListener {
   private val pendingCommands = mutableListOf<JSONObject>()
   private val pendingCreateIds = mutableSetOf<String>()
   private var runtimeReady = false
+  private var finishing = false
   private var lastPersistedStatus: String? = null
   private var lastShares: JSONArray? = null
   private var lastViewerCount = 0
@@ -226,7 +227,7 @@ class LocationShareService : Service(), LocationListener {
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
     runtimeStarting = false
-    ShareServiceContract.currentStatus = null
+    if (!finishing) ShareServiceContract.currentStatus = null
     ShareServiceContract.serviceRunning = false
     ShareServiceContract.startPending = false
     ioExecutor.shutdown()
@@ -331,6 +332,7 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun handleRuntimeMessage(parsed: JSONObject) {
+    if (finishing) return
     when (parsed.optString("type")) {
       "ready" -> {
         runtimeReady = true
@@ -595,7 +597,7 @@ class LocationShareService : Service(), LocationListener {
       ?: return
     if ((status.optJSONArray("shares")?.length() ?: 0) > 0 ||
         status.optInt("endNotificationCount", 0) > 0) return
-    finishStop()
+    finishStop(status.takeIf { it.optString("state") == "error" })
   }
 
   private fun redactRuntimeError(message: String): String = message
@@ -621,33 +623,27 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun failClosed(message: String) {
-    val status = JSONObject()
-      .put("state", "error")
-      .put("shares", org.json.JSONArray())
-      .put("location", JSONObject().put("status", "unavailable"))
-      .put("message", message)
-      .toString()
-    ShareServiceContract.currentStatus = status
-    ShareServiceContract.serviceRunning = false
-    runCatching { store.saveStatus(redactedStatus(JSONObject(status))) }
-    stopForeground(STOP_FOREGROUND_REMOVE)
-    stopSelf()
+    finishStop(JSONObject().put("state", "error").put("message", message))
   }
 
-  private fun finishStop() {
+  private fun finishStop(failure: JSONObject? = null) {
+    if (finishing) return
+    finishing = true
     stopLocationUpdates()
     watchRequested = false
     lastShares = null
     lastViewerCount = 0
     networkRestriction = null
     ShareServiceContract.networkRestriction = null
-    val stopped = JSONObject(STOPPED_STATUS)
+    val stopped = JSONObject(failure?.toString() ?: STOPPED_STATUS)
+      .put("shares", org.json.JSONArray())
+      .put("location", JSONObject().put("status", "unavailable"))
     ShareServiceContract.currentStatus?.let { current ->
       runCatching { JSONObject(current).optJSONArray("oldSharing") }.getOrNull()
         ?.let { stopped.put("oldSharing", it) }
     }
     val stoppedStatus = stopped.toString()
-    runCatching { store.saveStatus(stoppedStatus) }
+    runCatching { store.saveStatus(if (failure == null) stoppedStatus else redactedStatus(stopped)) }
     ShareServiceContract.currentStatus = stoppedStatus
     ShareServiceContract.serviceRunning = false
     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -655,6 +651,8 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun finishPause() {
+    if (finishing) return
+    finishing = true
     stopLocationUpdates()
     watchRequested = false
     lastShares = null

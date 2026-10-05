@@ -7,7 +7,7 @@ import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 
 import { compileAndroidWebViewExpression } from './android-cdp-source.mjs'
 import { browserProcessEnvironment } from './browser-environment.mjs'
-import { redactAndroidTestError } from './android-test-privacy.mjs'
+import { redactAndroidTestError, summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const sdk = process.env.ANDROID_HOME
@@ -238,6 +238,7 @@ const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222, atte
     () => ++nextId,
     () => [...persistenceTrace],
     () => [...ipcTrace],
+    serial,
   )
 }
 
@@ -262,13 +263,60 @@ const startWithSharedText = (shareUrl, serial = process.env.ANDROID_SERIAL) => {
   }
 }
 
-const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace) => {
+const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, serial) => {
   const command = (method, params) =>
     new Promise((resolve, reject) => {
       const id = nextId()
       const timeout = setTimeout(() => {
         pending.delete(id)
-        reject(new Error(`Android WebView debugger did not answer ${method} within 30 seconds.`))
+        const operation = [
+          'android_start_background_share',
+          'android_background_share_status',
+          'android_load_private_state',
+          'android_current_location',
+          'document.readyState',
+          'document.querySelector',
+          'document.body',
+        ].find((name) => params.expression?.includes(name))
+        let activity = 'unavailable'
+        let rendererExit = false
+        let fatalNative = false
+        let exceptions = []
+        let crash = {}
+        try {
+          const resumed = adbFor(serial, ['shell', 'dumpsys', 'activity', 'activities'])
+            .split('\n')
+            .filter((line) => line.includes('ResumedActivity'))
+            .join('\n')
+          activity = resumed.includes(packageName)
+            ? 'app'
+            : resumed.includes('settings')
+              ? 'settings'
+              : resumed.includes('launcher')
+                ? 'launcher'
+                : resumed.includes('permission') || resumed.includes('packageinstaller')
+                  ? 'permission'
+                  : resumed.includes('null')
+                    ? 'none'
+                    : 'other'
+          const logs = adbFor(serial, ['logcat', '-d', '-t', '10000'])
+          rendererExit = /onRenderProcessGone|Render process.*crash|renderer.*crash/i.test(logs)
+          fatalNative = /Fatal signal/.test(logs)
+          const crashLogs = adbFor(serial, ['logcat', '-b', 'crash', '-d', '-t', '500'])
+          crash = summarizeAndroidNativeCrash(crashLogs, packageName)
+          exceptions = [
+            ...new Set(
+              logs.match(/(?:java|android|org|com)\.[A-Za-z0-9_.$]+(?:Exception|Error)/g) ?? [],
+            ),
+          ].slice(-8)
+        } catch {
+          /* Diagnostic failure must not mask the debugger failure. */
+        }
+        reject(
+          new Error(
+            `Android WebView debugger did not answer ${method} (${operation ?? 'command'}) within 30 seconds; IPC markers: ${JSON.stringify(ipcTrace())}; activity: ${activity}; rendererExit: ${rendererExit}; fatalNative: ${fatalNative}; exceptionClasses: ${JSON.stringify(exceptions)}; crash: ${JSON.stringify(crash)}.`,
+          ),
+        )
       }, 30_000)
       pending.set(id, {
         resolve: (response) => {
@@ -481,7 +529,19 @@ const assertNotificationStopAction = async () => {
   }, 'Android notification sharing summary and Stop sharing PendingIntent')
 }
 
-const notificationStopActionCenter = async () => {
+const sharingNotificationPresent = () =>
+  adb(['shell', 'cmd', 'notification', 'list'])
+    .split(/\r?\n/)
+    .some((key) => {
+      const [, owner, id] = key.trim().split('|')
+      return owner === packageName && id === '4107'
+    })
+
+const notificationStopActionCenter = async (sharing = true) => {
+  const actionLabel = sharing ? 'Stop sharing' : 'Stop notices'
+  const titleLabel = sharing
+    ? 'Constellation is sharing your location'
+    : 'Constellation is sending ended-link notices'
   adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
   adb(['shell', 'wm', 'dismiss-keyguard'])
   await wait(500)
@@ -502,13 +562,13 @@ const notificationStopActionCenter = async () => {
       adb(['shell', 'uiautomator', 'dump', dumpPath])
       const xml = adb(['shell', 'cat', dumpPath])
       const actionNode = xml.match(
-        /<node\b[^>]*(?:text|content-desc)="[^"]*Stop sharing[^"]*"[^>]*\/>/,
+        new RegExp(`<node\\b[^>]*(?:text|content-desc)="[^"]*${actionLabel}[^"]*"[^>]*\\/>`),
       )?.[0]
       const action = center(actionNode)
       if (action) return action
 
       const titleNode = xml.match(
-        /<node\b[^>]*(?:text|content-desc)="Constellation is sharing your location"[^>]*\/>/,
+        new RegExp(`<node\\b[^>]*(?:text|content-desc)="${titleLabel}"[^>]*\\/>`),
       )?.[0]
       const title = center(titleNode)
       if (!title) continue
@@ -537,7 +597,7 @@ const notificationStopActionCenter = async () => {
       }
     }
     throw new Error(
-      'Android notification did not render the Stop sharing action after expanding the Constellation notification.',
+      `Android notification did not render the ${actionLabel} action after expanding the Constellation notification.`,
     )
   } finally {
     try {
@@ -603,10 +663,7 @@ const runNotificationStopSmoke = async () => {
       20_000,
     )
     await waitFor(
-      () => {
-        const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
-        return !(dump.includes('pkg=space.taskyon.constellation') && dump.includes('id=4107'))
-      },
+      () => !sharingNotificationPresent(),
       'notification Stop sharing action to remove the foreground notification',
       20_000,
     )
@@ -676,7 +733,7 @@ const startDirectBackgroundShare = async (
   const started = await cdp.evaluate(`(async () => {
     const invoke = window.__TAURI_INTERNALS__?.invoke;
     if (!invoke) return 'bridge unavailable';
-    await invoke('android_start_background_share', {
+    const status = await invoke('android_start_background_share', {
       request: {
         precision: 'exact',
         viewerCapacity: 1,
@@ -689,9 +746,10 @@ const startDirectBackgroundShare = async (
         shareBaseUrl: 'https://constellation.taskyon.space/',
       },
     });
-    return 'started';
+    return status.state;
   })()`)
-  assert.equal(started, 'started')
+  assert.notEqual(started, 'bridge unavailable')
+  assert.notEqual(started, 'error', 'a new create must not acknowledge the previous failure')
   await waitFor(
     () =>
       adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
@@ -792,6 +850,13 @@ const readBackgroundStatus = async (cdp) => {
       state: status.state,
       peerStatus: status.peerStatus ?? '',
       message: status.message ?? '',
+      endNotificationCount: status.endNotificationCount ?? 0,
+      returnOfferCount: status.returnOffers?.length ?? 0,
+      capturedAt: status.location?.observation?.capturedAt ?? null,
+      oldSharing: (status.oldSharing ?? []).map((share) => ({
+        shareId: share.shareId,
+        reason: share.reason,
+      })),
       shares: (status.shares ?? []).map((share) => ({
         shareId: share.shareId,
         expiresAt: share.expiresAt ?? null,
@@ -816,6 +881,12 @@ const readBackgroundTransportSummary = async (cdp) => {
     return JSON.stringify({
       state: status.state,
       peerStatus: status.peerStatus ?? '',
+      activeShares: status.shares?.length ?? 0,
+      endedReasons: (status.oldSharing ?? []).map((share) => share.reason),
+      locationStatus: status.location?.status ?? '',
+      locationAgeMs: status.location?.observation?.capturedAt
+        ? Date.now() - status.location.observation.capturedAt
+        : null,
       viewerCount: (status.shares ?? []).reduce(
         (sum, share) => sum + (share.viewerCount ?? 0),
         0,
@@ -886,6 +957,32 @@ const setupNativeBackgroundSmoke = async () => {
   return cdp
 }
 
+const verifyEndedNotices = async (cdp, reasons) => {
+  const ended = await readBackgroundStatus(cdp)
+  assert.equal(ended.state, 'stopped')
+  assert.equal(ended.shares.length, 0)
+  assert.equal(ended.endNotificationCount, reasons.length)
+  assert.deepEqual(ended.oldSharing.map((entry) => entry.reason).sort(), [...reasons].sort())
+  assert.equal(sharingNotificationPresent(), true, 'ended-link notices must remain visible')
+  adb(['emu', 'geo', 'fix', '-70.0201', '40.0201'])
+  await wait(1_500)
+  assert.equal(
+    (await readBackgroundStatus(cdp)).capturedAt,
+    ended.capturedAt,
+    'ended-link notices must not keep collecting locations',
+  )
+  const { x, y } = await notificationStopActionCenter(false)
+  adb(['shell', 'input', 'tap', String(Math.round(x)), String(Math.round(y))])
+  await waitFor(
+    () =>
+      !adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+        'LocationShareService',
+      ) && !sharingNotificationPresent(),
+    'Stop notices to stop the service and remove the active notification',
+    20_000,
+  )
+}
+
 const runExpirySmoke = async () => {
   let cdp
   try {
@@ -895,19 +992,19 @@ const runExpirySmoke = async () => {
     assert.equal(share.expiresAt, expiresAt)
     adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
     await waitFor(
-      () =>
-        !adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
-          'LocationShareService',
-        ),
-      'the final expired share to stop the foreground service',
+      async () => {
+        const status = await readBackgroundStatus(cdp)
+        return (
+          status.shares.length === 0 &&
+          status.oldSharing.some(
+            (entry) => entry.shareId === share.shareId && entry.reason === 'expired',
+          )
+        )
+      },
+      'the final expired share to leave active sharing and enter history',
       50_000,
     )
-    const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
-    assert.equal(
-      dump.includes('pkg=space.taskyon.constellation') && dump.includes('id=4107'),
-      false,
-      'expired background share must remove the ongoing notification',
-    )
+    await verifyEndedNotices(cdp, ['expired'])
   } finally {
     cdp?.close()
     adb(['shell', 'am', 'force-stop', packageName])
@@ -920,7 +1017,8 @@ const runRebootPrepareSmoke = async () => {
   let cdp
   try {
     cdp = await setupNativeBackgroundSmoke()
-    const expiresAt = Date.now() + 180_000
+    // The finite fixture must outlive the managed cold-boot deadline.
+    const expiresAt = Date.now() + 15 * 60_000
     const share = await startDirectBackgroundShare(cdp, expiresAt)
     assert.equal(share.expiresAt, expiresAt)
     console.log(
@@ -966,27 +1064,18 @@ const runRebootVerifySmoke = async () => {
     }
     if (!cdp) throw new Error('Tauri bridge did not stabilize after Android power-cycle.')
 
-    const restoredSerialized = await cdp.evaluate(`(async () => {
-      const invoke = window.__TAURI_INTERNALS__?.invoke;
-      if (!invoke) return JSON.stringify({ error: 'bridge unavailable' });
-      const deadline = Date.now() + 30000;
-      while (Date.now() < deadline) {
-        const status = await invoke('android_background_share_status');
-        const candidate = status.shares?.[0];
-        if (candidate) {
-          return JSON.stringify({
-            shareId: candidate.shareId,
-            expiresAt: candidate.expiresAt ?? null,
-            state: status.state,
-          });
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      return JSON.stringify({ error: 'share did not restore after power-cycle' });
-    })()`)
-    assert.equal(typeof restoredSerialized, 'string')
-    const restored = JSON.parse(restoredSerialized)
-    if (restored.error) throw new Error(restored.error)
+    let restored
+    await waitFor(
+      async () => {
+        const status = await readBackgroundStatus(cdp)
+        const candidate = status.shares[0]
+        if (!candidate) return false
+        restored = { ...candidate, state: status.state }
+        return true
+      },
+      'the share to restore after power-cycle',
+      30_000,
+    )
     assert.equal(restored.shareId, expectedShareId)
     assert.equal(restored.expiresAt, expectedExpiresAt)
     assert.equal(restored.state, 'sharing')
@@ -1067,10 +1156,10 @@ const runServiceRestartSmoke = async () => {
       true,
       'sticky-recovered background service should remain running before the Activity returns',
     )
-    const resumedActivity =
-      adb(['shell', 'dumpsys', 'activity', 'activities'])
-        .split(/\r?\n/)
-        .find((line) => line.includes('mResumedActivity')) ?? ''
+    const resumedActivity = adb(['shell', 'dumpsys', 'activity', 'activities'])
+      .split(/\r?\n/)
+      .filter((line) => line.includes('ResumedActivity'))
+      .join('\n')
     assert.equal(
       resumedActivity.includes(packageName),
       false,
@@ -1158,10 +1247,8 @@ const runForegroundOnlySmoke = async () => {
       'foreground-only service to stop while hidden',
       20_000,
     )
-    const pausedNotification = adb(['shell', 'dumpsys', 'notification', '--noredact'])
     assert.equal(
-      pausedNotification.includes('pkg=space.taskyon.constellation') &&
-        pausedNotification.includes('id=4107'),
+      sharingNotificationPresent(),
       false,
       'foreground-only pause must remove the ongoing sharing notification',
     )
@@ -1285,13 +1372,11 @@ const runMultipleSourceLinksSmoke = async () => {
       `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(second.shareId)} })`,
     )
     await waitFor(
-      () =>
-        !adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
-          'LocationShareService',
-        ),
-      'foreground service to stop after the final Android source link is revoked',
+      async () => (await readBackgroundStatus(cdp)).shares.length === 0,
+      'the final Android source link to leave active sharing',
       30_000,
     )
+    await verifyEndedNotices(cdp, ['revoked', 'revoked'])
   } finally {
     cdp?.close()
     adb(['shell', 'am', 'force-stop', packageName])
@@ -2300,7 +2385,7 @@ const runDirectTransportSmoke = async () => {
   let share
   try {
     relay = await startLocalRelay()
-    server = await startWebServer('preview')
+    server = await startWebServer()
     adb(['reverse', 'tcp:9111', 'tcp:9111'])
     cdp = await setupNativeBackgroundSmoke()
     share = await startDirectBackgroundShare(cdp, null, { name: 'Direct transport smoke' })
@@ -2319,11 +2404,34 @@ const runDirectTransportSmoke = async () => {
       permissions: ['geolocation'],
     })
     const viewer = await viewerContext.newPage()
-    await viewer.goto(`http://127.0.0.1:4173/${new URL(share.url).hash}`, {
+    await viewer.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' })
+    const directInvitation = await viewer.evaluate(async (url) => {
+      const { webRtcShareInvitation } = await import('../tests/fixtures/share-probe.ts')
+      return webRtcShareInvitation(url)
+    }, share.url)
+    await viewer.goto(`http://127.0.0.1:4173/${new URL(directInvitation).hash}`, {
       waitUntil: 'domcontentloaded',
       timeout: 90_000,
     })
-    await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
+    try {
+      await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
+    } catch (error) {
+      const viewerState = await viewer.evaluate(() => {
+        const text = document.body.innerText
+        return {
+          connecting: text.includes('Connecting'),
+          ended: text.includes('ended'),
+          unavailable: text.includes('unavailable'),
+          failed: text.includes('failed'),
+          unreachable: text.includes('reachable'),
+        }
+      })
+      const native = await readBackgroundTransportSummary(cdp)
+      throw new Error(
+        `WebRTC invitation failed before preview: ${JSON.stringify({ viewerState, native })}`,
+        { cause: error },
+      )
+    }
     await viewer.getByRole('button', { name: 'Keep following' }).click()
     await viewer.getByRole('button', { name: 'Save location' }).click()
     await viewer.getByRole('button', { name: 'Not now' }).click()
@@ -2424,22 +2532,48 @@ const runCaptiveTransportSmoke = async () => {
     assert.equal(await clickButton(cdp, 'Share location'), true)
     assert.equal(await clickButton(cdp, 'Create private link'), true)
     let blocked
-    await waitFor(
-      async () => {
-        blocked = await readBackgroundStatus(cdp)
-        const serviceRunning = adb([
-          'shell',
-          'dumpsys',
-          'activity',
-          'services',
-          packageName,
-        ]).includes('LocationShareService')
-        return !serviceRunning && blocked.shares.length === 0 && blocked.state !== 'sharing'
-      },
-      'the captive/blocked-relay fail-closed state',
-      60_000,
-    )
+    try {
+      await waitFor(
+        async () => {
+          blocked = await readBackgroundStatus(cdp)
+          const serviceRunning = adb([
+            'shell',
+            'dumpsys',
+            'activity',
+            'services',
+            packageName,
+          ]).includes('LocationShareService')
+          return !serviceRunning && blocked.shares.length === 0 && blocked.state === 'error'
+        },
+        'the captive/blocked-relay fail-closed state',
+        60_000,
+      )
+    } catch (error) {
+      const status = await readBackgroundStatus(cdp)
+      const states = adb(['logcat', '-d', '-s', 'ConstellationStatus:I', '*:S'])
+        .split('\n')
+        .map((line) => line.match(/stored=(starting|sharing|stopped|error|paused)/)?.[1])
+        .filter(Boolean)
+        .slice(-12)
+      throw new Error(
+        `Blocked relay status failed: ${JSON.stringify({
+          state: status.state,
+          peerStatus: status.peerStatus,
+          shares: status.shares.length,
+          requests: captive.requests.length,
+          failureVisible: status.message === 'No reachable P2P address is available.',
+          states,
+        })}`,
+        { cause: error },
+      )
+    }
     assert.ok(captive.requests.length > 0, 'the captive responder must see the relay attempt')
+    assert.equal(blocked.message, 'No reachable P2P address is available.')
+    assert.equal(
+      (await readBackgroundStatus(cdp)).state,
+      'error',
+      'stopping a failed service must preserve its failure status',
+    )
     console.log(
       `[android-test] captive/blocked relay failed closed: ${JSON.stringify({ state: blocked.state, message: blocked.message })}`,
     )
@@ -2463,6 +2597,74 @@ const runCaptiveTransportSmoke = async () => {
       30_000,
     )
     console.log('[android-test] sharing recovered once the real relay was reachable.')
+
+    adb(['reverse', '--remove', 'tcp:9111'])
+    adb(['reverse', 'tcp:9111', 'tcp:9112'])
+    await assert.rejects(
+      startDirectBackgroundShare(cdp, null, {
+        name: 'Blocked second share',
+        expectedShareCount: 2,
+      }),
+      /Android native background share did not become ready/,
+    )
+    const failedSecond = await readBackgroundStatus(cdp)
+    assert.equal(failedSecond.state, 'error')
+    assert.equal(failedSecond.message, 'No reachable P2P address is available.')
+    assert.deepEqual(
+      failedSecond.shares.map((entry) => entry.shareId),
+      [share.shareId],
+    )
+
+    adb(['reverse', '--remove', 'tcp:9111'])
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    const second = await startDirectBackgroundShare(cdp, null, {
+      name: 'Active share retry smoke',
+      expectedShareCount: 2,
+    })
+    const recovered = await readBackgroundStatus(cdp)
+    assert.equal(recovered.shares.length, 2)
+    assert.deepEqual(
+      recovered.shares.map((entry) => entry.shareId).sort(),
+      [share.shareId, second.shareId].sort(),
+    )
+    console.log(
+      '[android-test] failed second creation retried once while preserving the first link.',
+    )
+
+    for (const active of [share, second]) {
+      await cdp.evaluate(
+        `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(active.shareId)} })`,
+      )
+    }
+    await waitFor(
+      async () => {
+        const status = await readBackgroundStatus(cdp)
+        return status.shares.length === 0 && status.endNotificationCount === 2
+      },
+      'both revoked links to retain their end notifications',
+      30_000,
+    )
+    adb(['reverse', '--remove', 'tcp:9111'])
+    adb(['reverse', 'tcp:9111', 'tcp:9112'])
+    await assert.rejects(
+      startDirectBackgroundShare(cdp, null, { name: 'Blocked create with notices' }),
+      /Android native background share did not become ready/,
+    )
+    const noticeFailure = await readBackgroundStatus(cdp)
+    assert.equal(
+      noticeFailure.endNotificationCount,
+      2,
+      'creation failure must preserve end notices',
+    )
+    assert.equal(noticeFailure.oldSharing.length, 2, 'creation failure must preserve ended history')
+    assert.equal(
+      adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+        'LocationShareService',
+      ),
+      true,
+      'creation failure must keep the revocation notice endpoints running',
+    )
+    console.log('[android-test] creation failure preserved both revocation notice endpoints.')
   } finally {
     responder?.close()
     relay?.kill('SIGTERM')
@@ -2849,6 +3051,79 @@ const describeInvitationAddresses = (shareUrl) => {
   return capability.addresses.map((address) => address.replaceAll(/\/p2p\/[^/]+/g, '/p2p/<peer>'))
 }
 
+const verifyBrowserRevocation = async (viewer, cdp) => {
+  try {
+    await viewer.getByRole('button', { name: 'Seeing 0' }).waitFor({ timeout: 15_000 })
+  } catch (error) {
+    throw new Error(
+      `Revocation delivery failed: ${JSON.stringify({
+        source: await readBackgroundTransportSummary(cdp),
+        viewerStillFollowing: await viewer.getByRole('button', { name: 'Seeing 1' }).isVisible(),
+        viewerOnline: await viewer.getByText('P2P online').isVisible(),
+      })}`,
+      { cause: error },
+    )
+  }
+  const openSheet = viewer.getByRole('dialog')
+  if (await openSheet.isVisible()) {
+    await openSheet.getByRole('button', { name: 'Close', exact: true }).click()
+  }
+  await viewer.getByRole('button', { name: 'Seeing 0' }).click()
+  const history = viewer.getByRole('dialog', { name: 'Following' })
+  await history.getByText('Old seeing shares (1)').waitFor()
+  await history.getByText('Old seeing shares (1)').click()
+  await history.getByText('Revoked by sender').waitFor()
+  assert.equal(await history.getByRole('button', { name: 'Show on map' }).count(), 0)
+}
+
+const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
+  const context = await browser.newContext({
+    geolocation: { latitude: 40.0003, longitude: -70.0003 },
+    permissions: ['geolocation'],
+  })
+  try {
+    const peer = await context.newPage()
+    await peer.goto(`http://127.0.0.1:4173/${new URL(shareUrl).hash}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await peer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
+    await peer.getByRole('button', { name: 'Save location' }).click()
+    await peer.getByRole('button', { name: 'Share approximate location for 1 hour' }).click()
+    await waitFor(
+      () => androidTextIncludes(cdp, 'Seeing 2'),
+      'an automatically accepted second return',
+      30_000,
+    )
+    await waitFor(
+      async () => (await readBackgroundStatus(cdp)).returnOfferCount === 0,
+      'the acknowledged second return offer',
+      30_000,
+    )
+    assert.equal(
+      await androidTextIncludes(cdp, 'A viewer wants to share their location back'),
+      false,
+    )
+    assert.equal(await clickButton(cdp, 'Seeing 2'), true)
+    await waitFor(
+      async () => (await androidButtonCount(cdp, 'Show on map')) === 2,
+      'both returned locations',
+      30_000,
+    )
+    assert.equal(await androidTextIncludes(cdp, 'Share approximate location for 1 hour'), false)
+    assert.equal(await closeAndroidDialog(cdp), true)
+  } finally {
+    await context.close()
+  }
+  await waitFor(
+    async () => (await readBackgroundTransportSummary(cdp)).viewerCount === 1,
+    'the temporary second viewer to leave the original share',
+    30_000,
+  )
+  console.log(
+    '[android-test] same-link group accepted a second return without another prompt or viewer loop',
+  )
+}
+
 const runShareFlow = async (cdp, browser, options = {}) => {
   console.log('[android-test] creating background share')
   await waitFor(
@@ -2872,6 +3147,14 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   }
   assert.equal(await clickAriaButton(cdp, 'Share location'), true)
   assert.equal(await clickButton(cdp, 'In background'), true)
+  assert.equal(await clickButton(cdp, '10'), true)
+  await waitFor(
+    () =>
+      cdp.evaluate(`([...document.querySelectorAll('button')].some(button =>
+      button.textContent?.trim() === 'Create private link' && !button.disabled))`),
+    'enabled Android Create private link action',
+    30_000,
+  )
   assert.equal(await clickButton(cdp, 'Create private link'), true)
   let shareUrl
   try {
@@ -2886,6 +3169,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       30_000,
     )
   } catch (error) {
+    await wait(1_000)
     const state = await cdp.evaluate(`(() => {
       const buttons = [...document.querySelectorAll('button')];
       const createButton = buttons.find((button) => button.textContent && button.textContent.includes('Create private link'));
@@ -2898,6 +3182,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
         status: document.querySelector('.toast') ? document.querySelector('.toast').textContent.trim() : '',
         connecting: document.body && document.body.innerText.includes('Connecting to the P2P network'),
         noReachablePeer: document.body && document.body.innerText.includes('No reachable P2P address'),
+        createFailed: document.body?.innerText?.includes('Could not create the location link.') === true,
         permissionDenied: document.body && document.body.innerText.includes('Location permission denied'),
         backgroundStarting: document.body && document.body.innerText.includes('Starting private P2P sharing'),
       };
@@ -2922,7 +3207,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
         ? JSON.parse(nativeSerialized)
         : { error: 'invalid CDP value' }
     throw new Error(
-      `Android share link unavailable. UI state: ${JSON.stringify(state)}; native state: ${JSON.stringify(nativeState)}`,
+      `Android share link unavailable. UI state: ${JSON.stringify(state)}; native state: ${JSON.stringify(nativeState)}; IPC markers: ${JSON.stringify(cdp.ipcTrace())}`,
       { cause: error },
     )
   }
@@ -2978,6 +3263,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   const updatesBeforeLock = await receivedUpdateCount(viewer)
   console.log('[android-test] checking locked-screen update')
   adb(['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
+  let lockedUpdateError
   try {
     adb(['emu', 'geo', 'fix', '-70.0101', '40.0101'])
     await waitFor(
@@ -2985,9 +3271,28 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       'a location update while the Android screen is locked',
       45_000,
     )
+  } catch (error) {
+    lockedUpdateError = error
   } finally {
     adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
     adb(['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
+  }
+  if (lockedUpdateError) {
+    const transport = await readBackgroundTransportSummary(cdp)
+    const policy = await readPolicyStatus(cdp)
+    throw new Error(
+      `Locked-screen delivery failed: ${JSON.stringify({
+        transport,
+        capturedAt: policy.capturedAt,
+        sequence: policy.sequence,
+        pauseReason: policy.pauseReason,
+        sampling: policy.sampling,
+        updatesBeforeLock,
+        updatesAfterLock: await receivedUpdateCount(viewer),
+        idleState: adb(['shell', 'dumpsys', 'deviceidle']).match(/mState=(\w+)/)?.[1] ?? '',
+      })}`,
+      { cause: lockedUpdateError },
+    )
   }
   console.log('[android-test] checking debugger after wake')
   await cdp.evaluate('document.readyState')
@@ -2997,43 +3302,61 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     .click()
   await viewer.getByRole('button', { name: 'Keep following' }).click()
   await viewer.getByRole('button', { name: 'Save location' }).click()
-  await viewer.getByRole('button', { name: 'Share mine back' }).click()
+  await viewer.getByRole('button', { name: 'Share approximate location for 1 hour' }).click()
   console.log('[android-test] checking return offer')
-  await viewer.getByRole('button', { name: 'Create private link' }).click()
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
   await waitFor(
-    () => androidTextIncludes(cdp, 'A connected viewer offered a private location link'),
+    () => androidTextIncludes(cdp, 'A viewer wants to share their location back'),
     'the private return offer in Android',
     30_000,
   )
-  assert.equal(await clickButton(cdp, 'View return location'), true)
+  assert.equal(await clickButton(cdp, 'Accept this and future shares from this link'), true)
+  try {
+    await waitFor(() => androidTextIncludes(cdp, 'Seeing 1'), 'Android return viewer', 75_000)
+  } catch (error) {
+    const ui = await cdp.evaluate(`(() => {
+      const text = document.body.innerText;
+      const errors = [
+        'This return link was not created by the connected viewer.',
+        'This return location link has ended.',
+        'Already following this link.',
+        'Protected storage is not configured; preview only.',
+        'Could not accept this return link.',
+      ];
+      return {
+        seeing: text.match(/Seeing (\\d+)/)?.[1] ?? null,
+        accepting: [...document.querySelectorAll('button')].some(button =>
+          button.textContent?.includes('Accept this and future') && button.disabled),
+        errors: errors.filter(error => text.includes(error)),
+      };
+    })()`)
+    throw new Error(
+      `Return acceptance failed: ${JSON.stringify({
+        ui,
+        source: await readBackgroundTransportSummary(cdp),
+        pendingOffers: (await readBackgroundStatus(cdp)).returnOfferCount,
+      })}`,
+      { cause: error },
+    )
+  }
   await waitFor(
-    () => androidTextIncludes(cdp, 'Someone shared their location with you'),
-    'the Android return-link approval',
-  )
-  assert.equal(await clickButton(cdp, 'View location'), true)
-  await waitFor(() => androidTextIncludes(cdp, 'Keep following'), 'Android return preview', 30_000)
-  assert.equal(await clickButton(cdp, 'Keep following'), true)
-  await waitFor(
-    () => androidTextIncludes(cdp, 'Save location'),
-    'Android return nickname prompt',
+    async () => (await readBackgroundStatus(cdp)).returnOfferCount === 0,
+    'the background source to finish accepting the return offer',
     30_000,
   )
-  assert.equal(await clickButton(cdp, 'Save location'), true)
-  await waitFor(
-    () => androidTextIncludes(cdp, 'Share mine back'),
-    'Android return share-back prompt',
-    30_000,
-  )
-  assert.equal(await clickButton(cdp, 'Not now'), true)
-  await waitFor(() => androidTextIncludes(cdp, 'Seeing 1'), 'Android return viewer', 75_000)
+  assert.equal(await androidTextIncludes(cdp, 'Someone shared their location with you'), false)
+  assert.equal(await androidTextIncludes(cdp, 'Keep following'), false)
+  assert.equal(await androidTextIncludes(cdp, 'Save location'), false)
   assert.equal(await clickButton(cdp, 'Seeing 1'), true)
   await waitFor(() => androidTextIncludes(cdp, 'Show on map'), 'the return location', 30_000)
+  assert.equal(await androidTextIncludes(cdp, 'Share approximate location for 1 hour'), false)
+  assert.equal(await closeAndroidDialog(cdp), true)
+  await verifyNativeAutomaticReturn(cdp, browser, shareUrl)
   assert.equal(await clickButton(cdp, 'Sharing 1'), true)
   await waitFor(() => androidTextIncludes(cdp, '1 connected'), 'Android viewer presence', 30_000)
   if (options.skipProcessRestart) {
     assert.equal(await clickButton(cdp, 'Revoke link'), true)
-    await viewer.getByText('Location sharing ended.').waitFor({ timeout: 15_000 })
+    await verifyBrowserRevocation(viewer, cdp)
     await viewerContext.close()
     return cdp
   }
@@ -3082,7 +3405,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     throw new Error(`Android viewer reconnect failed: ${JSON.stringify(state)}`, { cause: error })
   }
   assert.equal(await clickButton(cdp, 'Revoke link'), true)
-  await viewer.getByText('Location sharing ended.').waitFor({ timeout: 15_000 })
+  await verifyBrowserRevocation(viewer, cdp)
   await viewerContext.close()
 
   startWithSharedText(shareUrl)
@@ -3132,7 +3455,9 @@ const main = async () => {
 
   if (process.argv.includes('--expiry-smoke')) {
     await runExpirySmoke()
-    console.log('Android background-share expiry stopped the service and notification.')
+    console.log(
+      'Android expiry stopped location collection, retained notices, and honored Stop notices.',
+    )
     return
   }
   if (process.argv.includes('--reboot-prepare-smoke')) {
@@ -3445,9 +3770,14 @@ const main = async () => {
     return
   }
   let server
+  let relay
   let cdp
   let browser
   try {
+    if (process.argv.includes('--local-share-flow')) {
+      relay = await startLocalRelay()
+      adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    }
     adb(['emu', 'geo', 'fix', '-70.0000', '40.0000'])
     grantIfSupported('android.permission.ACCESS_FINE_LOCATION')
     grantIfSupported('android.permission.ACCESS_BACKGROUND_LOCATION')
@@ -3467,6 +3797,8 @@ const main = async () => {
     await browser?.close()
     cdp?.close()
     server?.kill('SIGTERM')
+    relay?.kill('SIGTERM')
+    if (relay) adb(['reverse', '--remove', 'tcp:9111'])
     adb(['shell', 'am', 'force-stop', packageName])
   }
 }

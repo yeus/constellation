@@ -3,6 +3,7 @@ import {
   type BackgroundReturnCommand,
 } from './backgroundReturnCommand.ts'
 import { shouldSignalIdleAfterShareUpdate } from './backgroundRuntimePolicy.ts'
+import { backgroundRuntimeStatus } from './backgroundRuntimeStatus.ts'
 import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
 import type { ShareDraft } from '../shareDraft.ts'
 import {
@@ -130,7 +131,7 @@ const start = (): void => {
       },
     },
   })
-  const runtime = createSharingRuntime(location, undefined, privateStore)
+  const runtime = createSharingRuntime(location, undefined, privateStore, 'external')
   runtime.setVisible(false, false)
   runtime.setNetworkState('unknown')
 
@@ -142,23 +143,7 @@ const start = (): void => {
     latestState = state
     post({
       type: 'status',
-      status: {
-        state: shareCount
-          ? 'sharing'
-          : state.peerStatus === 'error'
-            ? 'error'
-            : workCount
-              ? 'stopped'
-              : 'starting',
-        endNotificationCount: state.endNotifications.length,
-        peerStatus: state.peerStatus,
-        diagnostics: runtime.networkDiagnostics(),
-        shares: state.shares,
-        returnOffers: state.returnOffers,
-        oldSharing: state.oldSharing,
-        location: state.location,
-        message: state.message,
-      },
+      status: backgroundRuntimeStatus(state, runtime.networkDiagnostics(), state.location),
     })
     if (becameIdle) post({ type: 'idle' })
   }
@@ -166,12 +151,12 @@ const start = (): void => {
   const sendError = (error: unknown, fallback: string): void =>
     post({
       type: 'status',
-      status: {
-        state: 'error',
-        shares: latestState?.shares ?? [],
-        location: location.getState(),
-        message: error instanceof Error ? error.message : fallback,
-      },
+      status: backgroundRuntimeStatus(
+        latestState,
+        runtime.networkDiagnostics(),
+        location.getState(),
+        error instanceof Error ? error.message : fallback,
+      ),
     })
 
   const runCommand = async (command: BackgroundCommand): Promise<void> => {

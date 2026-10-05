@@ -38,6 +38,14 @@ three-minute case budget includes pairing. A failed run does not publish its raw
 
 ## Basic Android 0.1 acceptance
 
+Known limitation accepted for 0.1: the Android 10 AOSP/no-GMS emulator with stock
+WebView 74 intermittently aborts in Chromium's native GPU thread during sharing.
+Android 10 Play and Android 16 emulator tests passed; physical-device and other
+Android-version compatibility remain unverified. See the [Android emulator
+results](DEVELOPMENT.md#android) for symptoms, coverage and investigation limits.
+Record this known failure when it occurs; the physical-phone checks below remain
+required.
+
 - Build using the intended production signing identity, verify the release signature/checksum,
   install on a physical supported phone, and verify upgrade without destroying saved links.
   Keep signing secrets outside reports and source control.

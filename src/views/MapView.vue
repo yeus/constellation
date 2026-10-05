@@ -398,6 +398,7 @@ import ShareReadySheet from '../components/ShareReadySheet.vue'
 import ShareListSheet from '../components/ShareListSheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
 import { createSessionLog } from '../diagnostics/sessionLog.ts'
+import { receiveApprovedBackgroundReturns } from '../android/backgroundReturnShares.ts'
 import { createBrowserLocationSource } from '../location/browser.ts'
 import { locationObservationToMapLocation } from '../location/mapModel.ts'
 import type { MapFamily } from '../map/pmtiles.ts'
@@ -431,6 +432,7 @@ import { resolveShareBaseUrl } from '../sharing/shareBaseUrl.ts'
 import { parseShareInvitation } from '../sharing/shareLink.ts'
 import { createBrowserPrivateStore, createNativePrivateStore } from '../sharing/privateStore.ts'
 import {
+  acceptReturnShare,
   createSharingRuntime,
   type ShareSummary,
   type SharingRuntimeState,
@@ -543,6 +545,7 @@ const pendingReturnOffer = computed(() => {
   if (foreground) return foreground
   return backgroundStatus.value?.returnOffers?.find(
     ({ shareId, viewerFingerprint, url }) =>
+      !backgroundStatus.value?.approvedReturnLinks?.includes(shareId) &&
       dismissedBackgroundOffers.value.get(`${shareId}:${viewerFingerprint}`) !== url,
   )
 })
@@ -665,6 +668,7 @@ const receiveSharedText = async (): Promise<void> => {
     checkingSharedText = false
   }
 }
+let receivingApprovedReturns = false
 const refreshBackgroundStatus = async (): Promise<void> => {
   if (!backgroundSharing) return
   const next = await backgroundSharing.status()
@@ -706,6 +710,24 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   const previousServiceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
   backgroundStatus.value = next
   if (previousServiceOwnsLocation !== Boolean(next.shares.length)) updateLocationOwnership()
+  if (receivingApprovedReturns || changingReturnOffer.value) return
+  receivingApprovedReturns = true
+  try {
+    const result = await receiveApprovedBackgroundReturns(
+      next,
+      (offer) =>
+        acceptReturnShare(runtime, offer, (shareId) =>
+          runtimeState.value.following.some(
+            (entry) => entry.shareId === shareId && entry.connected,
+          ),
+        ),
+      (offer) => backgroundSharing.dismissReturnOffer(offer.shareId, offer.viewerFingerprint),
+    )
+    if (result.failed)
+      localError.value = 'Some approved return locations could not be received yet.'
+  } finally {
+    receivingApprovedReturns = false
+  }
 }
 
 const activeShares = computed(() =>
@@ -1192,17 +1214,13 @@ const acceptReturnOffer = (): void => {
   )
   void (async () => {
     try {
-      const returned = parseShareInvitation(offer.url)
-      if (
-        !runtimeState.value.following.some(
-          (entry) => entry.shareId === returned.shareId && entry.connected,
-        )
-      ) {
-        await runtime.acceptShare(offer.url, { saved: true, returnOwnerPeerId: offer.ownerPeerId })
-      }
+      await acceptReturnShare(runtime, offer, (shareId) =>
+        runtimeState.value.following.some((entry) => entry.shareId === shareId && entry.connected),
+      )
       if (backgroundOffer) {
         if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
         await backgroundSharing.approveReturnLink(offer.shareId)
+        await backgroundSharing.dismissReturnOffer(offer.shareId, offer.viewerFingerprint)
         dismissedBackgroundOffers.value.set(
           `${offer.shareId}:${offer.viewerFingerprint}`,
           offer.url,

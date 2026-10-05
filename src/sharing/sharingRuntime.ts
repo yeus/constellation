@@ -334,10 +334,23 @@ export interface SharingRuntime {
   stop: () => Promise<void>
 }
 
+export const acceptReturnShare = async (
+  runtime: Pick<SharingRuntime, 'acceptShare'>,
+  offer: SharingRuntimeState['returnOffers'][number],
+  isConnected: (shareId: string) => boolean,
+): Promise<void> => {
+  const capability = parseShareInvitation(offer.url)
+  if (!isConnected(capability.shareId)) {
+    await runtime.acceptShare(offer.url, { saved: true, returnOwnerPeerId: offer.ownerPeerId })
+  }
+  if (!isConnected(capability.shareId)) throw new Error('This return location link has ended.')
+}
+
 export const createSharingRuntime = (
   locationSource: BrowserLocationSource,
   shareBaseUrl = window.location.origin + window.location.pathname,
   store?: PrivateStateStore,
+  returnShareReceiver: 'local' | 'external' = 'local',
 ): SharingRuntime => {
   const observers = new Set<(state: SharingRuntimeState) => void>()
   const shares = new Map<string, SourceShare>()
@@ -930,9 +943,10 @@ export const createSharingRuntime = (
             await persist()
             if (approvedReturnLinks.has(share.capability.shareId)) {
               try {
-                await acceptPendingReturn(key, offer)
-                publish({ message: 'A viewer shared back and was accepted automatically.' })
-                return
+                if (await acceptPendingReturn(key, offer)) {
+                  publish({ message: 'A viewer shared back and was accepted automatically.' })
+                  return
+                }
               } catch {
                 // Preserve the queued offer for an explicit retry.
               }
@@ -1097,17 +1111,14 @@ export const createSharingRuntime = (
   const acceptPendingReturn = async (
     key: string,
     offer: SharingRuntimeState['returnOffers'][number],
-  ): Promise<void> => {
+  ): Promise<boolean> => {
+    if (returnShareReceiver === 'external') return false
     const capability = parseShareInvitation(offer.url)
     if (oldSeeing.has(capability.shareId) || followed.get(capability.shareId)?.terminal) {
       throw new Error('This return location link has ended.')
     }
-    if (!followed.get(capability.shareId)?.connected) {
-      await runtime.acceptShare(offer.url, { saved: true, returnOwnerPeerId: offer.ownerPeerId })
-    }
-    if (!followed.get(capability.shareId)?.connected)
-      throw new Error('This return location link has ended.')
-    if (returnOffers.get(key) !== offer) return
+    await acceptReturnShare(runtime, offer, (shareId) => Boolean(followed.get(shareId)?.connected))
+    if (returnOffers.get(key) !== offer) return false
     returnOffers.delete(key)
     try {
       await persist()
@@ -1116,6 +1127,7 @@ export const createSharingRuntime = (
       throw error
     }
     publish()
+    return true
   }
 
   const ensurePeer = async () => {
@@ -1240,6 +1252,7 @@ export const createSharingRuntime = (
         void persist()
         continue
       }
+      if (returnShareReceiver === 'external') continue
       if (entry.connected || viewerClosers.has(shareId) || reconnecting.has(shareId)) continue
       if (entry.terminal) continue
       try {
@@ -1446,7 +1459,9 @@ export const createSharingRuntime = (
           locationSource.start()
         }
       }
-      const pending = [...followed.values()].filter((entry) => !entry.connected && !entry.terminal)
+      const pending = [...followed.values()].filter(
+        (entry) => returnShareReceiver === 'local' && !entry.connected && !entry.terminal,
+      )
       void Promise.allSettled(
         pending.map((entry) =>
           runtime.acceptShare(entry.url, { localName: entry.localName, saved: entry.saved }),
@@ -1523,6 +1538,9 @@ export const createSharingRuntime = (
       return state.shares.find(({ shareId }) => shareId === share.capability.shareId)!
     },
     acceptShare: async (url, options = {}) => {
+      if (returnShareReceiver === 'external') {
+        throw new Error('Returned locations belong to the foreground receiver.')
+      }
       if (!store && options.saved !== false) {
         throw new Error('Protected storage is not configured; preview only.')
       }
@@ -1558,6 +1576,11 @@ export const createSharingRuntime = (
       const client = createPortClient(messagePort.port, constellationProtocolV2)
       const previousFollow = followed.get(capability.shareId)
       const previousObservation = received.get(capability.shareId)
+      let earlyClosedMessage: ConstellationMessage | undefined
+      const stopBufferingClose = messagePort.port.receive((message) => {
+        if (constellationProtocolV2.streams['share.sessions'].closed.safeParse(message).success)
+          earlyClosedMessage = message
+      })
       try {
         const viewerNonce = randomToken()
         const session = await client.share.redeem({
@@ -1611,7 +1634,6 @@ export const createSharingRuntime = (
           updatesReceived: existing?.updatesReceived ?? 0,
           expiresAt: capability.expiresAt,
         })
-        await client.sensor.describe({ sensorId: LOCATION_SENSOR_ID })
         const activeSubscription: { id?: string } = {}
         let pendingObservation: unknown
         let awaitingFirstObservation = true
@@ -1646,7 +1668,7 @@ export const createSharingRuntime = (
             // Invalid or unauthenticated location payloads are ignored without retaining their data.
           }
         }
-        const unsubscribe = messagePort.port.receive((message) => {
+        const receiveMessage = (message: ConstellationMessage): void => {
           const closed = constellationProtocolV2.streams['share.sessions'].closed.safeParse(message)
           if (closed.success && closed.data.sessionId === session.sessionId) {
             const entry = followed.get(capability.shareId)
@@ -1687,7 +1709,15 @@ export const createSharingRuntime = (
           if (parsed.data.subscriptionId === activeSubscription.id) {
             void receiveObservation(parsed.data.observation)
           }
-        })
+        }
+        const unsubscribe = messagePort.port.receive(receiveMessage)
+        stopBufferingClose()
+        if (earlyClosedMessage) receiveMessage(earlyClosedMessage)
+        if (oldSeeing.has(capability.shareId)) {
+          unsubscribe()
+          throw new Error('This location link has ended.')
+        }
+        await client.sensor.describe({ sensorId: LOCATION_SENSOR_ID })
         const subscription = await client.sensor.subscribe({
           sensorId: LOCATION_SENSOR_ID,
         })
@@ -1781,6 +1811,8 @@ export const createSharingRuntime = (
         }
         await messagePort.close()
         throw error
+      } finally {
+        stopBufferingClose()
       }
     },
     stopFollowing: async (shareId) => {

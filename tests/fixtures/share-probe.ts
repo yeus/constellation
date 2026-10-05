@@ -14,6 +14,39 @@ import { createRedemptionProof } from '../../src/sharing/shareAuth.ts'
 import { parseShareInvitation, shareInvitationUrl } from '../../src/sharing/shareLink.ts'
 import { constellationProtocolV2, SHARE_STREAM_PROTOCOL } from '../../src/sharing/shareProtocol.ts'
 import { classifyTransport } from '../../src/sharing/transport.ts'
+import { createShareDraft } from '../../src/shareDraft.ts'
+
+export const probeRevocationDuringAdmission = async () => {
+  const source = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic-source', geolocation: undefined }),
+    undefined,
+    { load: async () => undefined, save: async () => undefined },
+  )
+  const viewer = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic-viewer', geolocation: undefined }),
+  )
+  let revocation: Promise<void> | undefined
+  let viewerState!: SharingRuntimeState
+  source.subscribe((state) => {
+    const admitted = state.shares.find((share) => share.viewerCount > 0)
+    if (admitted && !revocation) revocation = source.stopShare(admitted.shareId)
+  })
+  viewer.subscribe((state) => {
+    viewerState = state
+  })
+  try {
+    const share = await source.createShare(createShareDraft())
+    await viewer.acceptShare(share.url, { saved: false }).catch(() => undefined)
+    await revocation
+    return {
+      following: viewerState.following.map(({ status }) => status),
+      history: viewerState.oldSeeing.map(({ reason }) => reason),
+    }
+  } finally {
+    await viewer.stop()
+    await source.stop()
+  }
+}
 
 export const probeWebRtcReachability = async (url: string, offerDelayMs = 0) => {
   const capability = parseShareInvitation(url)
