@@ -128,6 +128,25 @@ const assertBuiltApp = async (browser, origin, requests) => {
   const page = await context.newPage()
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(String(error)))
+  await page.routeWebSocket(/.*/, (socket) =>
+    socket.close({ code: 1000, reason: 'Pages preflight disables peer connections' }),
+  )
+
+  const waitForInvitationHandling = async (fragment) => {
+    await page.waitForFunction(
+      () => {
+        const status = document.querySelector('.connection-dock')?.textContent ?? ''
+        return ['Connecting', 'P2P online', 'Connection error'].some((label) =>
+          status.includes(label),
+        )
+      },
+      undefined,
+      { timeout: 30_000 },
+    )
+    assert.equal(await page.evaluate(() => location.hash), `#share=${fragment}`)
+    const body = await page.textContent('body')
+    assert.equal(body?.includes('invalid or expired'), false)
+  }
 
   const boot = async (url) => {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90_000 })
@@ -150,32 +169,24 @@ const assertBuiltApp = async (browser, origin, requests) => {
   const unknownResponse = await boot(`${origin}/synthetic/unknown/path`)
   assert.equal(unknownResponse.status(), 404, 'unknown paths use the Pages 404 fallback')
 
+  const sourcePeerId = '12D3KooWHdsAgRqDXk1pyA6Stc2pXf1VFUpvuLDUXKq2mdLWT81B'
   const capability = {
     v: 1,
     shareId: randomBytes(16).toString('base64url'),
     secret: randomBytes(32).toString('base64url'),
-    sourcePeerId: '12D3KooWHdsAgRqDXk1pyA6Stc2pXf1VFUpvuLDUXKq2mdLWT81B',
-    addresses: [
-      '/ip4/192.0.2.10/tcp/4001/ws/p2p/12D3KooWLQh43ZtMVc8WyqJKim22EsnNxVoP6ncojZURTDi5FjWx',
-    ],
+    sourcePeerId,
+    addresses: [`/ip4/192.0.2.10/tcp/4001/ws/p2p/${sourcePeerId}`],
     expiresAt: Date.now() + 3_600_000,
   }
   const fragment = Buffer.from(JSON.stringify(capability)).toString('base64url')
   const fragmentUrl = `${origin}/#share=${fragment}`
-  const fragmentResponse = await page.goto(fragmentUrl, { waitUntil: 'domcontentloaded' })
+  const fragmentResponse = await boot(fragmentUrl)
   assert.equal(fragmentResponse.status(), 200)
-  await page.waitForFunction(() => document.body.innerText.includes('192.0.2.10:4001'), undefined, {
-    timeout: 60_000,
-  })
-  const fragmentBody = await page.textContent('body')
-  assert.equal(fragmentBody.includes('invalid or expired'), false)
-  assert.equal(await page.evaluate(() => location.hash), `#share=${fragment}`)
+  await waitForInvitationHandling(fragment)
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForFunction(() => document.body.innerText.includes('192.0.2.10:4001'), undefined, {
-    timeout: 60_000,
-  })
-  assert.equal(await page.evaluate(() => location.hash), `#share=${fragment}`)
+  await page.getByRole('button', { name: 'Share location' }).waitFor({ timeout: 60_000 })
+  await waitForInvitationHandling(fragment)
   assert.ok(
     requests.every((request) => !request.includes('#') && !request.includes('share=')),
     'the static server must never receive the share fragment',
