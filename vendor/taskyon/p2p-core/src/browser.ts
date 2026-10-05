@@ -11,7 +11,7 @@ import { webSockets } from '@libp2p/websockets'
 import { webTransport } from '@libp2p/webtransport'
 import type { Multiaddr } from '@multiformats/multiaddr'
 import { multiaddr } from '@multiformats/multiaddr'
-import { createLibp2p, type Libp2p } from 'libp2p'
+import { createLibp2p, type ConnectionManagerInit, type Libp2p } from 'libp2p'
 import weald from 'weald'
 import {
   PUBSUB_PEER_DISCOVERY,
@@ -64,10 +64,10 @@ const logger = prefixLogger('p2p-core')
 export const log = logger.forComponent('browser')
 const LIBP2P_LOG_NAMESPACES_KEY = 'taskyon.libp2p.logNamespaces'
 const DEBUG_NAMESPACES_KEY = 'debug'
-const DEFAULT_BROWSER_LOG_NAMESPACES =
-  'p2p-core:*,libp2p:*,-libp2p:connection-manager:*,-*:trace'
+const DEFAULT_BROWSER_LOG_NAMESPACES = 'p2p-core:*,libp2p:*,-libp2p:connection-manager:*,-*:trace'
 const VERBOSE_BROWSER_LOG_NAMESPACES = 'p2p-core:*,libp2p:*,-*:trace'
 const DISCOVERY_ANNOUNCEMENT_INTERVAL_MS = 10_000
+const BROWSER_CONNECTION_TIMEOUT_MS = 30_000
 let browserLoggerTransportPatched = false
 
 function describeError(error: unknown) {
@@ -150,11 +150,13 @@ function dispatchPeerDiscovery(
   const detail = matchedToken
     ? { id: peerId, multiaddrs, matchedToken }
     : { id: peerId, multiaddrs }
-  ;(libp2p as unknown as {
-    dispatchEvent?: (
-      event: CustomEvent<{ id: string; multiaddrs: Multiaddr[]; matchedToken?: string }>,
-    ) => void
-  }).dispatchEvent?.(
+  ;(
+    libp2p as unknown as {
+      dispatchEvent?: (
+        event: CustomEvent<{ id: string; multiaddrs: Multiaddr[]; matchedToken?: string }>,
+      ) => void
+    }
+  ).dispatchEvent?.(
     new CustomEvent(SUBNETWORK_PEER_DISCOVERY_EVENT, {
       detail,
     }),
@@ -165,7 +167,9 @@ function registerBrowserLifecycleLogging(
   libp2p: BrowserLibp2pNode,
   publishAnnouncement: () => void | Promise<void>,
 ) {
-  const onSelfPeerUpdate = ({ detail: { peer } }: CustomEvent<{ peer: { id: PeerId; addresses: Array<{ multiaddr: Multiaddr }> } }>) => {
+  const onSelfPeerUpdate = ({
+    detail: { peer },
+  }: CustomEvent<{ peer: { id: PeerId; addresses: Array<{ multiaddr: Multiaddr }> } }>) => {
     const multiaddrs = peer.addresses.map(({ multiaddr }) => multiaddr.toString())
     log('changed multiaddrs: peer %s multiaddrs: %s', peer.id.toString(), multiaddrs.join(', '))
     void publishAnnouncement()
@@ -192,7 +196,10 @@ function registerBrowserLifecycleLogging(
   }
 }
 
-function registerPeerDiscoverySubscription(libp2p: BrowserLibp2pNode, subnetworkTokens: Set<string>) {
+function registerPeerDiscoverySubscription(
+  libp2p: BrowserLibp2pNode,
+  subnetworkTokens: Set<string>,
+) {
   const onTopicRouterMessage = (event: CustomEvent<BrowserPubsubMessage>) => {
     if (event.detail.topic !== PUBSUB_PEER_DISCOVERY) {
       return
@@ -210,9 +217,16 @@ function registerPeerDiscoverySubscription(libp2p: BrowserLibp2pNode, subnetwork
     }
 
     const multiaddrs = announcement.multiaddrs.map((addr) => multiaddr(addr))
-    log('peer discovered %o', multiaddrs.map((addr) => addr.toString()))
+    log(
+      'peer discovered %o',
+      multiaddrs.map((addr) => addr.toString()),
+    )
 
-    if (libp2p.getConnections().some((connection) => connection.remotePeer.toString() === announcement.peerId)) {
+    if (
+      libp2p
+        .getConnections()
+        .some((connection) => connection.remotePeer.toString() === announcement.peerId)
+    ) {
       log('already connected to peer %s, skipping discovery dial', announcement.peerId)
       return
     }
@@ -241,7 +255,10 @@ function getStoredBrowserLogNamespaces() {
   return value && value.trim() ? value : null
 }
 
-export function setBrowserLibp2pLogNamespaces(namespaces: string, opts: { persist?: boolean } = {}) {
+export function setBrowserLibp2pLogNamespaces(
+  namespaces: string,
+  opts: { persist?: boolean } = {},
+) {
   const persist = opts.persist ?? true
   const trimmed = namespaces.trim()
   ensureVisibleBrowserLoggerTransport()
@@ -261,18 +278,32 @@ export function enableVerboseBrowserLibp2pLogs(opts: { persist?: boolean } = {})
   return setBrowserLibp2pLogNamespaces(VERBOSE_BROWSER_LOG_NAMESPACES, opts)
 }
 
-export async function startBrowserLibp2p(opts: {
-  additionalServices?: Record<string, unknown>
-  logNamespaces?: string
-  subnetworkSecrets?: DiscoverySecretInput[]
-  privateKey?: PrivateKey
-} = {}): Promise<BrowserLibp2pNode> {
-  const { additionalServices = {}, logNamespaces, subnetworkSecrets = [], privateKey } = opts
-  const namespaces = logNamespaces ?? getStoredBrowserLogNamespaces() ?? DEFAULT_BROWSER_LOG_NAMESPACES
+export async function startBrowserLibp2p(
+  opts: {
+    additionalServices?: Record<string, unknown>
+    logNamespaces?: string
+    subnetworkSecrets?: DiscoverySecretInput[]
+    privateKey?: PrivateKey
+    discovery?: 'public' | 'disabled'
+    relayAddrs?: string[]
+  } = {},
+): Promise<BrowserLibp2pNode> {
+  const {
+    additionalServices = {},
+    logNamespaces,
+    subnetworkSecrets = [],
+    privateKey,
+    discovery = 'public',
+    relayAddrs,
+  } = opts
+  const namespaces =
+    logNamespaces ?? getStoredBrowserLogNamespaces() ?? DEFAULT_BROWSER_LOG_NAMESPACES
   ensureVisibleBrowserLoggerTransport()
   enable(namespaces)
   log('libp2p logger namespaces active: %s', namespaces)
-  const subnetworkTokens = new Set(await deriveDiscoveryTokens(subnetworkSecrets))
+  const subnetworkTokens = new Set(
+    discovery === 'public' ? await deriveDiscoveryTokens(subnetworkSecrets) : [],
+  )
 
   const relayListenAddrs: string[] = []
   log('starting libp2p with relayListenAddrs: %o', relayListenAddrs)
@@ -285,13 +316,19 @@ export async function startBrowserLibp2p(opts: {
     transports: [webTransport(), webSockets(), webRTC(), webRTCDirect(), circuitRelayTransport()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
+    // Relayed SDP/ICE negotiation needs a larger budget than the TCP defaults.
+    connectionManager: {
+      dialTimeout: BROWSER_CONNECTION_TIMEOUT_MS,
+      addressDialTimeout: BROWSER_CONNECTION_TIMEOUT_MS,
+      inboundUpgradeTimeout: BROWSER_CONNECTION_TIMEOUT_MS,
+    } satisfies ConnectionManagerInit,
     connectionGater: {
       denyDialMultiaddr: () => false,
     },
     services: {
       pubsub: topicRouter({
         protocol: TOPIC_ROUTER_PROTOCOL,
-        discoveryTopic: PUBSUB_PEER_DISCOVERY,
+        ...(discovery === 'public' ? { discoveryTopic: PUBSUB_PEER_DISCOVERY } : {}),
       }) as unknown,
       identify: identify(),
       ping: ping(),
@@ -299,11 +336,16 @@ export async function startBrowserLibp2p(opts: {
     },
   } as unknown as Parameters<typeof createLibp2p>[0])) as BrowserLibp2pNode
 
+  void dialRelayFallbacks(libp2p, relayAddrs ?? getRelayDialFallbacks())
+  if (discovery === 'disabled') return libp2p
+
   const publishSelfAnnouncement = publishDiscoveryAnnouncement(libp2p, [...subnetworkTokens])
-  const unregisterLifecycleLogging = registerBrowserLifecycleLogging(libp2p, publishSelfAnnouncement)
+  const unregisterLifecycleLogging = registerBrowserLifecycleLogging(
+    libp2p,
+    publishSelfAnnouncement,
+  )
   const unregisterDiscovery = registerPeerDiscoverySubscription(libp2p, subnetworkTokens)
 
-  void dialRelayFallbacks(libp2p)
   void publishSelfAnnouncement()
   const announcementTimer = setInterval(() => {
     void publishSelfAnnouncement()
@@ -352,8 +394,7 @@ function prioritizedDialableMultiaddrs(multiaddrs: Multiaddr[]) {
   return scoring.sort((a, b) => b.score - a.score).map((entry) => entry.addr)
 }
 
-async function dialRelayFallbacks(libp2p: BrowserLibp2pNode) {
-  const relayDialFallbacks = getRelayDialFallbacks()
+async function dialRelayFallbacks(libp2p: BrowserLibp2pNode, relayDialFallbacks: string[]) {
   log('startup relay candidates: %o', relayDialFallbacks)
 
   for (const addrString of relayDialFallbacks) {
@@ -373,27 +414,20 @@ async function dialRelayFallbacks(libp2p: BrowserLibp2pNode) {
       )
       const conn = await libp2p.dial(addr)
       await ensureRelayReservation(libp2p, multiaddr(conn.remoteAddr.toString()))
-      log(
-        'startup relay dial connected: %o',
-        {
-          addr: addrString,
-          connection: describeConnection(conn as BrowserConnectionLike),
-          selfAddrs: getNodeMultiaddrs(libp2p),
-        },
-      )
+      log('startup relay dial connected: %o', {
+        addr: addrString,
+        connection: describeConnection(conn as BrowserConnectionLike),
+        selfAddrs: getNodeMultiaddrs(libp2p),
+      })
       return
     } catch (error) {
-      log.error(
-        'startup relay dial failed for %s with details %o',
-        addrString,
-        {
-          error: describeError(error),
-          selfAddrs: getNodeMultiaddrs(libp2p),
-          existingConnections: libp2p.getConnections().map((connection) =>
-            describeConnection(connection as BrowserConnectionLike),
-          ),
-        },
-      )
+      log.error('startup relay dial failed for %s with details %o', addrString, {
+        error: describeError(error),
+        selfAddrs: getNodeMultiaddrs(libp2p),
+        existingConnections: libp2p
+          .getConnections()
+          .map((connection) => describeConnection(connection as BrowserConnectionLike)),
+      })
     }
   }
 }
@@ -419,14 +453,10 @@ export async function ensureRelayReservation(
     )
     return true
   } catch (error) {
-    log.error(
-      'failed to reserve relay slot on %a with details %o',
-      listenAddr,
-      {
-        error: describeError(error),
-        selfAddrs: getNodeMultiaddrs(libp2p),
-      },
-    )
+    log.error('failed to reserve relay slot on %a with details %o', listenAddr, {
+      error: describeError(error),
+      selfAddrs: getNodeMultiaddrs(libp2p),
+    })
     return false
   }
 }

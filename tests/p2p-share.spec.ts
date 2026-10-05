@@ -4,6 +4,15 @@ import QRCode from 'qrcode'
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
 import { withTwoSources } from './fixtures/two-sources.ts'
 
+test('private peers do not announce themselves through public discovery', async ({ page }) => {
+  await page.goto('/')
+  const announcements = await page.evaluate(async () => {
+    const { probePrivateDiscovery } = await import('../tests/fixtures/share-probe.ts')
+    return probePrivateDiscovery()
+  })
+  expect(announcements).toBe(0)
+})
+
 test('a source can accept one return share and automatically accept other viewers of that link', async ({
   browser,
   baseURL,
@@ -474,6 +483,14 @@ test('shares a browser location over an authenticated P2P stream', async ({
       timeout: 15_000,
     })
 
+    const webRtc = await source.evaluate(async (url) => {
+      const { probeWebRtcReachability } = await import('../tests/fixtures/share-probe.ts')
+      return probeWebRtcReachability(url, 7_000)
+    }, shareUrl)
+    expect(webRtc.direct).toBe(true)
+    expect(webRtc.transport).toMatch(/WebRTC/)
+    expect(webRtc.expectedPeer).toBe(true)
+
     await viewer.goto(shareUrl)
     await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
       timeout: 30_000,
@@ -507,7 +524,9 @@ test('shares a browser location over an authenticated P2P stream', async ({
     await source.getByRole('button', { name: 'Open menu' }).click()
     await source.getByRole('button', { name: 'P2P diagnostics' }).click()
     await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('viewer')
-    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText('WebRTC')
+    await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText(
+      /viewer · (relay circuit|WebRTC)/,
+    )
     await expect(source.getByRole('dialog', { name: 'P2P diagnostics' })).toContainText(
       /stream-open.*admitted|admitted.*stream-open/,
     )

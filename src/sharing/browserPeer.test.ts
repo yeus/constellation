@@ -19,6 +19,18 @@ test('finds a reserved relay address using the connected address form', () => {
   assert.deepEqual(reachableRelayAddresses([circuit], '/dns4/relay.invalid/tcp/443/wss'), [])
 })
 
+test('retains WebRTC signaling addresses from the reserved relay', () => {
+  const connected = '/ip4/192.0.2.10/tcp/443/wss/p2p/relay'
+  const circuit = `${connected}/p2p-circuit/p2p/source`
+  const webRtc = `${connected}/p2p-circuit/webrtc/p2p/source`
+  const unrelated = '/ip4/192.0.2.11/tcp/443/wss/p2p/other/p2p-circuit/webrtc/p2p/source'
+  const nested = `${connected}/p2p-circuit/p2p-circuit/webrtc/p2p/source`
+  assert.deepEqual(reachableRelayAddresses([circuit, webRtc, unrelated, nested], connected), [
+    circuit,
+    webRtc,
+  ])
+})
+
 test('prefers direct addresses then plain circuit relay before WebRTC-over-relay', () => {
   const webRtc = '/dns4/relay.invalid/tcp/443/wss/p2p-circuit/webrtc'
   const circuit = '/dns4/relay.invalid/tcp/443/wss/p2p-circuit'

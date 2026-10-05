@@ -75,14 +75,18 @@ export const createShareInvitation = async (options: {
     ...unsigned,
     ...(ownerPeerId && ownerProof ? { ownerPeerId, ownerProof } : {}),
   })
+  return { url: shareInvitationUrl(capability, options.baseUrl), capability }
+}
+
+export const shareInvitationUrl = (capability: ShareCapability, baseUrl: string): string => {
   const fragment = textToBase64Url(JSON.stringify(capability))
   if (fragment.length > MAX_SHARE_FRAGMENT_LENGTH) {
     throw new RangeError('The share invitation is too large for a preview-safe link.')
   }
-  const url = new URL(options.baseUrl)
+  const url = new URL(baseUrl)
   url.search = ''
   url.hash = `share=${fragment}`
-  return { url: url.toString(), capability }
+  return url.toString()
 }
 
 export const parseShareInvitation = (value: string, now = Date.now()): ShareCapability => {

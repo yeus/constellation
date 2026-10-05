@@ -18,7 +18,7 @@ export function streamToDuplex(stream: Libp2pStreamLike): Libp2pStreamDuplex {
     source: stream,
     sink: async (source) => {
       for await (const chunk of source) {
-        while (!stream.send(chunk)) {
+        if (!stream.send(chunk)) {
           await stream.onDrain()
         }
       }

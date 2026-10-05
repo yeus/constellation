@@ -43,7 +43,8 @@ export const reachableRelayAddresses = (
 ): string[] =>
   addresses.filter(
     (address) =>
-      address.startsWith(`${connectedRelayAddress}/p2p-circuit/p2p/`) &&
+      (address.startsWith(`${connectedRelayAddress}/p2p-circuit/p2p/`) ||
+        address.startsWith(`${connectedRelayAddress}/p2p-circuit/webrtc/p2p/`)) &&
       !address.includes('/p2p-circuit/p2p-circuit'),
   )
 
@@ -70,17 +71,26 @@ export const requireReachablePeer = async <Node extends Pick<BrowserLibp2pNode, 
   throw new Error('No reachable P2P address is available.')
 }
 
+const RELAY_CONNECT_TIMEOUT_MS = 10_000
+
 export const startPrivateBrowserPeer = async (
   privateKey?: PrivateKey,
 ): Promise<{
   node: BrowserLibp2pNode
   addresses: string[]
 }> => {
-  const node = await startBrowserLibp2p({ logNamespaces: '', privateKey })
+  const node = await startBrowserLibp2p({
+    logNamespaces: '',
+    privateKey,
+    discovery: 'disabled',
+    relayAddrs: [],
+  })
   let reservedRelay: string | undefined
   for (const address of configuredRelays()) {
     try {
-      const connection = await node.dial(multiaddr(address))
+      const connection = await node.dial(multiaddr(address), {
+        signal: AbortSignal.timeout(RELAY_CONNECT_TIMEOUT_MS),
+      })
       const connectedRelayAddress = connection.remoteAddr.toString()
       if (await ensureRelayReservation(node, multiaddr(connectedRelayAddress))) {
         reservedRelay = connectedRelayAddress

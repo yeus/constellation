@@ -10,8 +10,15 @@ released.
 - Additional upstream working-tree changes: bounded libp2p message-port adapter and its focused
   tests; exact public Zod version for consumer type compatibility; browser-node typing preserves
   libp2p protocol-dial options; optional caller-owned private key for stable peer identity;
-  bounded terminal-message flushing before stream closure; protocol envelope construction preserves
-  caller-owned strict Zod command and stream-message schemas
+  bounded terminal-message flushing before stream closure; stream backpressure waits for drain
+  without resending bytes already accepted by libp2p, covered by a focused regression (2026-10-05); protocol envelope construction preserves
+  caller-owned strict Zod command and stream-message schemas; relay reservation lifetime uses
+  libp2p's typed `reservationTtl` option and relay shutdown clears AutoNAT polling, with a
+  synthetic reservation-expiry regression (2026-10-05); private browser clients may disable
+  public discovery and eager relay bootstrap while existing Taskyon consumers retain public discovery
+  defaults; browser connection budgets allow 30 seconds for SDP/ICE negotiation
+  against the pinned libp2p 3.3.11; pre-existing snapshot message typing remains
+  compatible with its topic-router base (2026-10-05)
 
 Generic changes are made in Taskyon first and synchronized here. Do not patch these snapshots only
 in Constellation. Generated `dist` directories are excluded; Constellation builds these workspaces

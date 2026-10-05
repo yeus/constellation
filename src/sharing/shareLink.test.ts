@@ -93,3 +93,20 @@ test('return-share proof binds a link to its authenticated owner', async () => {
     false,
   )
 })
+
+test('serializing a selected transport preserves the original private grant and owner proof', async () => {
+  const { shareInvitationUrl, verifyReturnOwner } = await import('./shareLink.ts')
+  const original = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: ['/ip4/127.0.0.1/tcp/9111/ws', '/ip4/127.0.0.1/tcp/9111/ws/p2p-circuit/webrtc'],
+    expiresAt: null,
+    ownerPrivateKey: await generateKeyPair('Ed25519'),
+  })
+  const capability = { ...original.capability, addresses: [original.capability.addresses[1]!] }
+  const parsed = parseShareInvitation(shareInvitationUrl(capability, original.url))
+  assert.deepEqual(parsed, capability)
+  assert.equal(parsed.shareId, original.capability.shareId)
+  assert.equal(parsed.secret, original.capability.secret)
+  assert.equal(await verifyReturnOwner(parsed, original.capability.ownerPeerId), true)
+})

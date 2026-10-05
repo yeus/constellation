@@ -6,6 +6,7 @@ const relay = await startRelayLibp2p({
   logName: 'constellation-e2e-relay',
   listenAddrs: ['/ip4/127.0.0.1/tcp/9111/ws'],
   minConnections: 0,
+  reservationExpirationMs: 60_000,
   autoNatPollMs: 3_600_000,
 })
 const health = createServer((request, response) => {

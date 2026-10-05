@@ -96,7 +96,8 @@ function resolveRelayStartOptions(opts: RelayStartOptions): ResolvedRelayStartOp
     logName: opts.logName ?? 'relay',
     listenAddrs: opts.listenAddrs ?? ['/ip4/0.0.0.0/tcp/9111/ws', '/ip4/0.0.0.0/tcp/9112'],
     maxReservations: opts.maxReservations ?? 50,
-    reservationExpirationMs: opts.reservationExpirationMs ?? 60_000,
+    // Preserve the library's effective default while honoring explicit lifetimes.
+    reservationExpirationMs: opts.reservationExpirationMs ?? 2 * 60 * 60 * 1_000,
     hopTimeoutMs: opts.hopTimeoutMs ?? 10_000,
     maxConnections: opts.maxConnections ?? 200,
     minConnections: opts.minConnections ?? 5,
@@ -220,7 +221,6 @@ export async function startRelayLibp2p(opts: RelayStartOptions = {}): Promise<Li
 
   const log = createStdoutLogger(logName)
   const bannedIPs = new Set<string>()
-  const bannedPeers = new Set<string>()
   logRelayStartup(log)
 
   const libp2p = (await createLibp2p({
@@ -252,16 +252,10 @@ export async function startRelayLibp2p(opts: RelayStartOptions = {}): Promise<Li
       relay: circuitRelayServer({
         reservations: {
           maxReservations,
-          reservationExpiration: reservationExpirationMs,
-          reservationFilter: ({ peerId }: { peerId: { toString: () => string } }) => {
-            const str = peerId.toString()
-            const deny = bannedPeers.has(str)
-            if (deny) log.warn(`Blocking reservation from banned peer ${str}`)
-            return !deny
-          },
+          reservationTtl: reservationExpirationMs,
         },
         hopTimeout: hopTimeoutMs,
-      } as unknown as Parameters<typeof circuitRelayServer>[0]),
+      }),
     },
     connectionManager: {
       maxConnections,
@@ -274,7 +268,8 @@ export async function startRelayLibp2p(opts: RelayStartOptions = {}): Promise<Li
   registerRelayLifecycleLogging(libp2p, log)
 
   log.info(`Topic router ready on discovery topic ${PUBSUB_PEER_DISCOVERY}`)
-  startAutoNatPolling(libp2p, log, autoNatPollMs)
+  const polling = startAutoNatPolling(libp2p, log, autoNatPollMs)
+  libp2p.addEventListener('stop', () => clearInterval(polling), { once: true })
   logRelayReady(log, libp2p)
 
   return libp2p

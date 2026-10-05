@@ -2104,7 +2104,7 @@ __metadata:
     "@types/node": "npm:^22.13.0"
     it-length-prefixed-stream: "npm:^2.0.3"
     it-stream-types: "npm:^2.0.4"
-    libp2p: "npm:^3.1.5"
+    libp2p: "npm:3.3.11"
     multiformats: "npm:^13.4.0"
     tsup: "npm:^8.5.0"
     tsx: "npm:4.20.6"
@@ -4360,7 +4360,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"libp2p@npm:^3.1.5":
+"libp2p@npm:3.3.11":
   version: 3.3.11
   resolution: "libp2p@npm:3.3.11"
   dependencies:
