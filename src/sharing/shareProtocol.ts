@@ -1,4 +1,8 @@
-import { defineFrpServiceProtocol, mergeFrpProtocols } from '@taskyon/protocol'
+import {
+  defineFrpServiceProtocol,
+  mergeFrpProtocols,
+  type ProtocolMessage,
+} from '@taskyon/protocol'
 import { sensorProtocolV1 } from '@taskyon/protocol/sensor'
 import { z } from 'zod'
 
@@ -35,6 +39,13 @@ export const shareProtocolV2 = defineFrpServiceProtocol({
             endedAt: z.number().int().positive(),
           })
           .strict(),
+        z
+          .object({
+            approvalPending: z.literal(true),
+            retryAfterMs: z.number().int().min(5_000).max(60_000),
+          })
+          .strict(),
+        z.object({ accessDenied: z.literal(true) }).strict(),
       ]),
       defaultTimeoutMs: 10_000,
     },
@@ -76,3 +87,7 @@ export const constellationProtocolV2 = mergeFrpProtocols({
   base: sensorProtocolV1,
   extension: shareProtocolV2,
 })
+
+export type ConstellationMessage = ProtocolMessage<typeof constellationProtocolV2>
+export const parseConstellationMessage = (value: unknown): ConstellationMessage =>
+  constellationProtocolV2.message.parse(value) as ConstellationMessage

@@ -131,7 +131,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import QRCode from 'qrcode'
+import { createShareQr } from '../sharing/shareQr.ts'
 import CloseIcon from './icons/CloseIcon.vue'
 import QrScannerSheet from './QrScannerSheet.vue'
 import type { createAndroidBackgroundSharing } from '../android/backgroundSharing.ts'
@@ -184,7 +184,7 @@ const suite = createSharingDiagnostics({
     invitation.value = url
     qrCode.value = ''
     if (url)
-      void QRCode.toDataURL(url, { width: 240, margin: 2 })
+      void createShareQr(url)
         .then((value) => {
           if (invitation.value === url) qrCode.value = value
         })

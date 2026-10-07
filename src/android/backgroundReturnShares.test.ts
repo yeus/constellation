@@ -6,16 +6,20 @@ import { receiveApprovedBackgroundReturns } from './backgroundReturnShares.ts'
 const offer = (shareId: string, viewerFingerprint: string) => ({
   shareId,
   viewerFingerprint,
-  ownerPeerId: 'synthetic-owner',
+  ownerPeerId: `synthetic-${viewerFingerprint}`,
   url: 'https://example.invalid/#share=synthetic-return',
 })
 
-test('only approved native returns reach the foreground receiver and are acknowledged afterward', async () => {
+test('all approved link-group returns reach the foreground receiver and are acknowledged afterward', async () => {
   const events: string[] = []
   const result = await receiveApprovedBackgroundReturns(
     {
       approvedReturnLinks: ['approved'],
-      returnOffers: [offer('unapproved', 'first'), offer('approved', 'second')],
+      returnOffers: [
+        offer('unapproved', 'first'),
+        offer('approved', 'second'),
+        offer('approved', 'third'),
+      ],
     },
     async ({ viewerFingerprint }) => {
       events.push(`receive:${viewerFingerprint}`)
@@ -24,8 +28,13 @@ test('only approved native returns reach the foreground receiver and are acknowl
       events.push(`acknowledge:${viewerFingerprint}`)
     },
   )
-  assert.deepEqual(events, ['receive:second', 'acknowledge:second'])
-  assert.deepEqual(result, { accepted: 1, failed: 0 })
+  assert.deepEqual(events, [
+    'receive:second',
+    'acknowledge:second',
+    'receive:third',
+    'acknowledge:third',
+  ])
+  assert.deepEqual(result, { accepted: 2, failed: 0 })
 })
 
 test('failed receive or acknowledgement leaves the native offer queued and does not block other peers', async () => {

@@ -160,6 +160,11 @@ test('classifies follow freshness and terminal states explicitly', () => {
   )
 })
 
+test('shows approval pending before location and distinguishes a denied peer', () => {
+  assert.equal(followStatusFor({ connected: false, approvalPending: true }), 'approval-pending')
+  assert.equal(followStatusFor({ connected: false, approvalDenied: true }), 'denied')
+})
+
 test('classifies heartbeat and expiry cleanup deterministically', () => {
   assert.equal(sessionSweepReason(null, 10_000, 20_000), undefined)
   assert.equal(sessionSweepReason(null, 10_000, 45_001), 'heartbeat-timeout')
@@ -167,7 +172,7 @@ test('classifies heartbeat and expiry cleanup deterministically', () => {
   assert.equal(sessionSweepReason(30_000, 0, 70_000), 'expired')
 })
 
-test('failed group approval keeps the offer and permits a persisted retry', async () => {
+test('failed link-group approval keeps the offer and permits a persisted retry', async () => {
   const source = await createShareInvitation({
     baseUrl: 'https://example.test/',
     sourcePeerId: 'synthetic-source-peer',

@@ -3045,11 +3045,13 @@ const runRestrictedStartSmoke = async () => {
   }
 }
 
-const describeInvitationAddresses = (shareUrl) => {
-  const fragment = new URL(shareUrl).hash.slice('#share='.length)
-  const capability = JSON.parse(Buffer.from(fragment, 'base64url').toString('utf8'))
-  return capability.addresses.map((address) => address.replaceAll(/\/p2p\/[^/]+/g, '/p2p/<peer>'))
-}
+const describeInvitationAddresses = (viewer, shareUrl) =>
+  viewer.evaluate(async (url) => {
+    const { parseShareInvitation } = await import('/src/sharing/shareLink.ts')
+    return parseShareInvitation(url, 0).addresses.map((address) =>
+      address.includes('/webrtc') ? 'WebRTC relay' : 'circuit relay',
+    )
+  }, shareUrl)
 
 const verifyBrowserRevocation = async (viewer, cdp) => {
   try {
@@ -3253,7 +3255,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       connectedViewer: await androidTextIncludes(cdp, '1 connected'),
     }
     throw new Error(
-      `No location reached the browser. Address forms: ${JSON.stringify(describeInvitationAddresses(shareUrl))}; Browser state: ${JSON.stringify(browserState)}; Android state: ${JSON.stringify(androidState)}`,
+      `No location reached the browser. Address forms: ${JSON.stringify(await describeInvitationAddresses(viewer, shareUrl))}; Browser state: ${JSON.stringify(browserState)}; Android state: ${JSON.stringify(androidState)}`,
       { cause: error },
     )
   }

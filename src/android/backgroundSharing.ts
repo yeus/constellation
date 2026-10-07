@@ -3,6 +3,7 @@ import { shareExpiryFor, type ShareDraft, type SharePauseReason } from '../share
 import type { PrivateState } from '../sharing/privateStore.ts'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
+import { PeerNamePreference } from '../sharing/peerNames.ts'
 
 export interface AndroidBackgroundStatus {
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
@@ -16,6 +17,13 @@ export interface AndroidBackgroundStatus {
     url: string
   }[]
   readonly approvedReturnLinks?: readonly string[]
+  readonly peerNamePreferences?: readonly PeerNamePreference[]
+  readonly pendingViewerApprovals?: readonly {
+    shareId: string
+    peerId: string
+    fingerprint: string
+    requestedAt: number
+  }[]
   readonly oldSharing?: readonly {
     shareId: string
     name?: string
@@ -86,6 +94,16 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
     (candidate.approvedReturnLinks !== undefined &&
       (!Array.isArray(candidate.approvedReturnLinks) ||
         candidate.approvedReturnLinks.some((shareId) => typeof shareId !== 'string'))) ||
+    (candidate.pendingViewerApprovals !== undefined &&
+      (!Array.isArray(candidate.pendingViewerApprovals) ||
+        candidate.pendingViewerApprovals.some(
+          (request) =>
+            !request ||
+            typeof request.shareId !== 'string' ||
+            typeof request.peerId !== 'string' ||
+            typeof request.fingerprint !== 'string' ||
+            typeof request.requestedAt !== 'number',
+        ))) ||
     (candidate.oldSharing !== undefined &&
       (!Array.isArray(candidate.oldSharing) ||
         candidate.oldSharing.some(
@@ -97,6 +115,12 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
         )))
   ) {
     throw new Error('Invalid background sharing status.')
+  }
+  if (
+    candidate.peerNamePreferences !== undefined &&
+    !PeerNamePreference.array().max(1_024).safeParse(candidate.peerNamePreferences).success
+  ) {
+    throw new Error('Invalid background name preferences.')
   }
   return candidate as AndroidBackgroundStatus
 }
@@ -114,6 +138,7 @@ export const createAndroidBackgroundSharing = (
       stop: (shareId: string) => Promise<AndroidBackgroundStatus>
       setVisible: (visible: boolean) => Promise<void>
       approveReturnLink: (shareId: string) => Promise<void>
+      approveViewer: (shareId: string, peerId: string) => Promise<AndroidBackgroundStatus>
       dismissReturnOffer: (shareId: string, fingerprint: string) => Promise<void>
       importSourceState: (state: PrivateState) => Promise<void>
       setViewerName: (
@@ -122,6 +147,11 @@ export const createAndroidBackgroundSharing = (
         name: string,
       ) => Promise<AndroidBackgroundStatus>
       blockViewer: (shareId: string, fingerprint: string) => Promise<AndroidBackgroundStatus>
+      setPeerNamePreferences: (
+        peerId: string,
+        associateNames: boolean,
+        sharedName: string | null,
+      ) => Promise<AndroidBackgroundStatus>
     }
   | undefined => {
   if (!dependencies.isAndroid) return undefined
@@ -165,6 +195,10 @@ export const createAndroidBackgroundSharing = (
     approveReturnLink: async (shareId) => {
       await dependencies.invoke('android_approve_background_return_link', { shareId })
     },
+    approveViewer: async (shareId, peerId) => {
+      await dependencies.invoke('android_approve_background_viewer', { shareId, peerId })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
+    },
     dismissReturnOffer: async (shareId, fingerprint) => {
       await dependencies.invoke('android_dismiss_background_return_offer', {
         shareId,
@@ -188,5 +222,13 @@ export const createAndroidBackgroundSharing = (
       parseStatus(
         await dependencies.invoke('android_block_background_viewer', { shareId, fingerprint }),
       ),
+    setPeerNamePreferences: async (peerId, associateNames, sharedName) => {
+      await dependencies.invoke('android_set_background_peer_names', {
+        peerId,
+        associateNames,
+        sharedName,
+      })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
+    },
   }
 }

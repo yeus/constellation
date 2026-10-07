@@ -238,6 +238,42 @@ test('shows a useful message when the desktop browser cannot initialize WebGL', 
   await expect(error).toHaveCSS('color', 'rgb(132, 36, 46)')
 })
 
+test('persists independent local map grouping controls', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  const settings = page.locator('.map-decluttering-settings')
+  await settings.locator('summary').click()
+  const markerGrouping = settings.getByLabel('Group colliding markers')
+  const areaGrouping = settings.getByLabel('Group overlapping areas')
+  await expect(markerGrouping).toBeChecked()
+  await expect(areaGrouping).toBeChecked()
+  await markerGrouping.uncheck()
+  await settings
+    .locator('input[type="range"]')
+    .first()
+    .evaluate((input) => {
+      const slider = input as HTMLInputElement
+      slider.value = '0.75'
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  await expect(settings).toContainText('Area overlap: 75%')
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        JSON.parse(localStorage.getItem('constellation.map-decluttering') ?? '{}'),
+      ),
+    )
+    .toMatchObject({ groupMarkerCollisions: false, groupUncertaintyOverlap: true })
+  await page.reload()
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  const restoredSettings = page.locator('.map-decluttering-settings')
+  await restoredSettings.locator('summary').click()
+  await expect(restoredSettings.getByLabel('Group colliding markers')).not.toBeChecked()
+  await expect(restoredSettings.getByLabel('Group overlapping areas')).toBeChecked()
+  await expect(restoredSettings).toContainText('Area overlap: 75%')
+})
+
 test('explains when the PMTiles archive cannot be downloaded', async ({ page }) => {
   await page.route('**/*.pmtiles*', (route) => route.abort())
   await page.goto('/')

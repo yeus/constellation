@@ -25,10 +25,11 @@ export interface SharingDiagnosticDependencies {
   }
 }
 
-const draft = () => ({
+const draft = (viewerCapacity: 1 | 10 = 10) => ({
   ...createShareDraft(),
   name: 'Sharing diagnostics',
   precision: 'exact' as const,
+  viewerCapacity,
 })
 const check = (condition: boolean, message: string): void => {
   if (!condition) throw new Error(message)
@@ -97,9 +98,11 @@ const joinLifecycle = async (
 ) => {
   const id = parseShareInvitation(url).shareId
   await session.runtime.acceptShare(url, { saved: false })
-  dependencies.stage('Receiving synthetic updates and offering a private diagnostic return link.')
+  dependencies.stage('Waiting for synthetic location updates from the paired device.')
   await waitForUpdates(session, signal)
-  const returned = await session.runtime.createShare(draft(), Date.now() + 600_000)
+  dependencies.stage('Synthetic updates received. Creating a private diagnostic return link.')
+  const returned = await session.runtime.createShare(draft(1), Date.now() + 600_000)
+  dependencies.stage('Return link ready. Sending it over the original location session.')
   await session.runtime.offerReturnShare(id, returned.url)
   await session.wait(
     (state) =>

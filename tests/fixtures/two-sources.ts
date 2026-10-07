@@ -14,18 +14,26 @@ const createNamedShare = async (page: Page, name: string): Promise<string> => {
 
 const followTwoSources = async (
   viewer: Page,
+  first: Page,
   firstLink: string,
+  second: Page,
   secondLink: string,
 ): Promise<void> => {
   await viewer.goto(firstLink)
   await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
     timeout: 30_000,
   })
+  const firstRequest = first.getByRole('region', { name: 'Viewer access request' })
+  await expect(firstRequest).toBeVisible({ timeout: 30_000 })
+  await firstRequest.getByRole('button', { name: 'Approve this device' }).click()
   await expect(viewer.getByText('Seeing 1')).toBeVisible()
   await viewer.getByRole('button', { name: 'Open menu' }).click()
   await viewer.getByRole('button', { name: 'Follow a link' }).click()
   await viewer.getByRole('textbox', { name: 'Paste location link' }).fill(secondLink)
   await viewer.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
+  const secondRequest = second.getByRole('region', { name: 'Viewer access request' })
+  await expect(secondRequest).toBeVisible({ timeout: 30_000 })
+  await secondRequest.getByRole('button', { name: 'Approve this device' }).click()
   await expect(viewer.getByText('Seeing 2')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -54,7 +62,7 @@ export const withTwoSources = async (
       createNamedShare(first, 'River'),
       createNamedShare(second, 'Forest'),
     ])
-    await followTwoSources(viewer, firstLink, secondLink)
+    await followTwoSources(viewer, first, firstLink, second, secondLink)
     await run({ first, second, viewer })
   } finally {
     await Promise.all([viewerContext.close(), secondContext.close(), firstContext.close()])

@@ -167,10 +167,13 @@ assert.match(androidPlugin, /if \(!status\.has\("shares"\).*org\.json\.JSONArray
 assert.match(androidPlugin, /if \(!status\.has\("message"\).*status\.put\("message", ""\)/)
 assert.match(mapView, /if \(creatingShare\.value\) return/)
 assert.match(androidPlugin, /fun approveBackgroundReturnLink\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun approveBackgroundViewer\(invoke: Invoke\)/)
 assert.match(androidPlugin, /fun dismissBackgroundReturnOffer\(invoke: Invoke\)/)
 assert.match(locationService, /"approve-return-link"/)
+assert.match(locationService, /"approve-viewer"/)
 assert.match(locationService, /"dismiss-return-offer"/)
 assert.match(backgroundEntry, /await executeBackgroundReturnCommand\(runtime, command, post\)/)
+assert.match(backgroundEntry, /await runtime\.approveViewer\(command\.shareId, command\.peerId\)/)
 assert.match(returnCommand, /await runtime\.approveReturnLink\(command\.shareId\)/)
 assert.match(
   returnCommand,
@@ -178,7 +181,7 @@ assert.match(
 )
 assert.match(
   androidPlugin,
-  /runReturnCommand\(invoke, ShareServiceContract.ACTION_APPROVE_RETURN_LINK/,
+  /fun approveBackgroundReturnLink[\s\S]*?parseArgs\(ShareIdArgs::class\.java\)[\s\S]*?ShareServiceContract\.ACTION_APPROVE_RETURN_LINK[\s\S]*?args\.shareId/,
 )
 assert.match(
   androidPlugin,
@@ -190,8 +193,10 @@ assert.match(locationService, /sendBroadcast\(result\)/)
 assert.match(backgroundEntry, /shareCount \+ state.endNotifications.length/)
 assert.match(locationService, /status.optInt\("endNotificationCount", 0\) > 0/)
 assert.match(mobileBridge, /"approveBackgroundReturnLink"/)
+assert.match(mobileBridge, /"approveBackgroundViewer"/)
 assert.match(mobileBridge, /"dismissBackgroundReturnOffer"/)
 assert.match(tauriCommands, /android_approve_background_return_link/)
+assert.match(tauriCommands, /android_approve_background_viewer/)
 assert.match(tauriCommands, /android_dismiss_background_return_offer/)
 assert.doesNotMatch(
   locationService,

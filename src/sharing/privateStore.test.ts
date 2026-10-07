@@ -17,6 +17,7 @@ const state: PrivateState = {
       sourcePrivateKey: 'B'.repeat(40),
       precision: 'approximate',
       capacity: 1,
+      approvedPeerId: 'synthetic-approved-peer',
       publication: 'foreground',
       approximation: {
         latitude: 32.7157,
@@ -57,7 +58,27 @@ test('encrypted private state cannot be opened with another key', async () => {
   await assert.rejects(() => decryptPrivateState(encrypted, otherKey))
 })
 
-test('preserves return approval, prompt history and old-share lifecycle records', () => {
+test('restores directional name consent and private association only from encrypted storage', async () => {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ])
+  const preference = {
+    peerId: 'synthetic-peer',
+    associateNames: true,
+    nickname: 'Mum',
+    sharedName: 'Bob',
+    receivedName: 'Alice',
+  }
+  const snapshot = { ...state, peerNamePreferences: [preference] }
+  const encrypted = await encryptPrivateState(snapshot, key)
+  assert.equal(JSON.stringify(encrypted).includes('Mum'), false)
+  assert.equal(JSON.stringify(encrypted).includes('synthetic-peer'), false)
+  assert.deepEqual((await decryptPrivateState(encrypted, key)).peerNamePreferences, [preference])
+  assert.equal(parsePrivateState(state).peerNamePreferences, undefined)
+})
+
+test('preserves link-group return approval, prompt history and old-share records', () => {
   const current = parsePrivateState({
     ...state,
     followed: [
@@ -82,6 +103,19 @@ test('preserves return approval, prompt history and old-share lifecycle records'
   assert.equal(current.pendingReturns?.length, 1)
   assert.equal(current.oldSeeing?.[0]?.reason, 'revoked')
   assert.equal(current.oldSharing?.[0]?.reason, 'expired')
+})
+
+test('keeps legacy link-wide return consent scoped to the same share ID', () => {
+  const current = parsePrivateState({
+    ...state,
+    approvedReturnLinks: ['synthetic-share-id'],
+  })
+  assert.deepEqual(current.approvedReturnLinks, ['synthetic-share-id'])
+})
+
+test('persists the approved recipient identity on a single-recipient share', () => {
+  const current = parsePrivateState({ ...state, shares: [{ ...state.shares[0] }] })
+  assert.equal(current.shares[0]?.approvedPeerId, 'synthetic-approved-peer')
 })
 
 test('share battery and network policy stay optional for existing protected state', () => {

@@ -3029,9 +3029,11 @@ __metadata:
     "@vue/tsconfig": "npm:0.8.1"
     eslint: "npm:9.14.0"
     eslint-plugin-vue: "npm:10.4.0"
+    fflate: "npm:0.8.3"
     globals: "npm:16.4.0"
     jsqr: "npm:^1.4.0"
     maplibre-gl: "npm:6.4.1"
+    multiformats: "npm:14.0.5"
     pmtiles: "npm:4.4.1"
     prettier: "npm:3.3.3"
     qrcode: "npm:1.5.4"
@@ -3751,7 +3753,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"fflate@npm:^0.8.2":
+"fflate@npm:0.8.3, fflate@npm:^0.8.2":
   version: 0.8.3
   resolution: "fflate@npm:0.8.3"
   checksum: 10c0/eab181ca37f5348ae76d4b6f840e0026e30220e33153289ac942222d8b9638237d486507dbcc09878d724095bd354993a2ee48bbee99c8f2c6440d4448719aa7
@@ -4591,17 +4593,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"multiformats@npm:14.0.5, multiformats@npm:^14.0.0":
+  version: 14.0.5
+  resolution: "multiformats@npm:14.0.5"
+  checksum: 10c0/3e3de2da477e51434099636b1d107f1f431dab3441f485665c38e6b33d16db673919c55c2bafc2170295173d84ff78c3ff540e4a62682b20d6cdea8d2ed7fd2b
+  languageName: node
+  linkType: hard
+
 "multiformats@npm:^13.0.0, multiformats@npm:^13.4.0":
   version: 13.4.2
   resolution: "multiformats@npm:13.4.2"
   checksum: 10c0/b7be09b8bf8198d601c8f8c9a358b9a6aca5a14d61239a84f88d8266322e4e7c3015fe7bdf88b589b9993a4abb752defabb932719d1b457a53277e264c4cee11
-  languageName: node
-  linkType: hard
-
-"multiformats@npm:^14.0.0":
-  version: 14.0.5
-  resolution: "multiformats@npm:14.0.5"
-  checksum: 10c0/3e3de2da477e51434099636b1d107f1f431dab3441f485665c38e6b33d16db673919c55c2bafc2170295173d84ff78c3ff540e4a62682b20d6cdea8d2ed7fd2b
   languageName: node
   linkType: hard
 

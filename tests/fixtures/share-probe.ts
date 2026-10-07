@@ -5,16 +5,86 @@ import { createBrowserLocationSource } from '../../src/location/browser.ts'
 import { createSharingRuntime, type SharingRuntimeState } from '../../src/sharing/sharingRuntime.ts'
 
 import {
-  createConstellationMessagePort,
+  createProtocolMessagePort,
   dialShareStream,
   startPrivateBrowserPeer,
 } from '../../src/sharing/browserPeer.ts'
 import { base64UrlToBytes } from '../../src/sharing/encoding.ts'
 import { createRedemptionProof } from '../../src/sharing/shareAuth.ts'
 import { parseShareInvitation, shareInvitationUrl } from '../../src/sharing/shareLink.ts'
-import { constellationProtocolV2, SHARE_STREAM_PROTOCOL } from '../../src/sharing/shareProtocol.ts'
+import {
+  constellationProtocolV2,
+  parseConstellationMessage,
+  SHARE_STREAM_PROTOCOL,
+} from '../../src/sharing/shareProtocol.ts'
 import { classifyTransport } from '../../src/sharing/transport.ts'
 import { createShareDraft } from '../../src/shareDraft.ts'
+
+export const probePeerNames = async () => {
+  const source = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic-source', geolocation: undefined }),
+    undefined,
+    { load: async () => undefined, save: async () => undefined },
+  )
+  const viewer = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic-viewer', geolocation: undefined }),
+    undefined,
+    { load: async () => undefined, save: async () => undefined },
+  )
+  let sourceState!: SharingRuntimeState, viewerState!: SharingRuntimeState
+  source.subscribe((state) => {
+    sourceState = state
+  })
+  viewer.subscribe((state) => {
+    viewerState = state
+  })
+  const wait = async (matches: () => boolean) => {
+    const deadline = Date.now() + 10_000
+    while (!matches()) {
+      if (Date.now() > deadline) throw new Error('Synthetic name synchronization timed out.')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+  try {
+    const share = await source.createShare({
+      ...createShareDraft(),
+      viewerCapacity: 10,
+      name: 'Link label',
+    })
+    await viewer.acceptShare(share.url)
+    const sourceId = viewerState.following[0]!.peerId!
+    const viewerId = sourceState.shares[0]!.viewers![0]!.peerId
+    const defaultNames = Boolean(sourceState.shares[0]!.viewers![0]!.sourceName)
+    const linkNamePreserved = viewerState.following[0]!.sourceName === 'Link label'
+    await source.setPeerNamePreferences(viewerId, false, 'Alice')
+    await wait(() => viewerState.following[0]!.sourceName === 'Alice')
+    const oneDirection = viewerState.following[0]!.sourceName
+    const reverseInitiallyPrivate = !sourceState.shares[0]!.viewers![0]!.sourceName
+    await viewer.setPeerNamePreferences(sourceId, true, 'Bob')
+    await wait(() => sourceState.shares[0]!.viewers![0]!.sourceName === 'Bob')
+    const reverseOptIn = sourceState.shares[0]!.viewers![0]!.sourceName
+    viewer.setFollowName(share.shareId, 'Mum')
+    await source.setPeerNamePreferences(viewerId, false, 'Alicia')
+    await wait(() => viewerState.following[0]!.sourceName === 'Alicia')
+    const privateNickname = viewerState.following[0]!.localName
+    const sharedUpdate = viewerState.following[0]!.sourceName
+    await source.setPeerNamePreferences(viewerId, false, null)
+    await wait(() => viewerState.following[0]!.sourceName === 'Link label')
+    return {
+      defaultNames,
+      linkNamePreserved,
+      oneDirection,
+      reverseInitiallyPrivate,
+      reverseOptIn,
+      privateNickname,
+      sharedUpdate,
+      linkNameRestoredAfterClear: viewerState.following[0]!.sourceName === 'Link label',
+    }
+  } finally {
+    await viewer.stop()
+    await source.stop()
+  }
+}
 
 export const probeRevocationDuringAdmission = async () => {
   const source = createSharingRuntime(
@@ -35,7 +105,7 @@ export const probeRevocationDuringAdmission = async () => {
     viewerState = state
   })
   try {
-    const share = await source.createShare(createShareDraft())
+    const share = await source.createShare({ ...createShareDraft(), viewerCapacity: 10 })
     await viewer.acceptShare(share.url, { saved: false }).catch(() => undefined)
     await revocation
     return {
@@ -120,7 +190,7 @@ export const probeEndedShare = async (url: string) => {
   const capability = parseShareInvitation(url, 0)
   const { node } = await startPrivateBrowserPeer()
   const stream = await dialShareStream(node, capability.addresses, SHARE_STREAM_PROTOCOL, [])
-  const messagePort = createConstellationMessagePort(stream)
+  const messagePort = createProtocolMessagePort(stream, parseConstellationMessage)
   const client = createPortClient(messagePort.port, constellationProtocolV2)
   const viewerNonce = crypto.randomUUID()
   const redemption = { shareId: capability.shareId, viewerNonce }

@@ -197,6 +197,25 @@ async fn android_approve_background_return_link(
 }
 
 #[tauri::command]
+async fn android_approve_background_viewer(
+    app: tauri::AppHandle,
+    share_id: String,
+    peer_id: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .approve_viewer(&share_id, &peer_id)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id, peer_id);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_dismiss_background_return_offer(
     app: tauri::AppHandle,
     share_id: String,
@@ -211,6 +230,26 @@ async fn android_dismiss_background_return_offer(
     #[cfg(not(target_os = "android"))]
     {
         let _ = (app, share_id, fingerprint);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_set_background_peer_names(
+    app: tauri::AppHandle,
+    peer_id: String,
+    associate_names: bool,
+    shared_name: Option<String>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .set_peer_names(&peer_id, associate_names, shared_name.as_deref())
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, peer_id, associate_names, shared_name);
         Err("Android background sharing is unavailable.".into())
     }
 }
@@ -351,8 +390,10 @@ pub fn run() {
             android_set_background_visibility,
             android_import_source_state,
             android_approve_background_return_link,
+            android_approve_background_viewer,
             android_dismiss_background_return_offer,
             android_set_background_viewer_name,
+            android_set_background_peer_names,
             android_block_background_viewer,
             android_take_shared_text,
             android_load_private_state,

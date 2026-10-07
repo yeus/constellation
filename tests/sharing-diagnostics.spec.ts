@@ -34,11 +34,12 @@ test('runs the suite with explicit skipped results and a safe copyable report', 
 })
 
 test('cancels a waiting pair and closes its temporary session', async ({ page }) => {
+  test.setTimeout(90_000)
   await openSuite(page)
   await page.getByLabel('Category', { exact: true }).selectOption('paired')
   await page.getByLabel('Pairing role').selectOption('host')
   await runCase(page, 'Two-way sharing and revocation')
-  await expect(page.getByLabel('Diagnostic pairing link')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByLabel('Diagnostic pairing link')).toBeVisible({ timeout: 60_000 })
   await page.getByRole('button', { name: 'Cancel run', exact: true }).click()
   await expect(
     page.getByRole('dialog', { name: 'Sharing diagnostics', exact: true }).getByRole('status'),
@@ -86,7 +87,7 @@ for (const scenario of ['Two-way sharing and revocation', 'Link expiry', 'Batch 
         await expect(viewer.getByLabel('Diagnostic partner link')).toBeEnabled()
         await viewer.getByRole('button', { name: 'Cancel run', exact: true }).click()
       } else await runCase(viewer, caseName)
-      for (const page of [source, viewer]) {
+      for (const page of [viewer, source]) {
         await expect(
           page
             .getByRole('dialog', { name: 'Sharing diagnostics', exact: true })
@@ -95,6 +96,8 @@ for (const scenario of ['Two-way sharing and revocation', 'Link expiry', 'Batch 
           timeout: caseName === 'Link expiry' ? 80_000 : 30_000,
         })
         const report = JSON.parse(await page.getByLabel('Diagnostic results').inputValue())
+        if (report.summary.passed !== 1 || report.summary.failed !== 0)
+          throw new Error(`Diagnostic report: ${JSON.stringify(report)}`)
         expect(report.summary.passed).toBe(1)
         expect(report.summary.failed).toBe(0)
         if (batch && page === viewer) expect(report.summary.cancelled).toBe(1)

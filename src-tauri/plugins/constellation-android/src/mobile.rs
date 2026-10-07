@@ -112,6 +112,16 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub async fn approve_viewer(&self, share_id: &str, peer_id: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async(
+                "approveBackgroundViewer",
+                json!({ "shareId": share_id, "peerId": peer_id }),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn dismiss_return_offer(
         &self,
         share_id: &str,
@@ -139,6 +149,12 @@ impl<R: Runtime> ConstellationAndroid<R> {
             )
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn set_peer_names(&self, peer_id: &str, associate_names: bool, shared_name: Option<&str>) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("setBackgroundPeerNames",
+            json!({ "peerId": peer_id, "associateNames": associate_names, "sharedName": shared_name }))
+            .await.map_err(Into::into)
     }
 
     pub async fn block_viewer(&self, share_id: &str, fingerprint: &str) -> crate::Result<Value> {

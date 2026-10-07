@@ -7,26 +7,22 @@ import { PRIMARY_RELAY_WS_MULTIADDR } from '@taskyon/p2p-core/constants'
 import { createLibp2pMessagePort } from '@taskyon/p2p-core/messagePort'
 import type { Connection, PrivateKey, Stream } from '@libp2p/interface'
 import { multiaddr } from '@multiformats/multiaddr'
-import type { ProtocolMessage } from '@taskyon/protocol'
 
-import { constellationProtocolV2 } from './shareProtocol.ts'
-
-export type ConstellationMessage = ProtocolMessage<typeof constellationProtocolV2>
-
-const jsonCodec = {
-  encode: (message: ConstellationMessage): Uint8Array =>
-    new TextEncoder().encode(JSON.stringify(message)),
-  decode: (bytes: Uint8Array): ConstellationMessage =>
-    constellationProtocolV2.message.parse(
-      JSON.parse(new TextDecoder().decode(bytes)),
-    ) as ConstellationMessage,
-}
-
-export const createConstellationMessagePort = (stream: Stream) =>
-  createLibp2pMessagePort<ConstellationMessage, ConstellationMessage>(stream, jsonCodec, {
-    maxMessageBytes: 8_192,
-    maxPendingMessages: 32,
-  })
+export const createProtocolMessagePort = <Message>(
+  stream: Stream,
+  parse: (value: unknown) => Message,
+) =>
+  createLibp2pMessagePort<Message, Message>(
+    stream,
+    {
+      encode: (message) => new TextEncoder().encode(JSON.stringify(message)),
+      decode: (bytes) => parse(JSON.parse(new TextDecoder().decode(bytes))),
+    },
+    {
+      maxMessageBytes: 8_192,
+      maxPendingMessages: 32,
+    },
+  )
 
 const configuredRelays = (): string[] => {
   const value = import.meta.env.VITE_CONSTELLATION_RELAY_ADDRS

@@ -8,6 +8,7 @@
       <LocationMap
         ref="locationMap"
         :locations="locations"
+        :decluttering="mapDecluttering"
         :map-family="mapFamily"
         @select="openFollowDetails"
         @diagnostic="sessionLog.record"
@@ -50,6 +51,54 @@
       >
         Minimalist map
       </button>
+      <details class="map-decluttering-settings">
+        <summary>Map decluttering</summary>
+        <label>
+          <input v-model="mapDecluttering.enabled" type="checkbox" />
+          Group nearby peers
+        </label>
+        <label>
+          <input
+            v-model="mapDecluttering.groupMarkerCollisions"
+            type="checkbox"
+            :disabled="!mapDecluttering.enabled"
+          />
+          Group colliding markers
+        </label>
+        <label>
+          <input
+            v-model="mapDecluttering.groupUncertaintyOverlap"
+            type="checkbox"
+            :disabled="!mapDecluttering.enabled"
+          />
+          Group overlapping areas
+        </label>
+        <label class="map-decluttering-settings__range">
+          <span
+            >Area overlap:
+            {{ Math.round(mapDecluttering.uncertaintyOverlapThreshold * 100) }}%</span
+          >
+          <input
+            v-model.number="mapDecluttering.uncertaintyOverlapThreshold"
+            type="range"
+            min="0.5"
+            max="1"
+            step="0.05"
+            :disabled="!mapDecluttering.enabled || !mapDecluttering.groupUncertaintyOverlap"
+          />
+        </label>
+        <label class="map-decluttering-settings__range">
+          <span>Marker spacing: {{ mapDecluttering.markerCollisionDistancePx }} px</span>
+          <input
+            v-model.number="mapDecluttering.markerCollisionDistancePx"
+            type="range"
+            min="12"
+            max="48"
+            step="2"
+            :disabled="!mapDecluttering.enabled || !mapDecluttering.groupMarkerCollisions"
+          />
+        </label>
+      </details>
       <button type="button" @click="openAbout">Privacy and licenses</button>
       <button type="button" @click="copyLogs">Copy logs</button>
       <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
@@ -129,12 +178,52 @@
       </button>
     </section>
 
+    <section
+      v-if="pendingViewerApproval"
+      class="accept-card"
+      role="region"
+      aria-label="Viewer access request"
+    >
+      <p class="eyebrow">Single-recipient link</p>
+      <strong>A device wants to view your location</strong>
+      <p>
+        Approve this peer before any location is sent. The link will stay bound to this peer after
+        approval.
+      </p>
+      <span class="field-help">Device fingerprint: {{ pendingViewerApproval.fingerprint }}</span>
+      <div class="preview-actions">
+        <button
+          class="primary-action"
+          type="button"
+          :disabled="changingViewerApproval"
+          @click="approvePendingViewer"
+        >
+          Approve this device
+        </button>
+        <button
+          class="secondary-action"
+          type="button"
+          :disabled="changingViewerApproval"
+          @click="rejectPendingViewer"
+        >
+          Reject
+        </button>
+      </div>
+    </section>
+
     <section v-if="previewFollow" class="accept-card" aria-label="Location preview">
       <p class="eyebrow">Private preview</p>
       <strong>{{ previewFollow.localName }}</strong>
-      <p>This location is visible now. Keep following to save it on this device.</p>
+      <p v-if="previewFollow.status === 'approval-pending'">
+        No location is shared yet. The sender must approve this device first.
+      </p>
+      <p v-else-if="previewFollow.status === 'denied'">
+        The sender did not approve this device. No location is being received.
+      </p>
+      <p v-else>This location is visible now. Keep following to save it on this device.</p>
       <div class="preview-actions">
         <button
+          v-if="previewFollow.status !== 'denied'"
           class="primary-action"
           type="button"
           :disabled="!runtimeState.canSave"
@@ -176,7 +265,7 @@
         >
           Share approximate location for 1 hour
         </button>
-        <button class="secondary-action" type="button" @click="shareBackPrompt = undefined">
+        <button class="secondary-action" type="button" @click="dismissShareBackPrompt">
           Not now
         </button>
       </div>
@@ -191,8 +280,8 @@
       <p class="eyebrow">Private return share</p>
       <strong>A viewer wants to share their location back</strong>
       <p>
-        Accept this share and allow other viewers of the same link to share their locations back
-        automatically. Viewers do not see one another or each other’s locations.
+        Accept this location and remember your choice for this link. Other viewers using the same
+        link will be accepted automatically.
       </p>
       <div class="preview-actions">
         <button
@@ -201,7 +290,7 @@
           :disabled="changingReturnOffer"
           @click="acceptReturnOffer"
         >
-          Accept this and future shares from this link
+          Accept viewers from this link
         </button>
         <button
           class="secondary-action"
@@ -232,7 +321,7 @@
         {{ connectionLabel }} <span aria-hidden="true">·</span> {{ ownLocationLabel }}
       </div>
       <div class="dock-buttons">
-        <button class="dock-side" type="button" @click="sharesOpen = true">
+        <button class="dock-side" type="button" @click="openSharing">
           <Share2 aria-hidden="true" />
           <span>{{ sharingLabel }}</span>
         </button>
@@ -276,18 +365,6 @@
       @network="updateNetworkPolicy"
     />
 
-    <ShareListSheet
-      v-if="sharesOpen"
-      :shares="activeShares"
-      :old-shares="oldSharing"
-      :pause-reason="backgroundStatus?.pauseReason"
-      @close="sharesOpen = false"
-      @show="showExistingShare"
-      @stop="revokeShare"
-      @viewer-name="setViewerName"
-      @viewer-block="blockViewer"
-    />
-
     <div v-if="followInputOpen" class="sheet-backdrop" @click.self="followInputOpen = false">
       <section class="share-sheet" role="dialog" aria-modal="true" aria-labelledby="follow-title">
         <header class="sheet-header">
@@ -325,19 +402,29 @@
     </div>
     <QrScannerSheet v-if="qrScannerOpen" @close="qrScannerOpen = false" @scan="acceptScannedLink" />
 
-    <FollowingSheet
-      v-if="followingOpen"
+    <PeerListSheet
+      v-if="peerListOpen"
+      :shares="activeShares"
       :following="activeFollowing"
+      :filter="peerListFilter"
+      :old-shares="oldSharing"
       :old-following="runtimeState.oldSeeing"
       :viewable-ids="viewableIds"
       :selected-id="selectedFollowId"
       :share-back-busy="creatingShare"
-      @close="followingOpen = false"
+      :peer-name-preferences="peerNamePreferences"
+      @profile="setPeerNamePreferences"
+      @close="peerListOpen = false"
+      @filter="peerListFilter = $event"
+      @show="showExistingShare"
+      @revoke="revokeShare"
+      @viewer-name="setViewerName"
+      @viewer-block="blockViewer"
       @name="runtime.setFollowName"
       @color="runtime.setFollowColor"
       @focus="focusFollowing"
       @focus-all="focusAllFollowing"
-      @stop="stopFollowing"
+      @unfollow="stopFollowing"
       @keep="keepFollowing"
       @share-back="shareBackFromFollowing"
     />
@@ -359,8 +446,9 @@
     <ShareReadySheet
       v-if="readyShare"
       :url="readyShare.url"
-      @close="readyShare = undefined"
-      @stop="stopReadyShare"
+      :show-qr="!readyShareIsReturn"
+      :return-share="readyShareIsReturn"
+      @close="closeShareReady"
     />
 
     <p v-if="statusNoticeVisible && statusMessage" class="toast" role="status">
@@ -393,14 +481,18 @@ import DiagnosticsSheet from '../components/DiagnosticsSheet.vue'
 import SharingDiagnosticsSheet from '../components/SharingDiagnosticsSheet.vue'
 import CloseIcon from '../components/icons/CloseIcon.vue'
 import AboutSheet from '../components/AboutSheet.vue'
-import FollowingSheet from '../components/FollowingSheet.vue'
+import PeerListSheet from '../components/PeerListSheet.vue'
 import ShareReadySheet from '../components/ShareReadySheet.vue'
-import ShareListSheet from '../components/ShareListSheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
 import { createSessionLog } from '../diagnostics/sessionLog.ts'
 import { receiveApprovedBackgroundReturns } from '../android/backgroundReturnShares.ts'
 import { createBrowserLocationSource } from '../location/browser.ts'
 import { locationObservationToMapLocation } from '../location/mapModel.ts'
+import {
+  loadMapDeclutteringPreferences,
+  saveMapDeclutteringPreferences,
+} from '../location/mapPreferences.ts'
+import type { MapDeclutteringPreferences } from '../location/mapPresentation.ts'
 import type { MapFamily } from '../map/pmtiles.ts'
 import { createPlatformGeolocation } from '../location/platform.ts'
 import {
@@ -534,6 +626,7 @@ const runtimeState = ref<SharingRuntimeState>({
   following: [],
   returnOffers: [],
   approvedReturnLinks: [],
+  pendingViewerApprovals: [],
   oldSharing: [],
   oldSeeing: [],
   endNotifications: [],
@@ -556,6 +649,14 @@ const mapFamily = ref<MapFamily>(
     ? 'minimalist'
     : 'default',
 )
+const mapDecluttering = ref<MapDeclutteringPreferences>(
+  loadMapDeclutteringPreferences(window.localStorage),
+)
+watch(
+  mapDecluttering,
+  (preferences) => saveMapDeclutteringPreferences(window.localStorage, preferences),
+  { deep: true },
+)
 const introSeenKey = 'constellation.privacy-intro-seen'
 const actionsExpanded = ref(window.localStorage.getItem('constellation.actions-expanded') !== '0')
 const introOpen = ref(window.localStorage.getItem(introSeenKey) !== '1')
@@ -576,11 +677,11 @@ const returnToBrowserDiagnostics = () => {
   browserDiagnosticsOpen.value = true
 }
 const diagnosticsOpen = ref(false)
-const sharesOpen = ref(false)
+const peerListOpen = ref(false)
+const peerListFilter = ref<'all' | 'sharing' | 'viewing' | 'both'>('all')
 const followInputOpen = ref(false)
 const qrScannerOpen = ref(false)
 const canScanQr = Boolean(window.isSecureContext && navigator.mediaDevices)
-const followingOpen = ref(false)
 const selectedFollowId = ref<string>()
 const pastedLink = ref('')
 const locationMap = ref<InstanceType<typeof LocationMap>>()
@@ -588,6 +689,7 @@ const shareDraft = ref(createShareDraft())
 const creatingShare = ref(false)
 const accepting = ref(false)
 const readyShare = ref<ShareSummary>()
+const readyShareIsReturn = ref(false)
 const invitationPending = ref(false)
 const invitationUrl = ref<string>()
 const browserLocationDeferred = ref(!isNative && window.location.hash.startsWith('#share='))
@@ -599,6 +701,41 @@ const copyNotice = ref('')
 let copyNoticeTimeout: number | undefined
 let statusNoticeTimeout: number | undefined
 const statusNoticeVisible = ref(true)
+let markingReturnPrompt = false
+const offerConnectedReturnShare = (state: SharingRuntimeState): void => {
+  if (
+    markingReturnPrompt ||
+    shareBackPrompt.value ||
+    nicknamePrompt.value ||
+    readyShare.value ||
+    shareSheetOpen.value ||
+    creatingShare.value
+  ) {
+    return
+  }
+  const follow = state.following.find(
+    (entry) => entry.saved && entry.connected && !entry.returnPromptSeen,
+  )
+  if (!follow) return
+  markingReturnPrompt = true
+  void runtime
+    .markReturnPromptSeen(follow.shareId)
+    .then(() => {
+      const current = runtimeState.value.following.find((entry) => entry.shareId === follow.shareId)
+      if (current?.returnPromptSeen) {
+        shareBackPrompt.value = {
+          shareId: current.shareId,
+          name: current.localName || current.sourceName || 'this person',
+        }
+      }
+    })
+    .catch((error) => {
+      localError.value = error instanceof Error ? error.message : 'Could not save this choice.'
+    })
+    .finally(() => {
+      markingReturnPrompt = false
+    })
+}
 
 const offerInvitation = (url: string): void => {
   try {
@@ -641,6 +778,7 @@ const unsubscribe = runtime.subscribe((next) => {
     })
   }
   runtimeState.value = next
+  offerConnectedReturnShare(next)
   const latestNetwork = runtime.networkDiagnostics()
   recordSessionEvents(networkDiagnostics.value, latestNetwork)
   if (transportSummary(networkDiagnostics.value) !== transportSummary(latestNetwork)) {
@@ -739,6 +877,38 @@ const activeShares = computed(() =>
     })),
   })),
 )
+const peerNamePreferences = computed(() => [
+  ...(backgroundStatus.value?.peerNamePreferences ?? []),
+  ...(runtimeState.value.peerNamePreferences ?? []),
+])
+const setPeerNamePreferences = async (
+  peerId: string,
+  associateNames: boolean,
+  sharedName: string | null,
+): Promise<void> => {
+  try {
+    const foreground =
+      runtimeState.value.following.some((entry) => entry.peerId === peerId) ||
+      runtimeState.value.shares.some((share) =>
+        share.viewers?.some((viewer) => viewer.peerId === peerId),
+      )
+    if (foreground) await runtime.setPeerNamePreferences(peerId, associateNames, sharedName)
+    if (
+      backgroundSharing &&
+      backgroundStatus.value?.shares.some((share) =>
+        share.viewers?.some((viewer) => viewer.peerId === peerId),
+      )
+    ) {
+      backgroundStatus.value = await backgroundSharing.setPeerNamePreferences(
+        peerId,
+        associateNames,
+        sharedName,
+      )
+    }
+  } catch {
+    localError.value = 'Name preferences could not be delivered. Please retry.'
+  }
+}
 const oldSharing = computed(() => {
   const records = [...runtimeState.value.oldSharing, ...(backgroundStatus.value?.oldSharing ?? [])]
   return [...new Map(records.map((record) => [record.shareId, record])).values()].sort(
@@ -764,6 +934,11 @@ const sharingLabel = computed(() => {
   return `Sharing ${shares.length} · next ends ${nextExpiry}`
 })
 const previewFollow = computed(() => activeFollowing.value.find((entry) => !entry.saved))
+const pendingViewerApproval = computed(
+  () =>
+    runtimeState.value.pendingViewerApprovals[0] ??
+    backgroundStatus.value?.pendingViewerApprovals?.[0],
+)
 
 const locations = computed(() => {
   const own = backgroundStatus.value?.shares.length
@@ -775,14 +950,20 @@ const locations = computed(() => {
       : []
   return [
     ...ownLocations.map((location) => ({ ...location, isOwn: true, color: '#f78f3b' })),
-    ...runtimeState.value.received.map(({ shareId, observation, state }) => {
-      const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-      return locationObservationToMapLocation(observation, state, {
-        id: shareId,
-        label: follow?.localName || follow?.sourceName || 'Shared location',
-        color: follow?.color,
-      })
-    }),
+    ...runtimeState.value.received
+      .filter((entry) =>
+        activeFollowing.value.some(
+          (follow) => follow.shareId === entry.shareId && follow.status !== 'denied',
+        ),
+      )
+      .map(({ shareId, observation, state }) => {
+        const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
+        return locationObservationToMapLocation(observation, state, {
+          id: shareId,
+          label: follow?.localName || follow?.sourceName || 'Shared location',
+          color: follow?.color,
+        })
+      }),
   ]
 })
 const viewableIds = computed(() =>
@@ -910,7 +1091,14 @@ const openFollowInput = (): void => {
 }
 const openFollowing = (): void => {
   selectedFollowId.value = undefined
-  followingOpen.value = true
+  peerListFilter.value = 'viewing'
+  peerListOpen.value = true
+  menuOpen.value = false
+}
+const openSharing = (): void => {
+  selectedFollowId.value = undefined
+  peerListFilter.value = 'sharing'
+  peerListOpen.value = true
   menuOpen.value = false
 }
 
@@ -970,20 +1158,21 @@ const centerOnOwnLocation = (): void => {
 const openFollowDetails = (shareId: string): void => {
   if (!runtimeState.value.following.some((entry) => entry.shareId === shareId)) return
   selectedFollowId.value = shareId
-  followingOpen.value = true
+  peerListFilter.value = 'viewing'
+  peerListOpen.value = true
 }
 const focusFollowing = (shareId: string): void => {
   if (!viewableIds.value.includes(shareId)) return
   const location = locations.value.find(({ id }) => id === shareId)
   if (!location) return
   locationMap.value?.centerOn(location)
-  followingOpen.value = false
+  peerListOpen.value = false
 }
 const focusAllFollowing = (): void => {
   const peerLocations = locations.value.filter(({ id }) => viewableIds.value.includes(id))
   if (peerLocations.length === 0) return
   locationMap.value?.focusLocations(peerLocations)
-  followingOpen.value = false
+  peerListOpen.value = false
 }
 const acceptPastedLink = (): void => {
   try {
@@ -1009,6 +1198,7 @@ const acceptScannedLink = (url: string): void => {
 const createShare = async (): Promise<void> => {
   if (creatingShare.value) return
   const shareBackTarget = returnTarget.value
+  readyShareIsReturn.value = Boolean(shareBackTarget)
   browserLocationDeferred.value = false
   creatingShare.value = true
   localError.value = ''
@@ -1050,6 +1240,7 @@ const createShare = async (): Promise<void> => {
       try {
         await runtime.offerReturnShare(shareBackTarget, readyShare.value.url)
         await runtime.markReturnPromptSeen(shareBackTarget)
+        readyShare.value = undefined
       } catch (error) {
         localError.value =
           error instanceof Error ? error.message : 'Send this return link to the sender manually.'
@@ -1090,10 +1281,17 @@ const acceptInvitation = async (): Promise<void> => {
       window.history.replaceState({}, '', window.location.pathname)
     }
     const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-    if (follow && runtimeState.value.canSave) {
+    if (
+      follow &&
+      follow.status !== 'approval-pending' &&
+      follow.status !== 'denied' &&
+      runtimeState.value.canSave
+    ) {
       nicknamePrompt.value = { shareId, name: follow.localName }
     } else if (!runtimeState.value.canSave) {
       localError.value = 'Protected storage is unavailable; preview only.'
+    } else if (follow?.status === 'denied') {
+      localError.value = 'The sender did not approve this device for the location share.'
     }
     sessionLog.record({ level: 'info', event: 'sharing.follow.accept.succeeded' })
   } catch (error) {
@@ -1133,12 +1331,18 @@ const saveNickname = async (): Promise<void> => {
     const { shareId, name } = nicknamePrompt.value
     await runtime.saveFollowing(shareId, name)
     const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-    if (follow && !follow.returnPromptSeen) {
+    if (
+      follow &&
+      follow.status !== 'approval-pending' &&
+      follow.status !== 'denied' &&
+      !follow.returnPromptSeen
+    ) {
       await runtime.markReturnPromptSeen(shareId)
       shareBackPrompt.value = { shareId, name: follow.localName || 'this person' }
     }
     nicknamePrompt.value = undefined
     browserLocationDeferred.value = false
+    offerConnectedReturnShare(runtimeState.value)
     updateVisibility()
   } catch (error) {
     localError.value = error instanceof Error ? error.message : 'Could not save this location.'
@@ -1155,19 +1359,37 @@ const openReturnShare = (): void => {
   void createShare()
 }
 
-const shareBackFromFollowing = (shareId: string): void => {
+const dismissShareBackPrompt = (): void => {
+  shareBackPrompt.value = undefined
+  offerConnectedReturnShare(runtimeState.value)
+}
+
+const shareBackFromFollowing = async (shareId: string): Promise<void> => {
   const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-  if (!follow || follow.returnPromptSeen || creatingShare.value) return
-  returnTarget.value = shareId
-  shareDraft.value = createShareDraft()
-  browserLocationDeferred.value = false
-  followingOpen.value = false
-  void createShare()
+  if (
+    !follow ||
+    follow.returnPromptSeen ||
+    follow.status === 'approval-pending' ||
+    follow.status === 'denied' ||
+    creatingShare.value
+  )
+    return
+  try {
+    await runtime.markReturnPromptSeen(shareId)
+    returnTarget.value = shareId
+    shareDraft.value = createShareDraft()
+    browserLocationDeferred.value = false
+    peerListOpen.value = false
+    await createShare()
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not start a return share.'
+  }
 }
 
 const closeShareSheet = (): void => {
   shareSheetOpen.value = false
   returnTarget.value = undefined
+  offerConnectedReturnShare(runtimeState.value)
 }
 
 const changingReturnOffer = ref(false)
@@ -1240,19 +1462,16 @@ const acceptReturnOffer = (): void => {
   })()
 }
 
-const stopReadyShare = async (): Promise<void> => {
-  if (!readyShare.value) return
-  if (backgroundStatus.value?.shares.some(({ shareId }) => shareId === readyShare.value?.shareId)) {
-    backgroundStatus.value = await backgroundSharing?.stop(readyShare.value.shareId)
-  } else {
-    await runtime.stopShare(readyShare.value.shareId)
-  }
+const closeShareReady = (): void => {
   readyShare.value = undefined
+  readyShareIsReturn.value = false
+  offerConnectedReturnShare(runtimeState.value)
 }
 
 const showExistingShare = (share: ShareSummary): void => {
   readyShare.value = share
-  sharesOpen.value = false
+  readyShareIsReturn.value = false
+  peerListOpen.value = false
 }
 const setViewerName = async (shareId: string, fingerprint: string, name: string): Promise<void> => {
   try {
@@ -1276,6 +1495,37 @@ const blockViewer = async (shareId: string, fingerprint: string): Promise<void> 
     localError.value = error instanceof Error ? error.message : 'Could not block this device.'
   }
 }
+const changingViewerApproval = ref(false)
+const approvePendingViewer = async (): Promise<void> => {
+  const request = pendingViewerApproval.value
+  if (!request || changingViewerApproval.value) return
+  changingViewerApproval.value = true
+  try {
+    if (backgroundStatus.value?.shares.some((share) => share.shareId === request.shareId)) {
+      if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+      backgroundStatus.value = await backgroundSharing.approveViewer(
+        request.shareId,
+        request.peerId,
+      )
+    } else {
+      await runtime.approveViewer(request.shareId, request.peerId)
+    }
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not approve this device.'
+  } finally {
+    changingViewerApproval.value = false
+  }
+}
+const rejectPendingViewer = async (): Promise<void> => {
+  const request = pendingViewerApproval.value
+  if (!request || changingViewerApproval.value) return
+  changingViewerApproval.value = true
+  try {
+    await blockViewer(request.shareId, request.fingerprint)
+  } finally {
+    changingViewerApproval.value = false
+  }
+}
 const revokeShare = async (shareId: string): Promise<void> => {
   if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
     backgroundStatus.value = await backgroundSharing?.stop(shareId)
@@ -1283,11 +1533,11 @@ const revokeShare = async (shareId: string): Promise<void> => {
   } else {
     await runtime.stopShare(shareId)
   }
-  if (readyShare.value?.shareId === shareId) readyShare.value = undefined
+  if (readyShare.value?.shareId === shareId) closeShareReady()
 }
 const stopFollowing = async (shareId: string): Promise<void> => {
   await runtime.stopFollowing(shareId)
-  if (selectedFollowId.value === shareId) followingOpen.value = false
+  if (selectedFollowId.value === shareId) peerListOpen.value = false
 }
 
 const updateLocationOwnership = (): void => {

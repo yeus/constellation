@@ -1,6 +1,56 @@
 <template>
   <div class="location-map" :data-rendered="mapRendered">
     <div ref="mapElement" class="location-map__canvas" />
+    <div class="location-map__overlays">
+      <svg
+        v-if="presentation.groups.length"
+        class="location-map__group-areas"
+        :viewBox="`0 0 ${presentation.width} ${presentation.height}`"
+        aria-hidden="true"
+      >
+        <circle
+          v-for="group in presentation.groups"
+          :key="group.key"
+          class="location-map__group-area"
+          :cx="group.x"
+          :cy="group.y"
+          :r="group.radiusPx"
+        />
+      </svg>
+      <div
+        v-for="group in presentation.groups"
+        :key="group.key"
+        class="location-map__group"
+        :style="{ left: `${group.x}px`, top: `${group.y}px` }"
+      >
+        <button
+          v-for="member in group.members"
+          :key="member.id"
+          class="location-map__group-member"
+          type="button"
+          :aria-label="`Show ${member.label || 'shared location'} details`"
+          @click.stop="emit('select', member.id)"
+        >
+          <PeerAvatar :name="member.label || 'Shared location'" :color="member.color" />
+        </button>
+      </div>
+      <aside
+        v-if="presentation.largePeers.length"
+        class="location-map__large-peers"
+        aria-label="Peers around this area"
+      >
+        <h2>Peers around this area</h2>
+        <button
+          v-for="location in presentation.largePeers"
+          :key="location.id"
+          type="button"
+          @click.stop="emit('select', location.id)"
+        >
+          <PeerAvatar :name="location.label || 'Shared location'" :color="location.color" />
+          <span>{{ location.label || 'Shared location' }}</span>
+        </button>
+      </aside>
+    </div>
     <p v-if="mapNotice" class="location-map__notice" role="alert">
       {{ mapNotice }}
     </p>
@@ -15,6 +65,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { describeDiagnosticError, type SessionLogInput } from '../diagnostics/sessionLog.ts'
 import {
   createLocationFeatureCollection,
+  locationUncertaintyRing,
   LOCATION_MARKER_RADIUS_PX,
   LOCATION_MARKER_STROKE_PX,
   locationAreaBounds,
@@ -22,18 +73,25 @@ import {
   type MapLocation,
 } from '../location/mapModel.ts'
 import {
+  createMapPresentation,
+  type MapDeclutteringPreferences,
+  type MapPresentation,
+} from '../location/mapPresentation.ts'
+import {
   createPmtilesRuntime,
   createWorldStyle,
   DEFAULT_WORLD_PMTILES_URL,
   MAP_ATTRIBUTION,
   type MapFamily,
 } from '../map/pmtiles.ts'
+import PeerAvatar from './PeerAvatar.vue'
 
 const LOCATION_SOURCE_ID = 'constellation-locations'
 
 const props = withDefaults(
   defineProps<{
     locations: readonly MapLocation[]
+    decluttering: MapDeclutteringPreferences
     pmtilesUrl?: string
     mapFamily?: MapFamily
   }>(),
@@ -47,10 +105,18 @@ const emit = defineEmits<{
 const mapElement = ref<HTMLDivElement | null>(null)
 const mapNotice = ref('')
 const mapRendered = ref(false)
+const presentation = ref<MapPresentation>({
+  width: 0,
+  height: 0,
+  mapLocations: [],
+  groups: [],
+  largePeers: [],
+})
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
 const runtime = createPmtilesRuntime()
 let map: Map | null = null
+let presentationFrame: number | undefined
 
 const addLocationLayers = (target: Map): void => {
   if (target.getSource(LOCATION_SOURCE_ID)) return
@@ -133,7 +199,10 @@ const initialize = (): void => {
       if (typeof id === 'string') emit('select', id)
     })
     map.on('style.load', () => {
-      if (map) addLocationLayers(map)
+      if (map) {
+        addLocationLayers(map)
+        refreshPresentation()
+      }
       emit('diagnostic', { level: 'info', event: 'map.style.loaded' })
     })
     map.on('idle', () => {
@@ -141,7 +210,9 @@ const initialize = (): void => {
         map?.loaded() && map.queryRenderedFeatures().some((feature) => feature.source === 'world'),
       )
     })
-    map.on('zoom', updateLocations)
+    map.on('move', schedulePresentation)
+    map.on('zoom', refreshPresentation)
+    map.on('resize', schedulePresentation)
     map.on('error', ({ error }) => {
       const detail = describeDiagnosticError(error)
       mapNotice.value = `Map error (${detail.category}): ${detail.message}`
@@ -165,10 +236,45 @@ const initialize = (): void => {
   }
 }
 
-const updateLocations = (): void => {
-  const source = map?.getSource<GeoJSONSource>(LOCATION_SOURCE_ID)
-  if (source && map)
-    void source.setData(createLocationFeatureCollection(props.locations, map.getZoom()))
+const updatePresentation = (): void => {
+  if (!map) return
+  const { clientWidth, clientHeight } = map.getContainer()
+  const projectedLocations = props.locations.map((location) => {
+    const center = map!.project([location.longitude, location.latitude])
+    const radius = locationUncertaintyRing(location).reduce((largest, coordinate) => {
+      const point = map!.project(coordinate)
+      return Math.max(largest, Math.hypot(point.x - center.x, point.y - center.y))
+    }, 0)
+    return { location, x: center.x, y: center.y, uncertaintyRadiusPx: radius }
+  })
+  const next = createMapPresentation(
+    projectedLocations,
+    { width: clientWidth, height: clientHeight },
+    props.decluttering,
+  )
+  presentation.value = next
+}
+
+const updateFeatureData = (): void => {
+  if (!map) return
+  const source = map.getSource<GeoJSONSource>(LOCATION_SOURCE_ID)
+  if (source)
+    void source.setData(
+      createLocationFeatureCollection(presentation.value.mapLocations, map.getZoom()),
+    )
+}
+
+const refreshPresentation = (): void => {
+  updatePresentation()
+  updateFeatureData()
+}
+
+const schedulePresentation = (): void => {
+  if (presentationFrame !== undefined) return
+  presentationFrame = window.requestAnimationFrame(() => {
+    presentationFrame = undefined
+    updatePresentation()
+  })
 }
 
 const updateTheme = (event: MediaQueryListEvent): void => {
@@ -205,7 +311,8 @@ const focusLocations = (locations: readonly MapLocation[]): void => {
 }
 defineExpose({ centerOn, focusLocations })
 
-watch(() => props.locations, updateLocations, { deep: true })
+watch(() => props.locations, refreshPresentation, { deep: true })
+watch(() => props.decluttering, refreshPresentation, { deep: true })
 watch(
   () => props.mapFamily,
   () => map?.setStyle(createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value)),
@@ -216,6 +323,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   darkScheme.removeEventListener('change', updateTheme)
+  if (presentationFrame !== undefined) window.cancelAnimationFrame(presentationFrame)
   map?.remove()
   map = null
   runtime.dispose()
@@ -231,6 +339,115 @@ onBeforeUnmount(() => {
 
 .location-map {
   position: relative;
+}
+
+.location-map__overlays {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.location-map__group-areas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.location-map__group-area {
+  fill: rgba(67, 142, 201, 0.09);
+  stroke: #438ec9;
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.location-map__group {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(2, 2rem);
+  gap: 0.15rem;
+  padding: 0.15rem;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: 0 2px 8px var(--sheet-shadow);
+  pointer-events: auto;
+}
+
+.location-map__group-member {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.location-map__group-member :deep(.peer-avatar) {
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 0.65rem;
+}
+
+.location-map__large-peers {
+  position: absolute;
+  top: 4.25rem;
+  left: 0.75rem;
+  display: grid;
+  width: min(15rem, calc(100% - 1.5rem));
+  max-height: min(34vh, 18rem);
+  gap: 0.25rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: var(--surface);
+  box-shadow: 0 2px 12px var(--sheet-shadow);
+  pointer-events: auto;
+}
+
+.location-map__large-peers h2 {
+  margin: 0 0 0.2rem;
+  font-size: 0.75rem;
+}
+
+.location-map__large-peers button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.location-map__large-peers button:hover {
+  background: var(--control-fill);
+}
+
+.location-map__large-peers :deep(.peer-avatar) {
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 0.65rem;
+}
+
+@media (max-width: 699px) {
+  .location-map__large-peers {
+    top: calc(4.25rem + 4rem + env(safe-area-inset-top));
+  }
 }
 
 :deep(.maplibregl-ctrl-bottom-right) {

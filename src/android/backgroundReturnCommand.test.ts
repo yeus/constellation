@@ -14,7 +14,11 @@ test('return approval is acknowledged only after persistence finishes', async ()
       approveReturnLink: () => persistence,
       dismissReturnOffer: async () => undefined,
     },
-    { type: 'approve-return-link', requestId: 'synthetic-request', shareId: 'synthetic-share' },
+    {
+      type: 'approve-return-link',
+      requestId: 'synthetic-request',
+      shareId: 'synthetic-share',
+    },
     (result) => results.push(result),
   )
   assert.deepEqual(results, [])
@@ -32,7 +36,11 @@ test('failed return approval is acknowledged as a failure', async () => {
       },
       dismissReturnOffer: async () => undefined,
     },
-    { type: 'approve-return-link', requestId: 'synthetic-request', shareId: 'synthetic-share' },
+    {
+      type: 'approve-return-link',
+      requestId: 'synthetic-request',
+      shareId: 'synthetic-share',
+    },
     (result) => results.push(result),
   )
   assert.deepEqual(results, [

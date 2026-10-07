@@ -50,10 +50,18 @@ test('capture welcome, sharing choices, and two fictional followed locations', a
       await viewer.getByRole('button', { name: 'Open menu' }).click()
       await viewer.getByRole('button', { name: 'Following (2)' }).click()
       const following = viewer.getByRole('dialog', { name: 'Following' })
+      const peers = following.locator('details.peer-list__item')
+      await expect(peers).toHaveCount(2)
+      for (const peer of await peers.all()) await peer.locator('summary').click()
+      await expect(following.getByText(/Last location: not received/)).toHaveCount(0, {
+        timeout: 30_000,
+      })
       for (const name of ['River', 'Forest']) {
-        await expect(following.getByText(name, { exact: true })).toBeVisible()
+        await expect(
+          following.locator('.peer-list__summary-name').filter({ hasText: name }),
+        ).toBeVisible()
       }
-      await expect(following.getByText(/Last location: not received/)).toHaveCount(0)
+      await peers.nth(0).locator('summary').click()
       await capture(viewer, 'following')
     },
   )

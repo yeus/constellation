@@ -36,28 +36,34 @@ let stream: MediaStream | undefined
 let frame = 0
 let scanning = true
 let lastScanAt = 0
+let canvas: HTMLCanvasElement | undefined
 
 const scanFrame = (now: number): void => {
+  if (!scanning) return
   frame = requestAnimationFrame(scanFrame)
   const element = video.value
   if (
     !element ||
     element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+    element.videoWidth === 0 ||
+    element.videoHeight === 0 ||
     now - lastScanAt < 180
   ) {
     return
   }
   lastScanAt = now
-  const scale = Math.min(1, 640 / element.videoWidth)
+  const scale = Math.min(1, 1280 / element.videoWidth)
   const width = Math.round(element.videoWidth * scale)
   const height = Math.round(element.videoHeight * scale)
-  const canvas = document.createElement('canvas')
+  canvas ??= document.createElement('canvas')
   canvas.width = width
   canvas.height = height
   const context = canvas.getContext('2d', { willReadFrequently: true })
   if (!context) return
   context.drawImage(element, 0, 0, width, height)
-  const result = jsQR(context.getImageData(0, 0, width, height).data, width, height)
+  const result = jsQR(context.getImageData(0, 0, width, height).data, width, height, {
+    inversionAttempts: 'attemptBoth',
+  })
   if (result?.data) {
     scanning = false
     emit('scan', result.data)
@@ -69,7 +75,11 @@ onMounted(async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { facingMode: { ideal: 'environment' } },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
     })
     if (!scanning || !video.value) {
       stream.getTracks().forEach((track) => track.stop())
@@ -96,6 +106,6 @@ onBeforeUnmount(() => {
   aspect-ratio: 4 / 3;
   border-radius: 0.75rem;
   background: #10151c;
-  object-fit: cover;
+  object-fit: contain;
 }
 </style>

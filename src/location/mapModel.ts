@@ -94,6 +94,17 @@ const uncertaintyRing = (location: MapLocation, radius: number): [number, number
   return [...ring, first]
 }
 
+export const locationUncertaintyRing = (location: MapLocation): readonly [number, number][] => {
+  assertLocation(location)
+  const radius =
+    location.precision === 'approximate' ? location.radiusMeters : location.accuracyMeters
+  if (radius === undefined) return []
+  if (!Number.isFinite(radius) || radius <= 0) {
+    throw new RangeError(`Invalid uncertainty radius for location ${location.id}.`)
+  }
+  return uncertaintyRing(location, radius)
+}
+
 const areaFeature = (
   location: MapLocation,
   radius: number,

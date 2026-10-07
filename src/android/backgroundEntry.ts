@@ -37,6 +37,13 @@ type CreateRequest = {
 }
 
 type BackgroundCommand =
+  | {
+      readonly type: 'set-peer-names'
+      readonly requestId: string
+      readonly peerId: string
+      readonly associateNames: boolean
+      readonly sharedName: string | null
+    }
   | { readonly type: 'create-share'; readonly requestId: string; readonly request: CreateRequest }
   | { readonly type: 'location'; readonly position: BrowserPosition }
   | { readonly type: 'location-refresh-result'; readonly position: BrowserPosition }
@@ -47,6 +54,12 @@ type BackgroundCommand =
   | { readonly type: 'network-state'; readonly state: 'unmetered' | 'metered' | 'data-saver' }
   | { readonly type: 'set-visible'; readonly visible: boolean }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
+  | {
+      readonly type: 'approve-viewer'
+      readonly requestId: string
+      readonly shareId: string
+      readonly peerId: string
+    }
   | BackgroundReturnCommand
   | {
       readonly type: 'set-viewer-name'
@@ -238,6 +251,36 @@ const start = (): void => {
         await runtime.blockViewer(command.shareId, command.fingerprint)
       } catch (error) {
         sendError(error, 'Could not block this device.')
+      }
+      return
+    }
+    if (command.type === 'approve-viewer') {
+      try {
+        await runtime.approveViewer(command.shareId, command.peerId)
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not approve this device.',
+        })
+      }
+      return
+    }
+    if (command.type === 'set-peer-names') {
+      try {
+        await runtime.setPeerNamePreferences(
+          command.peerId,
+          command.associateNames,
+          command.sharedName,
+        )
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not save peer name preferences.',
+        })
       }
       return
     }

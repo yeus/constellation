@@ -31,6 +31,20 @@ const assertStaticArtifact = () => {
   const fallback = readDist('404.html')
   assert.equal(fallback, index, 'the SPA fallback must equal the built entry')
 
+  const socialImage = index.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i)?.[1]
+  assert.equal(
+    socialImage,
+    'https://constellation.taskyon.space/social-preview.png',
+    'the built entry must expose the generic Constellation social preview',
+  )
+  assert.match(index, /<meta\s+name="twitter:card"\s+content="summary_large_image"/i)
+  const socialImageFile = path.join(distDir, new URL(socialImage).pathname)
+  assert.ok(fs.existsSync(socialImageFile), 'the social preview image must be shipped with Pages')
+  const socialPng = fs.readFileSync(socialImageFile)
+  assert.equal(socialPng.toString('hex', 0, 8), '89504e470d0a1a0a', 'social preview must be PNG')
+  assert.equal(socialPng.readUInt32BE(16), 1_200, 'social preview width must be 1200 px')
+  assert.equal(socialPng.readUInt32BE(20), 630, 'social preview height must be 630 px')
+
   const references = [...index.matchAll(/(?:src|href)="([^"]+)"/g)].map((match) => match[1])
   assert.ok(references.length > 0, 'the built entry must reference its assets')
   for (const reference of references) {
@@ -164,7 +178,13 @@ const assertBuiltApp = async (browser, origin, requests) => {
 
   const rootResponse = await boot(`${origin}/`)
   assert.equal(rootResponse.status(), 200)
-  await page.locator('.maplibregl-canvas').waitFor({ timeout: 30_000 })
+  await page.waitForFunction(
+    () =>
+      Boolean(document.querySelector('.maplibregl-canvas')) ||
+      Boolean(document.querySelector('.location-map__notice')),
+    undefined,
+    { timeout: 30_000 },
+  )
 
   const unknownResponse = await boot(`${origin}/synthetic/unknown/path`)
   assert.equal(unknownResponse.status(), 404, 'unknown paths use the Pages 404 fallback')

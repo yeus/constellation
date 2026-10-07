@@ -3,12 +3,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
 
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
+import { PeerNamePreference } from './peerNames.ts'
 
 const ShareRecord = z.object({
   url: z.string().url().max(4_096),
   sourcePrivateKey: z.string().min(40).max(1_024).optional(),
   precision: z.enum(['exact', 'approximate', 'very-coarse']),
   capacity: z.number().int().min(1).max(128),
+  approvedPeerId: z.string().min(1).max(256).optional(),
   name: z.string().max(32).optional(),
   publication: z.enum(['foreground', 'background']),
   battery: z.enum(['balanced', 'saver']).optional(),
@@ -30,9 +32,11 @@ const ShareRecord = z.object({
 const FollowRecord = z.object({
   url: z.string().url().max(4_096),
   localName: z.string().max(32),
+  usesPrivateName: z.boolean().optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
   followedAt: z.number().int().positive().optional(),
   returnPromptSeen: z.boolean().optional(),
+  approvalDenied: z.boolean().optional(),
   endedAt: z.number().int().positive().optional(),
   endReason: z.enum(['revoked', 'expired']).optional(),
 })
@@ -68,6 +72,7 @@ const PrivateStateSchema = z.object({
   shares: z.array(ShareRecord).max(128),
   followed: z.array(FollowRecord).max(128),
   viewerLabels: z.array(ViewerLabelRecord).max(1_024).optional(),
+  peerNamePreferences: z.array(PeerNamePreference).max(1_024).optional(),
   approvedReturnLinks: z.array(z.string().min(16).max(64)).max(128).optional(),
   pendingReturns: z.array(PendingReturnRecord).max(128).optional(),
   returnOffers: z.array(ReturnOfferRecord).max(128).optional(),

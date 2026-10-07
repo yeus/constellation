@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPair } from '@libp2p/crypto/keys'
+import { peerIdFromPrivateKey } from '@libp2p/peer-id'
+import { zlibSync } from 'fflate'
 
-import { createShareInvitation, parseShareInvitation } from './shareLink.ts'
+import { createShareInvitation, parseShareInvitation, shareInvitationUrl } from './shareLink.ts'
 
 const randomBytes = (length: number) => Uint8Array.from({ length }, (_, index) => index + 1)
 
@@ -66,10 +68,75 @@ test('rejects unknown capability fields', async () => {
     randomBytes,
   })
   const url = new URL(invitation.url)
-  const encoded = url.hash.slice('#share='.length)
-  const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
-  url.hash = `share=${Buffer.from(JSON.stringify({ ...payload, requiredFutureBehavior: true })).toString('base64url')}`
+  url.hash = `share=${Buffer.from(JSON.stringify({ ...invitation.capability, requiredFutureBehavior: true })).toString('base64url')}`
   assert.throws(() => parseShareInvitation(url.toString()), /unrecognized|unknown/i)
+})
+
+test('accepts legacy JSON links without changing their fields', async () => {
+  const { capability } = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: [],
+    expiresAt: null,
+    randomBytes,
+  })
+  const legacy = `https://example.test/#share=${Buffer.from(JSON.stringify(capability)).toString('base64url')}`
+  assert.deepEqual(parseShareInvitation(legacy), capability)
+})
+
+test('packs and selectively compresses real-shaped invitations with every field intact', async () => {
+  const sourcePeerId = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString()
+  const relayPeerId = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString()
+  const relay = `/dns4/relay.example.test/tcp/443/wss/p2p/${relayPeerId}/p2p-circuit`
+  const ownerPrivateKey = await generateKeyPair('Ed25519')
+  for (const addresses of [[], [relay], [relay, `${relay}/webrtc/p2p/${sourcePeerId}`]]) {
+    const { url, capability } = await createShareInvitation({
+      baseUrl: 'https://example.test/',
+      sourcePeerId,
+      addresses,
+      expiresAt: null,
+      ownerPrivateKey,
+    })
+    const encoded = Buffer.from(new URL(url).hash.slice(7), 'base64url')
+    assert.equal(encoded[0], 2, 'compact envelope version')
+    assert.equal(encoded[1], addresses.length > 1 ? 1 : 0, 'compression only when it saves bytes')
+    assert.deepEqual(parseShareInvitation(url), capability)
+    assert.ok(
+      url.length <
+        0.7 *
+          `https://example.test/#share=${Buffer.from(JSON.stringify(capability)).toString('base64url')}`
+            .length,
+    )
+  }
+})
+
+test('rejects unknown versions, corrupt compression, truncated data and oversized expansion', () => {
+  const url = (bytes: Uint8Array) =>
+    `https://example.test/#share=${Buffer.from(bytes).toString('base64url')}`
+  assert.throws(() => parseShareInvitation(url(new Uint8Array([3, 0]))), /unsupported/i)
+  assert.throws(() => parseShareInvitation(url(new Uint8Array([2, 0, 1]))), /malformed/i)
+  const compressed = zlibSync(new Uint8Array(100_000))
+  assert.throws(
+    () => parseShareInvitation(url(new Uint8Array([2, 1, ...compressed]))),
+    /too large/i,
+  )
+  assert.throws(() => parseShareInvitation(url(new Uint8Array([2, 1, 0, 0, 0]))), /malformed/i)
+})
+
+test('preserves individually optional owner fields and noncanonical textual values', () => {
+  const capability = {
+    v: 1 as const,
+    shareId: 'synthetic-share-id',
+    secret: 'A'.repeat(43),
+    sourcePeerId: 'synthetic-source-peer',
+    addresses: ['synthetic-address'],
+    expiresAt: null,
+    ownerProof: 'synthetic-proof'.repeat(4),
+  }
+  assert.deepEqual(
+    parseShareInvitation(shareInvitationUrl(capability, 'https://example.test/')),
+    capability,
+  )
 })
 
 test('return-share proof binds a link to its authenticated owner', async () => {

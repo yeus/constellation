@@ -277,6 +277,45 @@ button {
   color: var(--selected-text);
 }
 
+.map-decluttering-settings {
+  display: grid;
+  min-width: 15rem;
+  gap: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.map-decluttering-settings summary {
+  min-height: 2.25rem;
+  align-content: center;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.map-decluttering-settings label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 1.8rem;
+}
+
+.map-decluttering-settings input[type='checkbox'] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.map-decluttering-settings__range {
+  display: grid !important;
+  gap: 0.2rem !important;
+  padding-left: 1.4rem;
+}
+
+.map-decluttering-settings__range input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 .recenter-button {
   display: grid;
   place-items: center;
@@ -631,8 +670,22 @@ legend {
 
 .share-ready__qr {
   width: min(17.5rem, 100%);
-  border-radius: 0.8rem;
   background: #ffffff;
+}
+
+.share-ready__qr-button {
+  padding: 0;
+  border: 0;
+  background: #ffffff;
+  cursor: zoom-in;
+}
+
+.share-ready__qr--enlarged {
+  width: 100%;
+}
+
+.share-ready__qr-button[aria-pressed='true'] {
+  cursor: zoom-out;
 }
 
 .share-ready__link {
@@ -645,6 +698,22 @@ legend {
   background: var(--control-fill);
   color: var(--muted);
   text-overflow: ellipsis;
+}
+
+.share-ready__actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.share-ready__actions .icon-button {
+  width: 3rem;
+  height: 3rem;
+}
+
+.share-ready__actions svg {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 .runtime-note {

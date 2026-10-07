@@ -53,6 +53,19 @@ class ShareIdArgs {
 }
 
 @InvokeArg
+class ReturnApprovalArgs {
+  var shareId: String = ""
+  var peerId: String = ""
+}
+
+@InvokeArg
+class PeerNameArgs {
+  var peerId: String = ""
+  var associateNames: Boolean = false
+  var sharedName: String? = null
+}
+
+@InvokeArg
 class ViewerNameArgs {
   var shareId: String = ""
   var fingerprint: String = ""
@@ -430,9 +443,30 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     try {
       val args = invoke.parseArgs(ShareIdArgs::class.java)
       check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
-      runReturnCommand(invoke, ShareServiceContract.ACTION_APPROVE_RETURN_LINK, args.shareId)
+      runReturnCommand(
+        invoke,
+        ShareServiceContract.ACTION_APPROVE_RETURN_LINK,
+        args.shareId,
+      )
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not approve return shares for this link.")
+    }
+  }
+
+  @Command
+  fun approveBackgroundViewer(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(ReturnApprovalArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      check(args.peerId.length in 1..256) { "Invalid peer identity." }
+      runReturnCommand(
+        invoke,
+        ShareServiceContract.ACTION_APPROVE_VIEWER,
+        args.shareId,
+        peerId = args.peerId,
+      )
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not approve this device.")
     }
   }
 
@@ -492,8 +526,28 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     }
   }
 
+  @Command
+  fun setBackgroundPeerNames(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(PeerNameArgs::class.java)
+      check(args.peerId.length in 1..256) { "Invalid peer identity." }
+      check(args.sharedName == null || args.sharedName!!.trim().length in 1..32) { "Invalid display name." }
+      val request = JSONObject().put("peerId", args.peerId)
+        .put("associateNames", args.associateNames)
+        .put("sharedName", args.sharedName ?: JSONObject.NULL)
+      runReturnCommand(invoke, ShareServiceContract.ACTION_SET_PEER_NAMES, "", request = request.toString())
+    } catch (_: Exception) {
+      invoke.reject("Could not save peer name preferences.")
+    }
+  }
+
   private fun runReturnCommand(
-    invoke: Invoke, action: String, shareId: String, fingerprint: String? = null,
+    invoke: Invoke,
+    action: String,
+    shareId: String,
+    fingerprint: String? = null,
+    peerId: String? = null,
+    request: String? = null,
   ) {
     val requestId = UUID.randomUUID().toString()
     val context = activity.applicationContext
@@ -520,7 +574,14 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     )
     locationHandler.postDelayed(timeout, 30_000L)
     try {
-      ensureService(action, shareId = shareId, fingerprint = fingerprint, requestId = requestId)
+      ensureService(
+        action,
+        shareId = shareId,
+        fingerprint = fingerprint,
+        peerId = peerId,
+        requestId = requestId,
+        request = request,
+      )
     } catch (_: Exception) {
       finish("Could not send the return-sharing change.")
     }
@@ -531,6 +592,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     request: String? = null,
     shareId: String? = null,
     fingerprint: String? = null,
+    peerId: String? = null,
     name: String? = null,
     visible: Boolean? = null,
     requestId: String? = null,
@@ -540,6 +602,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     requestId?.let { intent.putExtra(ShareServiceContract.EXTRA_REQUEST_ID, it) }
     shareId?.let { intent.putExtra(ShareServiceContract.EXTRA_SHARE_ID, it) }
     fingerprint?.let { intent.putExtra(ShareServiceContract.EXTRA_FINGERPRINT, it) }
+    peerId?.let { intent.putExtra(ShareServiceContract.EXTRA_PEER_ID, it) }
     name?.let { intent.putExtra(ShareServiceContract.EXTRA_NAME, it) }
     visible?.let { intent.putExtra(ShareServiceContract.EXTRA_VISIBLE, it) }
     ContextCompat.startForegroundService(activity, intent)

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111a29" />
+      <stop offset="1" stop-color="#0d1117" />
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#f78f3b" stop-opacity=".2" />
+      <stop offset="1" stop-color="#f78f3b" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#background)" />
+  <circle cx="920" cy="300" r="390" fill="url(#glow)" />
+  <g fill="#fff" opacity=".48">
+    <circle cx="82" cy="81" r="2" /><circle cx="340" cy="112" r="2" />
+    <circle cx="528" cy="72" r="1.5" /><circle cx="1092" cy="105" r="2" />
+    <circle cx="184" cy="503" r="1.5" /><circle cx="1052" cy="511" r="2" />
+    <circle cx="753" cy="542" r="1.5" /><circle cx="460" cy="468" r="2" />
+  </g>
+  <g transform="translate(84 206)">
+    <rect width="138" height="138" rx="34" fill="#2a3548" />
+    <path d="m69 17 8 44 44 8-44 8-8 44-8-44-44-8 44-8z" fill="#f78f3b" />
+    <circle cx="69" cy="69" r="5" fill="#fff" />
+    <path d="M33 31v12m-6-6h12m75 59v10m-5-5h10" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" />
+  </g>
+  <text x="84" y="411" fill="#f8fafc" font-family="Arial, sans-serif" font-size="60" font-weight="700">Constellation</text>
+  <text x="86" y="466" fill="#c8d1df" font-family="Arial, sans-serif" font-size="27">Private location sharing</text>
+  <text x="86" y="516" fill="#93a1b5" font-family="Arial, sans-serif" font-size="20">Share a live location with people you trust.</text>
+  <g transform="translate(747 136)">
+    <circle cx="180" cy="180" r="145" fill="#182334" stroke="#35455b" stroke-width="2" />
+    <circle cx="180" cy="180" r="102" fill="none" stroke="#f78f3b" stroke-opacity=".35" stroke-width="2" stroke-dasharray="5 9" />
+    <path d="M116 210c40-85 91-93 138-28" fill="none" stroke="#f78f3b" stroke-width="3" stroke-linecap="round" stroke-dasharray="7 11" />
+    <circle cx="116" cy="210" r="31" fill="#2a3548" stroke="#f78f3b" stroke-width="3" />
+    <text x="116" y="218" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="22" font-weight="700">A</text>
+    <circle cx="254" cy="182" r="31" fill="#2a3548" stroke="#f78f3b" stroke-width="3" />
+    <text x="254" y="190" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="22" font-weight="700">B</text>
+    <circle cx="180" cy="180" r="5" fill="#93a1b5" />
+  </g>
+</svg>

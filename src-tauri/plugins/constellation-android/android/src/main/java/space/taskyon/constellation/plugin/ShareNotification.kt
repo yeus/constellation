@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 
 internal object ShareServiceContract {
+  const val ACTION_SET_PEER_NAMES = "space.taskyon.constellation.SET_PEER_NAMES"
   @Volatile var currentStatus: String? = null
   @Volatile var serviceRunning: Boolean = false
   @Volatile var startPending: Boolean = false
@@ -22,6 +23,7 @@ internal object ShareServiceContract {
   const val ACTION_SET_VIEWER_NAME = "space.taskyon.constellation.SET_LOCATION_VIEWER_NAME"
   const val ACTION_STOP = "space.taskyon.constellation.STOP_LOCATION_SHARE"
   const val ACTION_BLOCK_VIEWER = "space.taskyon.constellation.BLOCK_LOCATION_VIEWER"
+  const val ACTION_APPROVE_VIEWER = "space.taskyon.constellation.APPROVE_LOCATION_VIEWER"
   const val ACTION_APPROVE_RETURN_LINK = "space.taskyon.constellation.APPROVE_RETURN_LINK"
   const val ACTION_DISMISS_RETURN_OFFER = "space.taskyon.constellation.DISMISS_RETURN_OFFER"
   const val ACTION_COMMAND_COMPLETE = "space.taskyon.constellation.RETURN_COMMAND_COMPLETE"
@@ -31,6 +33,7 @@ internal object ShareServiceContract {
   const val EXTRA_VISIBLE = "space.taskyon.constellation.VISIBLE"
   const val EXTRA_SHARE_ID = "space.taskyon.constellation.SHARE_ID"
   const val EXTRA_FINGERPRINT = "space.taskyon.constellation.VIEWER_FINGERPRINT"
+  const val EXTRA_PEER_ID = "space.taskyon.constellation.PEER_ID"
   const val EXTRA_NAME = "space.taskyon.constellation.VIEWER_NAME"
   const val CHANNEL_ID = "constellation-location-share-v1"
   const val NOTIFICATION_ID = 4107

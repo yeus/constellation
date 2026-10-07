@@ -2,7 +2,8 @@ import { z } from 'zod'
 import type { PrivateKey } from '@libp2p/interface'
 import { peerIdFromPrivateKey, peerIdFromString } from '@libp2p/peer-id'
 
-import { base64UrlToBytes, base64UrlToText, bytesToBase64Url, textToBase64Url } from './encoding.ts'
+import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
+import { decodeShareCapability, encodeShareCapability } from './shareLinkCodec.ts'
 
 export const SHARE_LINK_VERSION = 1 as const
 export const MAX_SHARE_FRAGMENT_LENGTH = 1_800
@@ -14,7 +15,7 @@ const ShareCapabilitySchema = z
     secret: z.string().min(43).max(64),
     sourcePeerId: z.string().min(1).max(256),
     addresses: z.array(z.string().min(1).max(512)).max(4),
-    expiresAt: z.number().int().positive().nullable(),
+    expiresAt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
     ownerPeerId: z.string().min(1).max(256).optional(),
     ownerProof: z.string().min(40).max(256).optional(),
   })
@@ -79,7 +80,7 @@ export const createShareInvitation = async (options: {
 }
 
 export const shareInvitationUrl = (capability: ShareCapability, baseUrl: string): string => {
-  const fragment = textToBase64Url(JSON.stringify(capability))
+  const fragment = bytesToBase64Url(encodeShareCapability(ShareCapabilitySchema.parse(capability)))
   if (fragment.length > MAX_SHARE_FRAGMENT_LENGTH) {
     throw new RangeError('The share invitation is too large for a preview-safe link.')
   }
@@ -99,8 +100,13 @@ export const parseShareInvitation = (value: string, now = Date.now()): ShareCapa
     throw new RangeError('The share invitation is too large.')
   let parsed: unknown
   try {
-    parsed = JSON.parse(base64UrlToText(fragment))
-  } catch {
+    parsed = decodeShareCapability(base64UrlToBytes(fragment))
+  } catch (error) {
+    if (
+      error instanceof RangeError ||
+      (error instanceof TypeError && error.message.startsWith('Unsupported'))
+    )
+      throw error
     throw new TypeError('The share invitation is malformed.')
   }
   const capability = ShareCapabilitySchema.parse(parsed)

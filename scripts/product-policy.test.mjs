@@ -3,8 +3,7 @@ import fs from 'node:fs'
 import test from 'node:test'
 
 const about = fs.readFileSync('src/components/AboutSheet.vue', 'utf8')
-const shares = fs.readFileSync('src/components/ShareListSheet.vue', 'utf8')
-const following = fs.readFileSync('src/components/FollowingSheet.vue', 'utf8')
+const peers = fs.readFileSync('src/components/PeerListSheet.vue', 'utf8')
 const shareSheet = fs.readFileSync('src/components/ShareSheet.vue', 'utf8')
 const diagnostics = fs.readFileSync('src/components/NetworkDiagnosticsSheet.vue', 'utf8')
 
@@ -26,17 +25,17 @@ test('background sharing explains metered and power-policy limits', () => {
   assert.match(shareSheet, /delay\s+or\s+block/i)
   assert.match(shareSheet, /pause-when-metered/)
   assert.match(shareSheet, /resumes\s+automatically/i)
-  assert.match(shares, /pauseReason/)
+  assert.match(peers, /connection\.share\.paused/)
   assert.match(diagnostics, /pauseReason/)
   assert.match(diagnostics, /sampling/)
 })
 
 test('active and followed location surfaces expose explicit status controls', () => {
-  assert.match(shares, /connected/i)
-  assert.match(shares, /precision/i)
-  assert.match(shares, /expiresAt/)
-  assert.match(shares, /Revoke link/)
-  assert.match(following, /follow\.status/)
+  assert.match(peers, /connected/i)
+  assert.match(peers, /precision/i)
+  assert.match(peers, /expiresAt/)
+  assert.match(peers, /Revoke link/)
+  assert.match(peers, /statusLabel\(follow\.status\)/)
 })
 
 test('0.1 includes field fixes, uniform markers and executable sharing diagnostics', () => {

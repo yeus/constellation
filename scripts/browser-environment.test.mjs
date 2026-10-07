@@ -7,6 +7,9 @@ test('does not pass Nix library overrides to downloaded browsers', () => {
   const environment = browserProcessEnvironment({
     PATH: '/bin',
     LD_LIBRARY_PATH: '/nix/store/example',
+    DISPLAY: ':99',
+    WAYLAND_DISPLAY: 'wayland-0',
+    XAUTHORITY: '/synthetic/host-auth',
   })
 
   assert.deepEqual(environment, { PATH: '/bin' })

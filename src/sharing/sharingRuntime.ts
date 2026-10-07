@@ -18,12 +18,17 @@ import {
   type ShareNetworkPolicy,
 } from '../shareDraft.ts'
 import {
-  createConstellationMessagePort,
+  createProtocolMessagePort,
   dialShareStream,
   startPrivateBrowserPeer,
-  type ConstellationMessage,
 } from './browserPeer.ts'
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
+import {
+  PeerNamePreference,
+  displayedPeerName,
+  peerNamesProtocol,
+  PEER_NAMES_PROTOCOL,
+} from './peerNames.ts'
 import { createRedemptionProof, verifyRedemptionProof } from './shareAuth.ts'
 import {
   createShareInvitation,
@@ -38,7 +43,12 @@ import {
   type SharePauseState,
 } from './sharePolicy.ts'
 import { decryptLocationPayload, encryptLocationPayload } from './sharePayloadCrypto.ts'
-import { constellationProtocolV2, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import {
+  constellationProtocolV2,
+  SHARE_STREAM_PROTOCOL,
+  parseConstellationMessage,
+  type ConstellationMessage,
+} from './shareProtocol.ts'
 import { classifyTransport, type TransportKind } from './transport.ts'
 import type { PrivateState, PrivateStateStore } from './privateStore.ts'
 import { END_NOTICE_RETENTION_MS, retainedEndNotifications } from './shareLifecycle.ts'
@@ -49,6 +59,7 @@ const HEARTBEAT_INTERVAL_MS = 10_000
 const HEARTBEAT_TIMEOUT_MS = 35_000
 const MAX_ACTIVE_SESSIONS = 128
 const MAX_REDEEMED_NONCES_PER_SHARE = 1_024
+const MAX_PENDING_VIEWER_APPROVALS_PER_SHARE = 128
 
 export const sessionSweepReason = (
   expiresAt: number | null,
@@ -72,15 +83,30 @@ export interface ShareSummary {
   readonly lastUpdateAt?: number
   readonly expiresAt: number | null
   readonly viewerCount: number
-  readonly viewers?: readonly { fingerprint: string; lastSeenAt: number; localName?: string }[]
+  readonly viewers?: readonly {
+    peerId: string
+    fingerprint: string
+    lastSeenAt: number
+    localName?: string
+    sourceName?: string
+  }[]
   readonly name?: string
   readonly publication?: ShareDraft['publication']
 }
 
-export type FollowStatus = 'live' | 'delayed' | 'stale' | 'expired' | 'revoked' | 'unavailable'
+export type FollowStatus =
+  | 'live'
+  | 'delayed'
+  | 'stale'
+  | 'expired'
+  | 'revoked'
+  | 'unavailable'
+  | 'approval-pending'
+  | 'denied'
 
 export interface FollowSummary {
   readonly shareId: string
+  readonly peerId?: string
   readonly sourceName?: string
   readonly localName: string
   readonly color: string
@@ -92,6 +118,8 @@ export interface FollowSummary {
   readonly updatesReceived: number
   readonly expiresAt: number | null
   readonly returnPromptSeen: boolean
+  readonly approvalPending?: boolean
+  readonly approvalDenied?: boolean
   readonly endedAt?: number
 }
 
@@ -106,9 +134,13 @@ export const followStatusFor = (options: {
   connected: boolean
   observation?: Pick<LocationObservationV1, 'capturedAt' | 'expiresAt'>
   terminal?: 'expired' | 'revoked' | 'unavailable'
+  approvalPending?: boolean
+  approvalDenied?: boolean
   now?: number
 }): FollowStatus => {
   if (options.terminal) return options.terminal
+  if (options.approvalDenied) return 'denied'
+  if (options.approvalPending) return 'approval-pending'
   if (!options.connected || !options.observation) return 'unavailable'
   const now = options.now ?? Date.now()
   if (now >= options.observation.expiresAt) return 'stale'
@@ -121,6 +153,7 @@ export const FOLLOW_COLORS = ['#438ec9', '#8a6fc9', '#289a82', '#c0709a'] as con
 export interface SharingRuntimeState {
   readonly peerStatus: PeerStatus
   readonly location: BrowserLocationState
+  readonly peerNamePreferences?: readonly PeerNamePreference[]
   readonly shares: readonly ShareSummary[]
   readonly received: readonly {
     shareId: string
@@ -135,6 +168,12 @@ export interface SharingRuntimeState {
     url: string
   }[]
   readonly approvedReturnLinks: readonly string[]
+  readonly pendingViewerApprovals: readonly {
+    shareId: string
+    peerId: string
+    fingerprint: string
+    requestedAt: number
+  }[]
   readonly oldSharing: readonly OldShareSummary[]
   readonly oldSeeing: readonly OldShareSummary[]
   readonly endNotifications: readonly {
@@ -207,6 +246,7 @@ interface SourceShare {
   readonly sessions: Set<SourceSession>
   readonly redeemedNonces: Set<string>
   readonly blockedPeerIds: Set<string>
+  approvedPeerId?: string
   approximation?: ApproximationState
   latest?: LocationObservationV1
 }
@@ -222,11 +262,16 @@ type EndedSourceShare = Pick<
 interface FollowEntry {
   readonly url: string
   readonly sourcePeerId: string
+  peerId?: string
   sourceName?: string
+  linkSourceName?: string
   localName: string
+  usesPrivateName?: boolean
   color: string
   connected: boolean
   terminal?: 'expired' | 'revoked' | 'unavailable'
+  approvalPending?: boolean
+  approvalDenied?: boolean
   saved: boolean
   followedAt?: number
   returnPromptSeen: boolean
@@ -247,25 +292,41 @@ export const savedFollowRecords = (
   entries: readonly {
     url: string
     localName: string
+    usesPrivateName?: boolean
     color: string
     saved: boolean
     followedAt?: number
     returnPromptSeen?: boolean
+    approvalDenied?: boolean
     terminal?: 'expired' | 'revoked' | 'unavailable'
     endedAt?: number
   }[],
 ): PrivateState['followed'] =>
   entries
     .filter((entry) => entry.saved)
-    .map(({ url, localName, color, followedAt, returnPromptSeen, terminal, endedAt }) => ({
-      url,
-      localName,
-      color,
-      ...(followedAt ? { followedAt } : {}),
-      ...(returnPromptSeen ? { returnPromptSeen: true } : {}),
-      ...(terminal === 'expired' || terminal === 'revoked' ? { endReason: terminal } : {}),
-      ...(endedAt ? { endedAt } : {}),
-    }))
+    .map(
+      ({
+        url,
+        localName,
+        usesPrivateName,
+        color,
+        followedAt,
+        returnPromptSeen,
+        approvalDenied,
+        terminal,
+        endedAt,
+      }) => ({
+        url,
+        localName,
+        ...(usesPrivateName !== undefined ? { usesPrivateName } : {}),
+        color,
+        ...(followedAt ? { followedAt } : {}),
+        ...(returnPromptSeen ? { returnPromptSeen: true } : {}),
+        ...(approvalDenied ? { approvalDenied: true } : {}),
+        ...(terminal === 'expired' || terminal === 'revoked' ? { endReason: terminal } : {}),
+        ...(endedAt ? { endedAt } : {}),
+      }),
+    )
 
 const viewerFingerprint = async (shareId: string, peerId: string): Promise<string> => {
   const input = new TextEncoder().encode(`${shareId}:${peerId}`)
@@ -307,11 +368,17 @@ export interface SharingRuntime {
   networkDiagnostics: () => NetworkDiagnostics
   setNetworkState: (restriction: NetworkRestriction | undefined) => void
   getViewerLabel: (shareId: string, fingerprint: string) => string | undefined
+  setPeerNamePreferences: (
+    peerId: string,
+    associateNames: boolean,
+    sharedName: string | null,
+  ) => Promise<void>
   setViewerLabel: (shareId: string, fingerprint: string, name: string) => Promise<void>
   blockViewer: (shareId: string, fingerprint: string) => Promise<void>
   offerReturnShare: (followShareId: string, url: string) => Promise<void>
   dismissReturnOffer: (shareId: string, fingerprint: string) => Promise<void>
   approveReturnLink: (shareId: string) => Promise<void>
+  approveViewer: (shareId: string, peerId: string) => Promise<void>
   markReturnPromptSeen: (shareId: string) => Promise<void>
   initialize: () => Promise<void>
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
@@ -359,6 +426,36 @@ export const createSharingRuntime = (
   const received = new Map<string, LocationObservationV1>()
   const followed = new Map<string, FollowEntry>()
   const viewerLabels = new Map<string, string>()
+  const peerNamePreferences = new Map<string, PeerNamePreference>()
+  const nameListeners = new Map<string, Set<(name: string | null) => void>>()
+  const nameSenders = new Map<
+    string,
+    { send: (name: string | null) => Promise<void>; close: () => Promise<void> }
+  >()
+  const namePreference = (peerId: string): PeerNamePreference =>
+    peerNamePreferences.get(peerId) ?? {
+      peerId,
+      associateNames: false,
+      sharedName: null,
+      receivedName: null,
+    }
+  const receivePeerName = async (peerId: string, receivedName: string | null): Promise<void> => {
+    if (peerNamePreferences.size >= 1_024 && !peerNamePreferences.has(peerId)) return
+    const previous = namePreference(peerId)
+    const next = PeerNamePreference.parse({ ...previous, receivedName })
+    peerNamePreferences.set(peerId, next)
+    try {
+      await persist()
+    } catch {
+      peerNamePreferences.set(peerId, previous)
+      return
+    }
+    for (const entry of followed.values()) {
+      if (entry.peerId !== peerId) continue
+      entry.sourceName = receivedName ?? entry.linkSourceName
+    }
+    publish()
+  }
   const viewerClosers = new Map<string, () => Promise<void>>()
   const returnSenders = new Map<string, (url: string) => Promise<void>>()
   const returnOffers = new Map<
@@ -366,6 +463,12 @@ export const createSharingRuntime = (
     { shareId: string; viewerFingerprint: string; ownerPeerId: string; url: string }
   >()
   const approvedReturnLinks = new Set<string>()
+  const pendingViewerApprovals = new Map<
+    string,
+    { shareId: string; peerId: string; fingerprint: string; requestedAt: number }
+  >()
+  const viewerApprovalKey = (shareId: string, peerId: string): string =>
+    JSON.stringify([shareId, peerId])
   const pendingReturns = new Map<string, string>()
   const oldSharing = new Map<string, OldShareSummary>()
   const oldSeeing = new Map<string, OldShareSummary>()
@@ -403,6 +506,7 @@ export const createSharingRuntime = (
     following: [],
     returnOffers: [],
     approvedReturnLinks: [],
+    pendingViewerApprovals: [],
     oldSharing: [],
     oldSeeing: [],
     endNotifications: [],
@@ -425,6 +529,7 @@ export const createSharingRuntime = (
     state = {
       ...state,
       ...patch,
+      peerNamePreferences: [...peerNamePreferences.values()],
       shares: [...shares.values()].map((share) => ({
         shareId: share.capability.shareId,
         url: share.url,
@@ -434,11 +539,16 @@ export const createSharingRuntime = (
         viewers: [...share.sessions]
           .filter((session) => session.fingerprint)
           .map((session) => {
-            const localName = viewerLabels.get(`${share.capability.shareId}:${session.fingerprint}`)
+            const preference = peerNamePreferences.get(session.peerId)
+            const localName =
+              (preference?.associateNames ? preference.nickname : undefined) ||
+              viewerLabels.get(`${share.capability.shareId}:${session.fingerprint}`)
             return {
+              peerId: session.peerId,
               fingerprint: session.fingerprint!,
               lastSeenAt: session.lastHeartbeatAt,
               ...(localName ? { localName } : {}),
+              ...(preference?.receivedName ? { sourceName: preference.receivedName } : {}),
             }
           }),
         ...(share.name ? { name: share.name } : {}),
@@ -464,13 +574,20 @@ export const createSharingRuntime = (
         const observation = received.get(shareId)
         return {
           shareId,
+          peerId: entry.peerId,
           sourceName: entry.sourceName,
-          localName: entry.localName,
+          localName: displayedPeerName(
+            entry.peerId ? peerNamePreferences.get(entry.peerId) : undefined,
+            entry.usesPrivateName ? entry.localName : undefined,
+            entry.localName,
+          ),
           color: entry.color,
           connected: entry.connected,
           status: followStatusFor({
             connected: entry.connected,
             observation,
+            approvalPending: entry.approvalPending,
+            approvalDenied: entry.approvalDenied,
             terminal:
               entry.terminal ??
               (entry.expiresAt !== null && now >= entry.expiresAt ? 'expired' : undefined),
@@ -482,6 +599,8 @@ export const createSharingRuntime = (
           updatesReceived: entry.updatesReceived,
           expiresAt: entry.expiresAt,
           returnPromptSeen: entry.returnPromptSeen,
+          ...(entry.approvalPending ? { approvalPending: true } : {}),
+          ...(entry.approvalDenied ? { approvalDenied: true } : {}),
           ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
         }
       }),
@@ -492,6 +611,7 @@ export const createSharingRuntime = (
       })),
       returnOffers: [...returnOffers.values()],
       approvedReturnLinks: [...approvedReturnLinks],
+      pendingViewerApprovals: [...pendingViewerApprovals.values()],
       oldSharing: [...oldSharing.values()].sort((left, right) => right.endedAt - left.endedAt),
       oldSeeing: [...oldSeeing.values()].sort((left, right) => right.endedAt - left.endedAt),
     }
@@ -512,6 +632,7 @@ export const createSharingRuntime = (
           : {}),
         precision: share.precision,
         capacity: share.capacity,
+        ...(share.approvedPeerId ? { approvedPeerId: share.approvedPeerId } : {}),
         name: share.name,
         publication: share.publication,
         battery: share.battery,
@@ -530,6 +651,7 @@ export const createSharingRuntime = (
         reason: share.reason,
         endedAt: share.endedAt,
       })),
+      peerNamePreferences: [...peerNamePreferences.values()],
       followed: savedFollowRecords([...followed.values()]),
       approvedReturnLinks: [...approvedReturnLinks],
       pendingReturns: [...pendingReturns].map(([shareId, url]) => ({ shareId, url })),
@@ -606,6 +728,7 @@ export const createSharingRuntime = (
                 : {}),
               precision: record.precision,
               capacity: record.capacity,
+              approvedPeerId: record.approvedPeerId,
               name: record.name,
               publication: record.publication,
               ...backgroundSharePolicy(
@@ -676,18 +799,27 @@ export const createSharingRuntime = (
             changedProtectedState = true
           }
         }
+        for (const preference of saved?.peerNamePreferences ?? [])
+          peerNamePreferences.set(preference.peerId, preference)
         for (const record of saved?.followed ?? []) {
           try {
             const capability = parseShareInvitation(record.url)
+            const knownPeerId =
+              capability.ownerPeerId && (await verifyReturnOwner(capability))
+                ? capability.ownerPeerId
+                : undefined
             followed.set(capability.shareId, {
               url: record.url,
               sourcePeerId: capability.sourcePeerId,
+              peerId: knownPeerId,
               localName: record.localName,
+              usesPrivateName: record.usesPrivateName ?? true,
               color: record.color,
               connected: false,
               saved: true,
               followedAt: record.followedAt,
               returnPromptSeen: record.returnPromptSeen ?? false,
+              approvalDenied: record.approvalDenied ?? false,
               ...(record.endReason ? { terminal: record.endReason } : {}),
               ...(record.endedAt ? { endedAt: record.endedAt } : {}),
               updatesReceived: 0,
@@ -821,12 +953,12 @@ export const createSharingRuntime = (
   }
 
   const handleIncomingStream = (
-    stream: Parameters<typeof createConstellationMessagePort>[0],
+    stream: Parameters<typeof createProtocolMessagePort>[0],
     connection: { remotePeer: { toString: () => string } },
     expectedShareId?: string,
   ): void => {
     recordSessionEvent('stream-open')
-    const messagePort = createConstellationMessagePort(stream)
+    const messagePort = createProtocolMessagePort(stream, parseConstellationMessage)
     const session: SourceSession = {
       peerId: connection.remotePeer.toString(),
       close: () => messagePort.close(),
@@ -868,11 +1000,9 @@ export const createSharingRuntime = (
               (expectedShareId === undefined
                 ? candidate.sourcePrivateKey === undefined
                 : candidate.capability.shareId === expectedShareId)
-            const permitted =
+            const proofValid =
               servedByThisPeer &&
               !candidate.redeemedNonces.has(viewerNonce) &&
-              !candidate.blockedPeerIds.has(session.peerId) &&
-              candidate.sessions.size < candidate.capacity &&
               (candidate.capability.expiresAt === null ||
                 Date.now() < candidate.capability.expiresAt) &&
               (await verifyRedemptionProof(
@@ -885,14 +1015,42 @@ export const createSharingRuntime = (
                 },
                 proof,
               ))
-            if (!candidate || !permitted || candidate.blockedPeerIds.has(session.peerId)) {
+            if (!candidate || !proofValid) {
+              recordSessionEvent('redeem-denied')
+              throw new Error('Share access denied.')
+            }
+            session.fingerprint = await viewerFingerprint(shareId, session.peerId)
+            if (candidate.blockedPeerIds.has(session.peerId)) {
+              return { accessDenied: true as const }
+            }
+            if (candidate.capacity === 1 && candidate.approvedPeerId !== session.peerId) {
+              if (candidate.approvedPeerId) return { accessDenied: true as const }
+              const key = viewerApprovalKey(shareId, session.peerId)
+              if (!pendingViewerApprovals.has(key)) {
+                const pendingCount = [...pendingViewerApprovals.values()].filter(
+                  (request) => request.shareId === shareId,
+                ).length
+                if (pendingCount >= MAX_PENDING_VIEWER_APPROVALS_PER_SHARE) {
+                  return { accessDenied: true as const }
+                }
+                pendingViewerApprovals.set(key, {
+                  shareId,
+                  peerId: session.peerId,
+                  fingerprint: session.fingerprint,
+                  requestedAt: Date.now(),
+                })
+                publish()
+              }
+              return { approvalPending: true as const, retryAfterMs: HEARTBEAT_INTERVAL_MS }
+            }
+            if (candidate.sessions.size >= candidate.capacity) {
               recordSessionEvent('redeem-denied')
               throw new Error('Share access denied.')
             }
             authorizedShare = candidate
             session.sessionId = randomToken()
             session.lastHeartbeatAt = Date.now()
-            session.fingerprint = await viewerFingerprint(shareId, session.peerId)
+            pendingViewerApprovals.delete(viewerApprovalKey(shareId, session.peerId))
             rememberRedeemedNonce(candidate.redeemedNonces, viewerNonce)
             candidate.sessions.add(session)
             recordSessionEvent('admitted')
@@ -995,12 +1153,77 @@ export const createSharingRuntime = (
     })
   }
 
+  const handleNameStream = (
+    stream: Parameters<typeof createProtocolMessagePort>[0],
+    connection: { remotePeer: { toString: () => string } },
+    expectedShareId?: string,
+  ): void => {
+    const port = createProtocolMessagePort(stream, (value) =>
+      peerNamesProtocol.message.parse(value),
+    )
+    let removeListener: (() => void) | undefined
+    const stopServer = createPortServer(
+      port.port,
+      peerNamesProtocol,
+      {
+        peerNames: {
+          exchange: async ({ shareId, sessionId, displayName }) => {
+            const share = shares.get(shareId)
+            const peerId = connection.remotePeer.toString()
+            const session =
+              share &&
+              [...share.sessions].find(
+                (candidate) => candidate.peerId === peerId && candidate.sessionId === sessionId,
+              )
+            if (!session || (expectedShareId !== undefined && shareId !== expectedShareId))
+              throw new Error('Name access denied.')
+            requireAuthorized(session, share)
+            await receivePeerName(peerId, displayName)
+            if (!removeListener) {
+              const listener = (name: string | null) => {
+                if (!share?.sessions.has(session)) return
+                try {
+                  requireAuthorized(session, shares.get(shareId))
+                } catch {
+                  return
+                }
+                port.port.send(
+                  peerNamesProtocol.streams['peerNames.profile'].changed.parse({
+                    type: 'changed',
+                    displayName: name,
+                  }),
+                )
+              }
+              const listeners =
+                nameListeners.get(peerId) ?? new Set<(name: string | null) => void>()
+              listeners.add(listener)
+              nameListeners.set(peerId, listeners)
+              removeListener = () => {
+                listeners.delete(listener)
+                if (!listeners.size) nameListeners.delete(peerId)
+              }
+            }
+            return { displayName: namePreference(peerId).sharedName }
+          },
+        },
+      },
+      { onError: () => undefined },
+    )
+    void port.closed.then(() => {
+      removeListener?.()
+      stopServer()
+    })
+  }
+
   const startPeer = async () => {
     if (!peer) {
       publish({ peerStatus: 'connecting', message: 'Connecting to the P2P network…' })
       peer = startPrivateBrowserPeer(privateKey)
         .then(async (started) => {
           await started.node.handle(SHARE_STREAM_PROTOCOL, handleIncomingStream, {
+            runOnLimitedConnection: true,
+          })
+          await started.node.handle(PEER_NAMES_PROTOCOL, handleNameStream, {
             runOnLimitedConnection: true,
           })
           handlerNode = started.node
@@ -1032,6 +1255,11 @@ export const createSharingRuntime = (
         await started.node.handle(
           SHARE_STREAM_PROTOCOL,
           (stream, connection) => handleIncomingStream(stream, connection, shareId),
+          { runOnLimitedConnection: true },
+        )
+        await started.node.handle(
+          PEER_NAMES_PROTOCOL,
+          (stream, connection) => handleNameStream(stream, connection, shareId),
           { runOnLimitedConnection: true },
         )
         sourceNodes.set(shareId, started.node)
@@ -1215,6 +1443,9 @@ export const createSharingRuntime = (
         for (const key of returnOffers.keys()) {
           if (key.startsWith(`${share.capability.shareId}:`)) returnOffers.delete(key)
         }
+        for (const [key, request] of pendingViewerApprovals) {
+          if (request.shareId === share.capability.shareId) pendingViewerApprovals.delete(key)
+        }
         void Promise.all([persist(), ...prunedEndIds.map(stopSourcePeer)]).catch(() =>
           publish({ message: 'Expired share state could not be saved.' }),
         )
@@ -1254,7 +1485,7 @@ export const createSharingRuntime = (
       }
       if (returnShareReceiver === 'external') continue
       if (entry.connected || viewerClosers.has(shareId) || reconnecting.has(shareId)) continue
-      if (entry.terminal) continue
+      if (entry.terminal || entry.approvalDenied) continue
       try {
         parseShareInvitation(entry.url, now)
       } catch {
@@ -1294,6 +1525,28 @@ export const createSharingRuntime = (
       const { node } = await ensurePeer()
       if (!(await verifyReturnOwner(capability, node.peerId.toString()))) {
         throw new Error('This return link cannot prove which viewer created it.')
+      }
+      const originalCapability = parseShareInvitation(follow.url)
+      if (!originalCapability.ownerPeerId || !(await verifyReturnOwner(originalCapability))) {
+        throw new Error('This location link cannot verify the original sharer identity.')
+      }
+      const returnShare = shares.get(capability.shareId)
+      if (!returnShare || returnShare.capacity !== 1) {
+        throw new Error('The return link is not a single-recipient share.')
+      }
+      if (
+        returnShare.approvedPeerId &&
+        returnShare.approvedPeerId !== originalCapability.ownerPeerId
+      ) {
+        throw new Error('The return link is already bound to another peer.')
+      }
+      const previousApprovedPeerId = returnShare.approvedPeerId
+      returnShare.approvedPeerId = originalCapability.ownerPeerId
+      try {
+        await persist()
+      } catch (error) {
+        returnShare.approvedPeerId = previousApprovedPeerId
+        throw error
       }
       const send = returnSenders.get(followShareId)
       if (send) {
@@ -1342,9 +1595,33 @@ export const createSharingRuntime = (
           failed = true
         }
       }
-      if (failed)
-        publish({ message: 'Group approval saved. Some return links need another attempt.' })
-      publish()
+      if (failed) publish({ message: 'Link approval saved. Retry the pending return shares.' })
+      else
+        publish({ message: 'Future return shares from this link will be accepted automatically.' })
+    },
+    approveViewer: async (shareId, peerId) => {
+      await prepareState()
+      const share = shares.get(shareId)
+      const key = viewerApprovalKey(shareId, peerId)
+      if (!share || share.capacity !== 1) {
+        throw new Error('This is not an active single-recipient share.')
+      }
+      if (!pendingViewerApprovals.has(key)) {
+        throw new Error('This device is no longer waiting for approval.')
+      }
+      if (share.approvedPeerId && share.approvedPeerId !== peerId) {
+        throw new Error('Another device is already approved for this share.')
+      }
+      const previousPeerId = share.approvedPeerId
+      share.approvedPeerId = peerId
+      try {
+        await persist()
+      } catch (error) {
+        share.approvedPeerId = previousPeerId
+        throw error
+      }
+      pendingViewerApprovals.delete(key)
+      publish({ message: 'This device can now view your location.' })
     },
     markReturnPromptSeen: async (shareId) => {
       await prepareState()
@@ -1353,6 +1630,39 @@ export const createSharingRuntime = (
       entry.returnPromptSeen = true
       await persist()
       publish()
+    },
+    setPeerNamePreferences: async (peerId, associateNames, sharedName) => {
+      await prepareState()
+      const known =
+        [...followed.values()].some((entry) => entry.peerId === peerId) ||
+        [...shares.values()].some((share) =>
+          [...share.sessions].some((session) => session.peerId === peerId),
+        )
+      if (!known) throw new Error('This peer has no authenticated location relationship.')
+      if (!store || !privateStateAvailable) throw new Error('Protected storage is unavailable.')
+      if (peerNamePreferences.size >= 1_024 && !peerNamePreferences.has(peerId))
+        throw new Error('Too many remembered peers.')
+      const previous = namePreference(peerId)
+      const next = PeerNamePreference.parse({ ...previous, associateNames, sharedName })
+      peerNamePreferences.set(peerId, next)
+      try {
+        await persist()
+      } catch (error) {
+        peerNamePreferences.set(peerId, previous)
+        throw error
+      }
+      nameListeners.get(peerId)?.forEach((send) => send(next.sharedName))
+      const results = await Promise.allSettled(
+        [...followed.entries()]
+          .filter(([, entry]) => entry.peerId === peerId)
+          .flatMap(([shareId]) => {
+            const sender = nameSenders.get(shareId)
+            return sender ? [sender.send(next.sharedName)] : []
+          }),
+      )
+      publish()
+      if (results.some((result) => result.status === 'rejected'))
+        throw new Error('Name preference saved; delivery will retry when this peer reconnects.')
     },
     getViewerLabel: (shareId, fingerprint) => viewerLabels.get(`${shareId}:${fingerprint}`),
     setViewerLabel: async (shareId, fingerprint, name) => {
@@ -1381,8 +1691,16 @@ export const createSharingRuntime = (
       const share = shares.get(shareId)
       if (!share) throw new Error('This share is no longer available.')
       const sessions = [...share.sessions].filter((session) => session.fingerprint === fingerprint)
-      if (sessions.length === 0) throw new Error('This device is no longer connected.')
-      const peerIds = [...new Set(sessions.map((session) => session.peerId))]
+      const pending = [...pendingViewerApprovals.entries()].filter(
+        ([, request]) => request.shareId === shareId && request.fingerprint === fingerprint,
+      )
+      const peerIds = [
+        ...new Set([
+          ...sessions.map((session) => session.peerId),
+          ...pending.map(([, request]) => request.peerId),
+        ]),
+      ]
+      if (peerIds.length === 0) throw new Error('This device is no longer connected.')
       if (share.blockedPeerIds.size + peerIds.length > 128) {
         throw new Error('Too many blocked devices on this link; revoke the link instead.')
       }
@@ -1405,6 +1723,7 @@ export const createSharingRuntime = (
           )
         }
       }
+      pending.forEach(([key]) => pendingViewerApprovals.delete(key))
       recordSessionEvent('blocked')
       publish()
       await Promise.all(sessions.map((session) => session.closeAfterFlush()))
@@ -1511,6 +1830,11 @@ export const createSharingRuntime = (
             handleIncomingStream(stream, connection, share.capability.shareId),
           { runOnLimitedConnection: true },
         )
+        await started.node.handle(
+          PEER_NAMES_PROTOCOL,
+          (stream, connection) => handleNameStream(stream, connection, share.capability.shareId),
+          { runOnLimitedConnection: true },
+        )
         sourceNodes.set(share.capability.shareId, started.node)
         sourceStarts.set(share.capability.shareId, Promise.resolve(started))
         publish({ peerStatus: 'online', message: '' })
@@ -1546,6 +1870,10 @@ export const createSharingRuntime = (
       }
       await prepareState()
       const capability = parseShareInvitation(url)
+      const knownPeerId =
+        capability.ownerPeerId && (await verifyReturnOwner(capability))
+          ? capability.ownerPeerId
+          : undefined
       if (followed.get(capability.shareId)?.terminal || oldSeeing.has(capability.shareId)) {
         throw new Error('This location link has ended.')
       }
@@ -1572,7 +1900,7 @@ export const createSharingRuntime = (
         SHARE_STREAM_PROTOCOL,
         existingConnections,
       )
-      const messagePort = createConstellationMessagePort(stream)
+      const messagePort = createProtocolMessagePort(stream, parseConstellationMessage)
       const client = createPortClient(messagePort.port, constellationProtocolV2)
       const previousFollow = followed.get(capability.shareId)
       const previousObservation = received.get(capability.shareId)
@@ -1610,6 +1938,45 @@ export const createSharingRuntime = (
           })
           throw new Error('This location link has ended.')
         }
+        if ('approvalPending' in session || 'accessDenied' in session) {
+          const existing = followed.get(capability.shareId)
+          const existingPeer = [...followed.values()].find(
+            (entry) => entry.sourcePeerId === capability.sourcePeerId,
+          )
+          const denied = 'accessDenied' in session
+          followed.set(capability.shareId, {
+            url,
+            sourcePeerId: capability.sourcePeerId,
+            peerId: knownPeerId,
+            sourceName: existing?.sourceName,
+            linkSourceName: existing?.linkSourceName,
+            localName:
+              existing?.localName ??
+              options.localName?.trim() ??
+              generatedFollowName(capability.shareId),
+            color:
+              existing?.color ??
+              existingPeer?.color ??
+              FOLLOW_COLORS[followed.size % FOLLOW_COLORS.length]!,
+            connected: false,
+            approvalPending: !denied,
+            approvalDenied: denied,
+            saved: existing?.saved ?? options.saved ?? true,
+            followedAt: existing?.followedAt ?? Date.now(),
+            returnPromptSeen: existing?.returnPromptSeen ?? Boolean(options.returnOwnerPeerId),
+            updatesReceived: existing?.updatesReceived ?? 0,
+            expiresAt: capability.expiresAt,
+          })
+          if (denied) received.delete(capability.shareId)
+          if (followed.get(capability.shareId)?.saved) await persist()
+          await messagePort.close()
+          publish({
+            message: denied
+              ? 'The sender did not approve this device for the location share.'
+              : 'Waiting for the sender to approve this device.',
+          })
+          return
+        }
         const existing = followed.get(capability.shareId)
         const existingPeer = [...followed.values()].find(
           (entry) => entry.sourcePeerId === capability.sourcePeerId,
@@ -1617,7 +1984,10 @@ export const createSharingRuntime = (
         followed.set(capability.shareId, {
           url,
           sourcePeerId: capability.sourcePeerId,
+          peerId: knownPeerId,
           sourceName: session.sourceName,
+          linkSourceName: session.sourceName,
+          usesPrivateName: existing?.usesPrivateName ?? Boolean(options.localName?.trim()),
           localName:
             existing?.localName ??
             options.localName?.trim() ??
@@ -1628,6 +1998,8 @@ export const createSharingRuntime = (
             existingPeer?.color ??
             FOLLOW_COLORS[followed.size % FOLLOW_COLORS.length]!,
           connected: true,
+          approvalPending: false,
+          approvalDenied: false,
           saved: existing?.saved ?? options.saved ?? true,
           followedAt: existing ? existing.followedAt : Date.now(),
           returnPromptSeen: existing?.returnPromptSeen ?? Boolean(options.returnOwnerPeerId),
@@ -1756,6 +2128,50 @@ export const createSharingRuntime = (
             ownerPeerId: node.peerId.toString(),
           }),
         )
+        if (knownPeerId) {
+          try {
+            const names = await dialShareStream(
+              node,
+              capability.addresses,
+              PEER_NAMES_PROTOCOL,
+              node
+                .getConnections()
+                .filter(
+                  (connection) => connection.remotePeer.toString() === capability.sourcePeerId,
+                ),
+            )
+            const namesPort = createProtocolMessagePort(names, (value) =>
+              peerNamesProtocol.message.parse(value),
+            )
+            const namesClient = createPortClient(namesPort.port, peerNamesProtocol)
+            const removeNames = namesPort.port.receive((message) => {
+              const change =
+                peerNamesProtocol.streams['peerNames.profile'].changed.safeParse(message)
+              if (change.success) void receivePeerName(knownPeerId, change.data.displayName)
+            })
+            const send = async (displayName: string | null): Promise<void> => {
+              const response = await namesClient.peerNames.exchange({
+                shareId: capability.shareId,
+                sessionId: session.sessionId,
+                displayName,
+              })
+              await receivePeerName(knownPeerId, response.displayName)
+            }
+            const closeNames = async () => {
+              removeNames()
+              await namesPort.close()
+            }
+            nameSenders.set(capability.shareId, { send, close: closeNames })
+            void messagePort.closed.then(() => {
+              if (nameSenders.get(capability.shareId)?.close === closeNames)
+                nameSenders.delete(capability.shareId)
+              void closeNames()
+            })
+            await send(namePreference(knownPeerId).sharedName)
+          } catch {
+            // Older clients have no name capability. Location sharing remains usable.
+          }
+        }
         const queuedReturn = pendingReturns.get(capability.shareId)
         if (queuedReturn) {
           try {
@@ -1844,7 +2260,9 @@ export const createSharingRuntime = (
       }
       const previousName = entry.localName
       const wasSaved = entry.saved
-      entry.localName = localName.trim().slice(0, 32) || generatedFollowName(shareId)
+      entry.usesPrivateName = Boolean(localName.trim())
+      entry.localName =
+        localName.trim().slice(0, 32) || entry.sourceName || generatedFollowName(shareId)
       entry.saved = true
       try {
         console.info('[constellation-persist] follow-save-queued')
@@ -1859,7 +2277,14 @@ export const createSharingRuntime = (
     setFollowName: (shareId, name) => {
       const entry = followed.get(shareId)
       if (!entry) return
-      entry.localName = name.trim().slice(0, 32)
+      entry.usesPrivateName = Boolean(name.trim())
+      entry.localName = name.trim().slice(0, 32) || entry.sourceName || generatedFollowName(shareId)
+      if (entry.peerId && namePreference(entry.peerId).associateNames) {
+        peerNamePreferences.set(entry.peerId, {
+          ...namePreference(entry.peerId),
+          nickname: name.trim().slice(0, 32),
+        })
+      }
       if (entry.saved)
         void persist().catch(() => publish({ message: 'Nickname could not be saved.' }))
       publish()
@@ -1898,7 +2323,7 @@ export const createSharingRuntime = (
         endedAt: Date.now(),
       }
       const previousOldRecord = oldSharing.get(shareId)
-      const wasApproved = approvedReturnLinks.has(shareId)
+      const wasReturnLinkApproved = approvedReturnLinks.has(shareId)
       const removedOffers = [...returnOffers.entries()].filter(
         ([, offer]) => offer.shareId === shareId,
       )
@@ -1920,9 +2345,12 @@ export const createSharingRuntime = (
         previousEndNotifications.forEach((record, id) => endedShares.set(id, record))
         if (previousOldRecord) oldSharing.set(shareId, previousOldRecord)
         else oldSharing.delete(shareId)
-        if (wasApproved) approvedReturnLinks.add(shareId)
+        if (wasReturnLinkApproved) approvedReturnLinks.add(shareId)
         removedOffers.forEach(([key, offer]) => returnOffers.set(key, offer))
         throw error
+      }
+      for (const [key, request] of pendingViewerApprovals) {
+        if (request.shareId === shareId) pendingViewerApprovals.delete(key)
       }
       for (const session of share.sessions) {
         if (session.sessionId) {

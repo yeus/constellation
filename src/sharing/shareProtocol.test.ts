@@ -64,3 +64,23 @@ test('redeeming an ended link returns a terminal reason without a live session',
     true,
   )
 })
+
+test('single-recipient redemption can wait for approval or deny a different peer', () => {
+  const response = constellationProtocolV2.message
+  assert.equal(
+    response.safeParse({
+      type: 'share.redeemResponse',
+      requestId: 'approval-pending',
+      result: { approvalPending: true, retryAfterMs: 10_000 },
+    }).success,
+    true,
+  )
+  assert.equal(
+    response.safeParse({
+      type: 'share.redeemResponse',
+      requestId: 'approval-denied',
+      result: { accessDenied: true },
+    }).success,
+    true,
+  )
+})

@@ -217,18 +217,47 @@ test('Android status carries an in-memory private return offer', async () => {
   assert.deepEqual((await controller.status()).returnOffers, [offer])
 })
 
-test('Android status carries validated source group approval', async () => {
+test('Android status carries validated link-group return approval', async () => {
   const controller = createAndroidBackgroundSharing({
     isAndroid: true,
     now: () => 0,
-    invoke: async () => ({ ...readyStatus, approvedReturnLinks: ['synthetic-share-id'] }),
+    invoke: async () => ({
+      ...readyStatus,
+      approvedReturnLinks: ['synthetic-share-id'],
+    }),
   })
   assert.ok(controller)
   assert.deepEqual((await controller.status()).approvedReturnLinks, ['synthetic-share-id'])
   const malformed = createAndroidBackgroundSharing({
     isAndroid: true,
     now: () => 0,
-    invoke: async () => ({ ...readyStatus, approvedReturnLinks: [false] }),
+    invoke: async () => ({
+      ...readyStatus,
+      approvedReturnLinks: [false],
+    }),
+  })
+  assert.ok(malformed)
+  await assert.rejects(malformed.status(), /invalid background sharing status/i)
+})
+
+test('Android status validates pending one-recipient approvals', async () => {
+  const request = {
+    shareId: 'synthetic-share-id',
+    peerId: 'synthetic-peer-id',
+    fingerprint: 'synthetic-device',
+    requestedAt: 1_000,
+  }
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, pendingViewerApprovals: [request] }),
+  })
+  assert.ok(controller)
+  assert.deepEqual((await controller.status()).pendingViewerApprovals, [request])
+  const malformed = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async () => ({ ...readyStatus, pendingViewerApprovals: [{ ...request, peerId: 0 }] }),
   })
   assert.ok(malformed)
   await assert.rejects(malformed.status(), /invalid background sharing status/i)
@@ -257,7 +286,7 @@ test('Android status carries ended source links and rejects malformed return off
   await assert.rejects(malformed.status(), /invalid background sharing status/i)
 })
 
-test('Android forwards return-link approval to the sharing service', async () => {
+test('Android forwards link-group return approval to the sharing service', async () => {
   const calls: { command: string; args?: Record<string, unknown> }[] = []
   const controller = createAndroidBackgroundSharing({
     isAndroid: true,
@@ -276,6 +305,49 @@ test('Android forwards return-link approval to the sharing service', async () =>
       args: { shareId: 'synthetic-share-id' },
     },
   ])
+})
+
+test('Android forwards single-recipient peer approval to its sharing service', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return command === 'android_approve_background_viewer' ? {} : readyStatus
+    },
+  })
+
+  assert.ok(controller)
+  assert.deepEqual(
+    await controller.approveViewer('synthetic-share-id', 'synthetic-peer-id'),
+    readyStatus,
+  )
+  assert.deepEqual(calls, [
+    {
+      command: 'android_approve_background_viewer',
+      args: { shareId: 'synthetic-share-id', peerId: 'synthetic-peer-id' },
+    },
+    { command: 'android_background_share_status', args: undefined },
+  ])
+})
+
+test('Android persists name consent before polling the background status', async () => {
+  const calls: string[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command) => {
+      calls.push(command)
+      return command === 'android_set_background_peer_names' ? {} : readyStatus
+    },
+  })
+  assert.ok(controller)
+  assert.deepEqual(
+    await controller.setPeerNamePreferences('synthetic-peer', false, 'Alice'),
+    readyStatus,
+  )
+  assert.deepEqual(calls, ['android_set_background_peer_names', 'android_background_share_status'])
 })
 
 test('Android forwards a dismissed return offer to the sharing service', async () => {

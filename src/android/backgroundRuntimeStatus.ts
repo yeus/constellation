@@ -27,6 +27,8 @@ export const backgroundRuntimeStatus = (
     shares,
     returnOffers: state?.returnOffers ?? [],
     approvedReturnLinks: state?.approvedReturnLinks ?? [],
+    peerNamePreferences: state?.peerNamePreferences ?? [],
+    pendingViewerApprovals: state?.pendingViewerApprovals ?? [],
     oldSharing: state?.oldSharing ?? [],
     location,
     message: failureMessage ?? state?.message ?? '',

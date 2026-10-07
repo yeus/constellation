@@ -127,6 +127,17 @@ class LocationShareService : Service(), LocationListener {
           startRuntime()
           START_STICKY
         }
+        ShareServiceContract.ACTION_APPROVE_VIEWER -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "approve-viewer")
+              .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
+              .put("peerId", intent?.getStringExtra(ShareServiceContract.EXTRA_PEER_ID)),
+          )
+          startRuntime()
+          START_STICKY
+        }
         ShareServiceContract.ACTION_APPROVE_RETURN_LINK -> {
           queueCommand(
             JSONObject()
@@ -145,6 +156,14 @@ class LocationShareService : Service(), LocationListener {
               .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
               .put("fingerprint", intent?.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)),
           )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_SET_PEER_NAMES -> {
+          val request = JSONObject(intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
+            ?: throw IllegalArgumentException("Missing name preferences."))
+          queueCommand(request.put("type", "set-peer-names")
+            .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)))
           startRuntime()
           START_STICKY
         }
