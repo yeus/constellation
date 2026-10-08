@@ -120,6 +120,10 @@ test('release updates metadata, preserves AppStream history, and creates a local
   const root = makeReleaseRepository(context)
   const currentVersion = applicationVersion(root)
   const targetVersion = nextPatchVersion(root)
+  const originalJsonMetadata = ['package.json', 'src-tauri/tauri.conf.json'].map((relativePath) => [
+    relativePath,
+    fs.readFileSync(path.join(root, relativePath), 'utf8'),
+  ])
   const result = runRelease(root, targetVersion, '--yes')
   assert.equal(result.status, 0, result.stderr)
   assert.ok(result.stdout.includes(`Release metadata is consistent at version ${targetVersion}`))
@@ -138,6 +142,13 @@ test('release updates metadata, preserves AppStream history, and creates a local
     path.join(root, 'packaging/flatpak/space.taskyon.constellation.metainfo.xml'),
     'utf8',
   )
+  for (const [relativePath, original] of originalJsonMetadata) {
+    assert.equal(
+      fs.readFileSync(path.join(root, relativePath), 'utf8'),
+      original.replace(`"version": "${currentVersion}"`, `"version": "${targetVersion}"`),
+      `${relativePath} must preserve formatting when its version changes`,
+    )
+  }
   assert.equal(packageJson.version, targetVersion)
   assert.equal(tauri.version, targetVersion)
   assert.match(cargo, new RegExp(`^version = "${targetVersion}"$`, 'm'))

@@ -27,6 +27,16 @@ const readText = (repositoryRoot, relativePath) =>
 const writeText = (repositoryRoot, relativePath, content) =>
   fs.writeFileSync(absolutePath(repositoryRoot, relativePath), content, 'utf8')
 
+const updateJsonVersion = (repositoryRoot, relativePath, currentVersion, version) => {
+  const source = readText(repositoryRoot, relativePath)
+  const versionLine = /^([ \t]{2}"version"[ \t]*:[ \t]*)"([^"]+)"(?=,?[ \t]*$)/m
+  const match = source.match(versionLine)
+  if (!match || match[2] !== currentVersion) {
+    throw new Error(`${relativePath} has no expected top-level version ${currentVersion}.`)
+  }
+  return source.replace(versionLine, (_match, prefix) => `${prefix}${JSON.stringify(version)}`)
+}
+
 const gitOutput = (repositoryRoot, args) => {
   const result = spawnSync('git', args, { cwd: repositoryRoot, encoding: 'utf8' })
   if (result.error || result.status !== 0) {
@@ -236,13 +246,12 @@ const assertGitIdentity = (repositoryRoot) => {
 }
 
 const createReleaseUpdates = (repositoryRoot, currentVersion, version, date) => {
-  const packageJson = readJson(repositoryRoot, 'package.json')
-  packageJson.version = version
-  const tauriConfig = readJson(repositoryRoot, 'src-tauri/tauri.conf.json')
-  tauriConfig.version = version
   return new Map([
-    ['package.json', `${JSON.stringify(packageJson, null, 2)}\n`],
-    ['src-tauri/tauri.conf.json', `${JSON.stringify(tauriConfig, null, 2)}\n`],
+    ['package.json', updateJsonVersion(repositoryRoot, 'package.json', currentVersion, version)],
+    [
+      'src-tauri/tauri.conf.json',
+      updateJsonVersion(repositoryRoot, 'src-tauri/tauri.conf.json', currentVersion, version),
+    ],
     [
       'src-tauri/Cargo.toml',
       updateCargoManifest(
