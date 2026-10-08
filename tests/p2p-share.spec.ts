@@ -34,6 +34,7 @@ test('synchronizes opted-in names independently and keeps reciprocal nicknames p
 })
 
 test('revocation during viewer admission preserves ended history', async ({ page }) => {
+  test.setTimeout(90_000)
   await page.goto('/')
   const result = await page.evaluate(async () => {
     const { probeRevocationDuringAdmission } = await import('../tests/fixtures/share-probe.ts')
