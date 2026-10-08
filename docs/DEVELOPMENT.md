@@ -20,14 +20,26 @@ corepack yarn install --immutable
 corepack yarn dev
 ```
 
-Run the lightweight quality checks with:
+Run the same Quality checks as GitHub Actions while developing:
 
 ```sh
-yarn lint
-yarn test
-yarn build
-yarn test:e2e
+yarn ci:quick
 ```
+
+Before pushing a commit, run the full CI preflight, including browser regression,
+Pages checks, and screenshot capture:
+
+```sh
+yarn ci:preflight
+```
+
+The full preflight **requires a clean Git checkout** (commit tracked changes and
+remove or ignore untracked files first) and verifies that HEAD does not change
+during the run. It tests the committed files, not just uncommitted local fixes.
+The quick checks deliberately permit a dirty working tree. Both use the same
+commands as the corresponding GitHub Actions jobs; this does not reproduce
+GitHub-only deployment, signing secrets, or differences in runner images and
+Node versions. For targeted browser testing, use `yarn test:e2e`.
 
 The end-to-end browser launcher removes a Nix-only library override before
 starting Playwright's downloaded Chromium. This prevents host Chromium from

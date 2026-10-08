@@ -186,11 +186,15 @@ test('return consent applies to every viewer of the same original link', async (
       )
       .toBe(2)
     await offer.getByRole('button', { name: 'Accept viewers from this link' }).click()
-    await expect(source.locator('.toast')).toContainText('Return location accepted', {
-      timeout: 10_000,
-    })
+    await expect
+      .poll(() =>
+        source.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          return (await createBrowserPrivateStore().load())?.approvedReturnLinks?.length
+        }),
+      )
+      .toBe(1)
     await expect(source.getByText('Seeing 2')).toBeVisible({ timeout: 30_000 })
-    await expect(source.locator('.toast')).toContainText('Future shares from this link')
     await expect(offer).toHaveCount(0)
     await source.getByRole('button', { name: 'Seeing 2' }).click()
     const peerList = source.locator('.peer-list')

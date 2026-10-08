@@ -11,11 +11,7 @@
   },
   "app": {
     "security": {
-      "capabilities": [
-        "desktop",
-        "mobile",
-        "ios"
-      ]
+      "capabilities": ["desktop", "mobile", "ios"]
     },
     "windows": [
       {
@@ -29,9 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "appimage"
-    ],
+    "targets": ["appimage"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -48,13 +42,9 @@
     "deep-link": {
       "mobile": [
         {
-          "scheme": [
-            "https"
-          ],
+          "scheme": ["https"],
           "host": "constellation.taskyon.space",
-          "pathPrefix": [
-            "/"
-          ],
+          "pathPrefix": ["/"],
           "appLink": true
         }
       ]

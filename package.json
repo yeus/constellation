@@ -12,6 +12,8 @@
     "node": ">=22.13 <23"
   },
   "scripts": {
+    "ci:quick": "node scripts/ci-preflight.mjs quick",
+    "ci:preflight": "node scripts/ci-preflight.mjs preflight",
     "build:vendor": "yarn workspace @taskyon/diagnostics build && yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build",
     "icons:generate": "tauri icon assets/icon-manifest.json -o src-tauri/icons",
     "dev": "yarn build:vendor && vite",
