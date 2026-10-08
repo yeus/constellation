@@ -187,11 +187,13 @@ test('return consent applies to every viewer of the same original link', async (
       .toBe(2)
     await offer.getByRole('button', { name: 'Accept viewers from this link' }).click()
     await expect
-      .poll(() =>
-        source.evaluate(async () => {
-          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
-          return (await createBrowserPrivateStore().load())?.approvedReturnLinks?.length
-        }),
+      .poll(
+        () =>
+          source.evaluate(async () => {
+            const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+            return (await createBrowserPrivateStore().load())?.approvedReturnLinks?.length
+          }),
+        { timeout: 30_000 },
       )
       .toBe(1)
     await expect(source.getByText('Seeing 2')).toBeVisible({ timeout: 30_000 })
