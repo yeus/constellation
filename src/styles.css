@@ -103,10 +103,6 @@ button {
   background: var(--page-background);
 }
 
-.map-screen--actions-open {
-  --map-control-lift: 3.75rem;
-}
-
 .map-surface {
   position: absolute;
   inset: 0 0 calc(4rem + env(safe-area-inset-bottom)) 0;
@@ -147,7 +143,8 @@ button {
 
 .top-bar {
   position: absolute;
-  z-index: 2;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .top-bar {
@@ -179,6 +176,14 @@ button {
   cursor: pointer;
 }
 
+.brand-button,
+.recenter-button {
+  pointer-events: auto;
+}
+.map-screen--menu-open .brand-button {
+  background: var(--surface-strong);
+  border-radius: 0.9rem;
+}
 .brand-button svg {
   width: 1.25rem;
   height: 1.25rem;
@@ -242,16 +247,37 @@ button {
 .app-menu {
   position: absolute;
   z-index: 4;
-  top: max(4.3rem, calc(env(safe-area-inset-top) + 3.3rem));
+  top: max(1.7rem, calc(env(safe-area-inset-top) + 0.85rem));
   left: 1rem;
   display: grid;
   gap: 0.25rem;
-  min-width: 12rem;
-  padding: 0.7rem;
+  width: min(19rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 3.2rem - env(safe-area-inset-bottom));
+  overflow-y: auto;
+  padding: 3rem 0.7rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 0.9rem;
   background: var(--surface-strong);
   box-shadow: 0 0.6rem 1.8rem var(--sheet-shadow);
+  transform-origin: 1.25rem 1.25rem;
+  pointer-events: auto;
+}
+.menu-morph-enter-active,
+.menu-morph-leave-active {
+  transition:
+    transform 220ms ease,
+    opacity 180ms ease;
+}
+.menu-morph-enter-from,
+.menu-morph-leave-to {
+  transform: scale(0.12);
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-morph-enter-active,
+  .menu-morph-leave-active {
+    transition: none;
+  }
 }
 
 .app-menu button,
@@ -391,6 +417,18 @@ button {
   line-height: 1.1;
 }
 
+.dock-peers {
+  display: flex;
+  width: min(23rem, 100%);
+  min-height: 2.7rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  border-radius: 0.8rem;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  color: var(--text);
+}
 .dock-buttons {
   display: flex;
   justify-content: center;
@@ -873,4 +911,9 @@ legend {
   *::after {
     scroll-behavior: auto !important;
   }
+}
+
+.device-comparison-letters {
+  font-size: 2.5rem;
+  letter-spacing: 0.2em;
 }

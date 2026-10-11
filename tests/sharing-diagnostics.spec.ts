@@ -30,7 +30,7 @@ test('runs the suite with explicit skipped results and a safe copyable report', 
   expect(JSON.stringify(report)).not.toMatch(/#share=|\/ip4\/|latitude|longitude|peerId|https:\/\//)
   await page.getByRole('button', { name: 'Back to diagnostics' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Sharing 0', exact: true })).toBeVisible()
+  await expect(page.locator('.dock-peers')).toContainText('Sharing 0 · Seeing 0')
 })
 
 test('cancels a waiting pair and closes its temporary session', async ({ page }) => {

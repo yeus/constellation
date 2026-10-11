@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
+import type { SharePublication } from '../src/shareDraft.ts'
 
 import { createShareInvitation } from '../src/sharing/shareLink.ts'
+import { openPeerList, openShareCreator } from './fixtures/peer-navigation.ts'
 
 test('rejects an expired pasted link before opening a viewer session', async ({ page }) => {
   const expired = await createShareInvitation({
@@ -11,8 +13,8 @@ test('rejects an expired pasted link before opening a viewer session', async ({ 
     randomBytes: (length) => Uint8Array.from({ length }, (_, index) => index + 1),
   })
   await page.goto('/')
-  await page.getByRole('button', { name: 'Open menu' }).click()
-  await page.getByRole('button', { name: 'Follow a link' }).click()
+  const peerList = await openPeerList(page)
+  await peerList.getByRole('button', { name: 'Add peer' }).click()
   await page.getByLabel('Paste location link').fill(expired.url)
   await page.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
   await expect(page.locator('.toast')).toContainText(/not a valid location link|expired/i)
@@ -25,15 +27,88 @@ test('introduces encrypted P2P sharing and keeps the note dismissed', async ({ p
   const introduction = page.getByRole('region', { name: 'Privacy introduction' })
   await expect(introduction).toContainText('end-to-end encrypted')
   await expect(introduction).toContainText('no central location history')
-  await expect(page.getByRole('button', { name: 'Share location' })).toBeVisible()
+  await expect(page.locator('.dock-peers')).toBeVisible()
 
   await introduction.getByRole('button', { name: 'Got it' }).click()
   await page.reload()
   await expect(introduction).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Share location' }).click()
+  await openShareCreator(page)
   await expect(page.getByRole('dialog')).toContainText(/end-to-end encrypted/i)
   await expect(page.getByRole('dialog')).toContainText(/no central location history/i)
+})
+
+test('return share form keeps foreground and offers Android background when available', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const vueModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+    if (!vueModuleUrl) throw new Error('The Vue browser module was not loaded.')
+    const { createApp, h, reactive } = await import(/* @vite-ignore */ vueModuleUrl)
+    const { default: ShareSheet } = await import('../src/components/ShareSheet.vue')
+    const { createShareDraft, setPublication } = await import('../src/shareDraft.ts')
+    const state = reactive({ draft: createShareDraft(), publications: [] as string[] })
+    const container = document.createElement('div')
+    document.body.append(container)
+    const app = createApp({
+      setup: () => () =>
+        h(ShareSheet, {
+          draft: state.draft,
+          canSubmit: true,
+          backgroundAvailable: true,
+          returnRecipientName: 'the sender',
+          onPublication: (value: SharePublication) => {
+            state.draft = setPublication(state.draft, value)
+            state.publications.push(value)
+          },
+        }),
+    })
+    app.mount(container)
+    ;(
+      window as typeof window & {
+        shareSheetMount?: {
+          app: { unmount: () => void }
+          container: HTMLElement
+          publications: string[]
+        }
+      }
+    ).shareSheetMount = { app, container, publications: state.publications }
+  })
+
+  const form = page.getByRole('dialog', { name: 'Share your location' })
+  await expect(form).toContainText('Sharing back to the sender')
+  await expect(form).toContainText('Only this sender receives the private offer')
+  await expect(form.getByText('Star viewers')).toHaveCount(0)
+  const foreground = form.getByRole('button', { name: /While app is open/ })
+  const background = form.getByRole('button', { name: /In background/ })
+  await expect(foreground).toHaveAttribute('aria-pressed', 'true')
+  await expect(background).toBeVisible()
+  await background.click()
+  await expect(background).toHaveAttribute('aria-pressed', 'true')
+  await expect(form.getByText('Battery and network')).toBeVisible()
+  await foreground.click()
+  await expect(foreground).toHaveAttribute('aria-pressed', 'true')
+  await expect(form.getByText('Battery and network')).toHaveCount(0)
+
+  const publications = await page.evaluate(() => {
+    const testWindow = window as typeof window & {
+      shareSheetMount?: {
+        app: { unmount: () => void }
+        container: HTMLElement
+        publications: string[]
+      }
+    }
+    const mount = testWindow.shareSheetMount
+    if (!mount) throw new Error('The share form fixture is unavailable.')
+    mount.app.unmount()
+    mount.container.remove()
+    delete testWindow.shareSheetMount
+    return mount.publications
+  })
+  expect(publications).toEqual(['background', 'foreground'])
 })
 
 test('offers direct app downloads to Android and Linux web visitors', async ({ browser }) => {
@@ -78,15 +153,21 @@ test('offers direct app downloads to Android and Linux web visitors', async ({ b
       await expect(downloadLink, name).toHaveCount(0)
     }
 
+    await page.evaluate(() => {
+      window.open = (url) => {
+        document.documentElement.dataset.openedProjectUrl = String(url ?? '')
+        return window
+      }
+    })
     await page.getByRole('button', { name: 'Open menu' }).click()
-    await expect(page.getByRole('link', { name: 'GitHub project' })).toHaveAttribute(
-      'href',
+    await page.getByRole('button', { name: 'GitHub project' }).click()
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-opened-project-url',
       'https://github.com/yeus/constellation',
     )
-    await expect(page.getByRole('link', { name: 'Latest release' })).toHaveAttribute(
-      'href',
-      releasesUrl,
-    )
+    await page.getByRole('button', { name: 'Open menu' }).click()
+    await page.getByRole('button', { name: 'Latest release' }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-opened-project-url', releasesUrl)
     await context.close()
   }
 })
@@ -190,8 +271,8 @@ test('explains when the clipboard cannot accept logs', async ({ page }) => {
 test('configures a privacy-preserving location share', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('button', { name: 'Sharing 0' })).toBeVisible()
-  await page.getByRole('button', { name: 'Share location' }).click()
+  await expect(page.locator('.dock-peers')).toContainText('Sharing 0 · Seeing 0')
+  await openShareCreator(page)
 
   const approximate = page.getByRole('button', { name: /Approximate/ })
   const veryCoarse = page.getByRole('button', { name: /Very coarse/ })
@@ -214,14 +295,14 @@ test('configures a privacy-preserving location share', async ({ page }) => {
   await page.getByRole('button', { name: 'Until stopped' }).click()
   await expect(page.getByRole('button', { name: 'Create private link' })).toBeDisabled()
 
-  await page.getByRole('checkbox').check()
+  await page.getByRole('checkbox', { name: /I understand this link stays active/ }).check()
   await expect(page.getByRole('button', { name: 'Create private link' })).toBeEnabled()
 })
 
 test('follows live system light and dark preferences', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
-  await page.getByRole('button', { name: 'Share location' }).click()
+  await openShareCreator(page)
 
   const sheet = page.getByRole('dialog')
   await expect(sheet).toHaveCSS('background-color', 'rgb(255, 255, 255)')
@@ -240,8 +321,8 @@ test('shows local position without publishing and offers link paste', async ({ p
 
   await expect(page.getByRole('button', { name: 'Center on my location' })).toBeVisible()
   await expect(page.getByText('Sharing 0')).toBeVisible()
-  await page.getByRole('button', { name: 'Open menu' }).click()
-  await page.getByRole('button', { name: 'Follow a link' }).click()
+  const peerList = await openPeerList(page)
+  await peerList.getByRole('button', { name: 'Add peer' }).click()
   await expect(page.getByRole('textbox', { name: 'Paste location link' })).toBeVisible()
 })
 
@@ -249,7 +330,7 @@ test('lets the sender optionally include a name and choose foreground sharing', 
   page,
 }) => {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Share location' }).click()
+  await openShareCreator(page)
 
   await page.getByRole('textbox', { name: 'Share a name' }).fill('River')
   await expect(page.getByRole('button', { name: 'While app is open' })).toHaveAttribute(

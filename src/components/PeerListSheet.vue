@@ -1,15 +1,16 @@
 <template>
   <div class="sheet-backdrop" @click.self="emit('close')">
     <section class="share-sheet peer-list" role="dialog" aria-modal="true" :aria-label="dialogName">
-      <header class="sheet-header">
-        <div>
-          <p class="eyebrow">People and location links</p>
-          <h2>Peers</h2>
-        </div>
+      <header class="sheet-header peer-list__header">
+        <h2>Peers</h2>
         <button class="icon-button" type="button" aria-label="Close" @click="emit('close')">
           <CloseIcon />
         </button>
       </header>
+      <div class="peer-list__create-actions">
+        <button type="button" @click="emit('addPeer')">Add peer</button>
+        <button type="button" @click="emit('shareLocation')">Share location</button>
+      </div>
 
       <div class="peer-list__filters" role="group" aria-label="Filter peers">
         <button
@@ -26,6 +27,16 @@
         {{ totalConnectedViewers }} connected across your active links
       </p>
 
+      <label
+        v-if="
+          oldShares.length ||
+          oldFollowing.length ||
+          stoppedViewers.some(({ dismissed }) => dismissed)
+        "
+        class="peer-list__ended-toggle"
+      >
+        <input v-model="showEnded" type="checkbox" /> Show ended
+      </label>
       <p v-if="peers.length === 0" class="field-help">No peers in this list yet.</p>
       <button
         v-if="viewableIds.length > 1 && filter !== 'sharing'"
@@ -36,27 +47,6 @@
         Show all on map
       </button>
 
-      <details v-if="oldShares.length" class="old-shares">
-        <summary>Old sharing links ({{ oldShares.length }})</summary>
-        <div v-for="share in oldShares" :key="share.shareId" class="peer-history-item">
-          <strong>{{ share.name || 'Private link' }}</strong>
-          <span
-            >{{ share.reason === 'revoked' ? 'Revoked by you' : 'Share expired' }} ·
-            {{ new Date(share.endedAt).toLocaleString() }}</span
-          >
-        </div>
-      </details>
-      <details v-if="oldFollowing.length" class="old-shares">
-        <summary>Old seeing shares ({{ oldFollowing.length }})</summary>
-        <div v-for="share in oldFollowing" :key="share.shareId" class="peer-history-item">
-          <strong>{{ share.name || 'Shared location' }}</strong>
-          <span
-            >{{ share.reason === 'revoked' ? 'Revoked by sender' : 'Share expired' }} ·
-            {{ new Date(share.endedAt).toLocaleString() }}</span
-          >
-        </div>
-      </details>
-
       <details
         v-for="peer in peers"
         :key="peer.key"
@@ -65,15 +55,61 @@
         @toggle="setPeerExpanded(peer, $event)"
       >
         <summary class="peer-list__summary">
-          <PeerAvatar :name="peer.name" />
+          <PeerAvatar :name="peer.name" :waiting="peer.waiting" />
           <span class="peer-list__summary-name">{{ peer.name }}</span>
-          <small>
-            {{ peer.direction }}
-            <template v-if="peer.shares.length"> · {{ peer.shares.length }} connected</template>
+          <small
+            >{{ peer.direction }} · {{ peerStatus(peer) }}
+            <template v-if="peer.stopped.some(({ dismissed }) => !dismissed)">
+              ·
+              {{
+                new Date(
+                  peer.stopped.find(({ dismissed }) => !dismissed)!.recordedAt,
+                ).toLocaleString()
+              }}
+            </template>
           </small>
+          <button
+            v-if="peer.following.length"
+            class="peer-list__map-action"
+            type="button"
+            :disabled="!peer.following.some((follow) => viewableIds.includes(follow.shareId))"
+            :title="
+              peer.following.some((follow) => viewableIds.includes(follow.shareId))
+                ? 'Show this peer on map'
+                : 'No location available to show'
+            "
+            :aria-label="`Show ${peer.name} on map`"
+            @click.stop.prevent="
+              emit(
+                'focusPeer',
+                peer.following.map((follow) => follow.shareId),
+              )
+            "
+          >
+            <MapPin aria-hidden="true" />
+          </button>
         </summary>
 
         <div class="peer-list__details">
+          <div v-for="stopped in peer.stopped" :key="stopped.eventId" class="peer-history-item">
+            <strong>Stopped following</strong>
+            <span>Reported {{ new Date(stopped.recordedAt).toLocaleString() }}</span>
+            <button
+              v-if="!stopped.dismissed"
+              type="button"
+              class="peer-text-action"
+              @click="emit('dismissStopped', stopped.shareId, stopped.peerId)"
+            >
+              Dismiss
+            </button>
+          </div>
+          <div v-for="ended in peer.ended" :key="ended.key" class="peer-history-item">
+            <strong>{{ ended.name }}</strong>
+            <span
+              >{{ ended.kind === 'sharing' ? 'Shared' : 'Viewed' }} · {{ ended.reason }} ·
+              {{ new Date(ended.endedAt).toLocaleString() }}</span
+            >
+          </div>
           <div v-if="peer.peerId" class="peer-link-item">
             <button
               v-if="editingProfile !== peer.peerId"
@@ -232,18 +268,14 @@
               {{ follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt) }}</span
             >
             <button
-              v-if="
-                !follow.returnPromptSeen &&
-                follow.status !== 'approval-pending' &&
-                follow.status !== 'denied'
-              "
+              v-if="follow.status !== 'approval-pending' && follow.status !== 'denied'"
               class="secondary-action"
               type="button"
               :disabled="shareBackBusy"
-              :aria-label="`Share approximate location for 1 hour back to ${peer.name}`"
+              :aria-label="`Share back to ${peer.name}`"
               @click="emit('shareBack', follow.shareId)"
             >
-              Share location back
+              Share back
             </button>
             <div v-if="editingFollow === follow.shareId" class="peer-viewer-details__edit">
               <input
@@ -301,10 +333,11 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { LucidePencilLine as PencilLine } from '@lucide/vue'
+import { LucideMapPin as MapPin, LucidePencilLine as PencilLine } from '@lucide/vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import PeerAvatar from './PeerAvatar.vue'
 import type { PeerNamePreference } from '../sharing/peerNames.ts'
+import type { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import {
   FOLLOW_COLORS,
   generatedFollowName,
@@ -322,6 +355,15 @@ type PeerEntry = {
   name: string
   color: string
   direction: string
+  waiting: boolean
+  stopped: StoppedViewerRecord[]
+  ended: {
+    key: string
+    kind: 'sharing' | 'viewing'
+    name: string
+    endedAt: number
+    reason: string
+  }[]
 }
 
 const props = defineProps<{
@@ -330,16 +372,20 @@ const props = defineProps<{
   following: readonly FollowSummary[]
   filter: PeerFilter
   viewableIds: readonly string[]
+  limitedIds?: readonly string[]
   selectedId?: string
   shareBackBusy: boolean
+  stoppedViewers: readonly StoppedViewerRecord[]
   oldShares: readonly {
     shareId: string
+    peerId?: string
     name?: string
     endedAt: number
     reason: 'revoked' | 'expired'
   }[]
   oldFollowing: readonly {
     shareId: string
+    peerId?: string
     name?: string
     endedAt: number
     reason: 'revoked' | 'expired'
@@ -347,7 +393,11 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   close: []
+  addPeer: []
+  shareLocation: []
+  focusPeer: [shareIds: string[]]
   filter: [filter: PeerFilter]
+  dismissStopped: [shareId: string, peerId: string]
   show: [share: ShareSummary]
   revoke: [shareId: string]
   viewerName: [shareId: string, fingerprint: string, name: string]
@@ -370,6 +420,7 @@ const filters: readonly { value: PeerFilter; label: string }[] = [
 const dialogName = computed(() =>
   props.filter === 'sharing' ? 'Active shares' : props.filter === 'viewing' ? 'Following' : 'Peers',
 )
+const showEnded = ref(false)
 const totalConnectedViewers = computed(() =>
   props.shares.reduce((count, share) => count + share.viewerCount, 0),
 )
@@ -386,6 +437,9 @@ const peers = computed(() => {
       name: 'Unknown peer',
       color: '#438ec9',
       direction: '',
+      waiting: false,
+      stopped: [],
+      ended: [],
     }
     entries.set(key, created)
     return created
@@ -409,8 +463,40 @@ const peers = computed(() => {
     getEntry(key, follow.peerId).following.push(follow)
   }
 
+  for (const ended of props.oldShares) {
+    getEntry(
+      ended.peerId ? `peer:${ended.peerId}` : `share:${ended.shareId}`,
+      ended.peerId,
+    ).ended.push({
+      key: `share:${ended.shareId}:${ended.peerId ?? 'link'}`,
+      kind: 'sharing',
+      name: ended.name || 'Private link',
+      endedAt: ended.endedAt,
+      reason: ended.reason,
+    })
+  }
+  for (const ended of props.oldFollowing) {
+    getEntry(
+      ended.peerId ? `peer:${ended.peerId}` : `follow:${ended.shareId}`,
+      ended.peerId,
+    ).ended.push({
+      key: `follow:${ended.shareId}`,
+      kind: 'viewing',
+      name: ended.name || 'Shared location',
+      endedAt: ended.endedAt,
+      reason: ended.reason,
+    })
+  }
+
+  for (const record of props.stoppedViewers) {
+    getEntry(`peer:${record.peerId}`, record.peerId).stopped.push(record)
+  }
+
   return [...entries.values()]
     .map((entry) => {
+      const peerPreference = props.peerNamePreferences?.find(
+        ({ peerId }) => peerId === entry.peerId,
+      )
       const localFollowName = entry.following.find(
         (follow) => follow.localName && follow.localName !== generatedFollowName(follow.shareId),
       )?.localName
@@ -422,22 +508,81 @@ const peers = computed(() => {
         entry.following[0]?.localName ||
         (entry.shares.some((connection) => connection.viewer)
           ? 'Connected peer'
-          : 'Waiting for a viewer')
+          : entry.peerId
+            ? peerPreference?.nickname ||
+              peerPreference?.receivedName ||
+              (entry.stopped.length ? 'Stopped sharing' : 'Former peer')
+            : entry.stopped.length
+              ? 'Stopped sharing'
+              : entry.ended[0]?.name || 'Waiting for a viewer')
+      entry.waiting =
+        entry.shares.length > 0 &&
+        entry.shares.every(({ viewer }) => !viewer) &&
+        !entry.following.length
       entry.color = entry.following[0]?.color ?? '#438ec9'
       const sharing = entry.shares.length > 0
       const viewing = entry.following.length > 0
-      entry.direction = sharing && viewing ? 'Sharing and viewing' : sharing ? 'Sharing' : 'Viewing'
+      entry.direction =
+        sharing && viewing
+          ? 'Sharing and viewing'
+          : sharing
+            ? 'Sharing'
+            : viewing
+              ? 'Viewing'
+              : entry.stopped.length
+                ? 'Stopped following'
+                : 'Ended'
       return entry
     })
     .filter((entry) => {
-      if (props.filter === 'sharing') return entry.shares.length > 0
-      if (props.filter === 'viewing') return entry.following.length > 0
-      if (props.filter === 'both') return entry.shares.length > 0 && entry.following.length > 0
+      if (
+        props.limitedIds &&
+        !entry.following.some(({ shareId }) => props.limitedIds?.includes(shareId))
+      )
+        return false
+      if (
+        !showEnded.value &&
+        !entry.shares.length &&
+        !entry.following.length &&
+        !entry.stopped.some(({ dismissed }) => !dismissed)
+      )
+        return false
+      if (props.filter === 'sharing')
+        return (
+          entry.stopped.some(({ dismissed }) => !dismissed) ||
+          (showEnded.value && entry.stopped.length > 0) ||
+          entry.shares.length > 0 ||
+          (showEnded.value && entry.ended.some(({ kind }) => kind === 'sharing'))
+        )
+      if (props.filter === 'viewing')
+        return (
+          entry.following.length > 0 ||
+          (showEnded.value && entry.ended.some(({ kind }) => kind === 'viewing'))
+        )
+      if (props.filter === 'both') {
+        const sharing =
+          entry.shares.length > 0 ||
+          (showEnded.value && entry.ended.some(({ kind }) => kind === 'sharing'))
+        const viewing =
+          entry.following.length > 0 ||
+          (showEnded.value && entry.ended.some(({ kind }) => kind === 'viewing'))
+        return sharing && viewing
+      }
       return true
     })
     .sort((left, right) => left.name.localeCompare(right.name))
 })
 
+const peerStatus = (peer: PeerEntry): string => {
+  if (peer.waiting) return 'Waiting'
+  if (peer.following.some(({ status }) => status === 'live')) return 'Live'
+  if (peer.following.some(({ status }) => status === 'delayed')) return 'Delayed'
+  if (peer.following.some(({ status }) => status === 'stale')) return 'Stale'
+  if (peer.shares.some(({ viewer }) => viewer)) return 'Connected'
+  return peer.stopped.some(({ dismissed }) => !dismissed)
+    ? 'Stopped following'
+    : (peer.following[0]?.status ?? 'Ended')
+}
 const expandedRelationshipIds = ref<ReadonlySet<string>>(new Set())
 const collapsedSelectedFollowIds = ref<ReadonlySet<string>>(new Set())
 const relationshipIds = (peer: PeerEntry): readonly string[] => [
@@ -450,6 +595,7 @@ const isPeerExpanded = (peer: PeerEntry): boolean => {
   const ids = relationshipIds(peer)
   return (
     ids.some((id) => expandedRelationshipIds.value.has(id)) ||
+    peer.stopped.some(({ dismissed }) => !dismissed) ||
     (isSelectedPeer(peer) && !collapsedSelectedFollowIds.value.has(`follow:${props.selectedId}`))
   )
 }
@@ -541,6 +687,54 @@ const remaining = (timestamp: number): string => {
 </script>
 
 <style scoped>
+.peer-list__header {
+  position: relative;
+  justify-content: center;
+}
+.peer-list__header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.peer-list__header .icon-button {
+  position: absolute;
+  right: 0;
+}
+.peer-list__create-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.peer-list__create-actions button,
+.peer-list__map-action {
+  min-height: 2.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--control-fill);
+  color: var(--text);
+  cursor: pointer;
+}
+.peer-list__ended-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.peer-list__map-action {
+  display: grid;
+  width: 2.5rem;
+  flex: 0 0 auto;
+  place-items: center;
+}
+.peer-list__map-action svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.peer-list__map-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .peer-list__filters,
 .peer-link-item__actions,
 .peer-viewer-details__edit {
@@ -570,8 +764,8 @@ const remaining = (timestamp: number): string => {
 .peer-history-item,
 .peer-link-item {
   display: grid;
-  gap: 0.45rem;
-  padding: 0.8rem 0;
+  gap: 0.25rem;
+  padding: 0.5rem 0;
   border-top: 1px solid var(--border);
 }
 
@@ -600,8 +794,8 @@ const remaining = (timestamp: number): string => {
 .peer-list__details,
 .peer-viewer-details__content {
   display: grid;
-  gap: 0.5rem;
-  padding-left: 0.9rem;
+  gap: 0.3rem;
+  padding-left: 0.5rem;
 }
 
 .peer-viewer-details summary {

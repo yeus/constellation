@@ -4,14 +4,15 @@
     :style="color ? { '--peer-avatar-color': color } : undefined"
     aria-hidden="true"
   >
-    {{ peerInitials(name) }}
+    <Hourglass v-if="waiting" aria-label="Waiting for a viewer" />
+    <template v-else>{{ peerInitials(name) }}</template>
   </span>
 </template>
-
 <script setup lang="ts">
+import { LucideHourglass as Hourglass } from '@lucide/vue'
 import { peerInitials } from '../identity/peerAvatar.ts'
 
-defineProps<{ name: string; color?: string }>()
+defineProps<{ name: string; color?: string; waiting?: boolean }>()
 </script>
 
 <style scoped>
@@ -28,5 +29,9 @@ defineProps<{ name: string; color?: string }>()
   font-size: 0.8rem;
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+.peer-avatar svg {
+  width: 1.2rem;
+  height: 1.2rem;
 }
 </style>

@@ -23,6 +23,10 @@
       </p>
       <h3>App peer · {{ foreground.peerStatus }}</h3>
       <p class="field-help">
+        Peers: Direct {{ foregroundCounts.direct }} · Via relay {{ foregroundCounts.viaRelay }} ·
+        Both {{ foregroundCounts.both }}
+      </p>
+      <p class="field-help">
         Local location: {{ location.status
         }}<span v-if="'observation' in location">
           · last fix {{ elapsed(location.observation.capturedAt) }} ago</span
@@ -77,6 +81,10 @@
         <p v-if="background.sampling" class="field-help">
           Battery sampling: {{ background.sampling === 'saver' ? 'battery saver' : 'balanced' }}.
         </p>
+        <p v-if="background.diagnostics" class="field-help">
+          Peers: Direct {{ backgroundCounts?.direct }} · Via relay
+          {{ backgroundCounts?.viaRelay }} · Both {{ backgroundCounts?.both }}
+        </p>
         <p v-if="!background.diagnostics" class="field-help">
           Detailed native connections are unavailable in this build.
         </p>
@@ -114,6 +122,7 @@ import { computed, ref } from 'vue'
 import type { AndroidBackgroundStatus } from '../android/backgroundSharing.ts'
 import type { BrowserLocationState } from '../location/browser.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
+import { countPeerPaths } from '../sharing/networkPeerCounts.ts'
 import CloseIcon from './icons/CloseIcon.vue'
 
 const props = defineProps<{
@@ -121,6 +130,12 @@ const props = defineProps<{
   location: BrowserLocationState
   background?: AndroidBackgroundStatus
 }>()
+const foregroundCounts = computed(() => countPeerPaths(props.foreground.connections))
+const backgroundCounts = computed(() =>
+  props.background?.diagnostics
+    ? countPeerPaths(props.background.diagnostics.connections)
+    : undefined,
+)
 const backgroundViewerCount = computed(
   () => props.background?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0,
 )

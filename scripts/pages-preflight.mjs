@@ -165,7 +165,7 @@ const assertBuiltApp = async (browser, origin, requests) => {
   const boot = async (url) => {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90_000 })
     try {
-      await page.getByRole('button', { name: 'Share location' }).waitFor({ timeout: 60_000 })
+      await page.locator('.dock-peers').waitFor({ timeout: 60_000 })
     } catch (error) {
       const body = await page.textContent('body').catch(() => '')
       throw new Error(
@@ -205,7 +205,7 @@ const assertBuiltApp = async (browser, origin, requests) => {
   await waitForInvitationHandling(fragment)
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.getByRole('button', { name: 'Share location' }).waitFor({ timeout: 60_000 })
+  await page.locator('.dock-peers').waitFor({ timeout: 60_000 })
   await waitForInvitationHandling(fragment)
   assert.ok(
     requests.every((request) => !request.includes('#') && !request.includes('share=')),

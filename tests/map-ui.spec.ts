@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test'
+import { withTwoSources } from './fixtures/two-sources.ts'
+import { openPeerList, openShareCreator, saveLocationPreview } from './fixtures/peer-navigation.ts'
 
 test('uses local browser fonts for labeled map layers', async ({ page }) => {
   await page.goto('/')
@@ -11,15 +13,12 @@ test('uses local browser fonts for labeled map layers', async ({ page }) => {
   expect(style.layers.some((layer) => layer.type === 'symbol')).toBe(true)
 })
 
-test('keeps map zoom controls outside the share button hit area', async ({ page }) => {
+test('keeps map zoom controls outside the compact peer navigation dock', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 860 })
   await page.goto('/')
 
   const navigation = page.locator('.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group')
-  const overlays = [
-    page.getByRole('button', { name: 'Share location' }),
-    page.locator('.connection-dock'),
-  ]
+  const overlays = [page.locator('.dock-peers'), page.locator('.connection-dock')]
   await expect(navigation).toBeVisible()
   const [navigationBox, ...overlayBoxes] = await Promise.all([
     navigation.boundingBox(),
@@ -40,14 +39,17 @@ test('keeps map zoom controls outside the share button hit area', async ({ page 
   })
 })
 
-test('preserves the map viewport when sharing actions fold', async ({ page }) => {
+test('preserves the map viewport when the compact peer list opens and closes', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 860 })
   await page.goto('/')
   const canvas = page.locator('.maplibregl-canvas')
   const surface = page.locator('.map-surface')
   await expect(canvas).toBeVisible()
   const initial = await surface.boundingBox()
-  await page.getByRole('button', { name: 'Show sharing actions' }).click()
+  await page.locator('.dock-peers').click()
+  const peers = page.getByRole('dialog', { name: 'Peers' })
+  await expect(peers).toBeVisible()
+  await peers.getByRole('button', { name: 'Close' }).click()
   await expect
     .poll(async () => {
       const bounds = await surface.boundingBox()
@@ -62,9 +64,7 @@ test('preserves the map viewport when sharing actions fold', async ({ page }) =>
     .toBe(Math.round((await surface.boundingBox())?.height ?? 0))
 })
 
-test('keeps map attribution clear of sharing actions and at the lower-right when folded', async ({
-  page,
-}) => {
+test('keeps map attribution clear of the peer dock at the lower-right', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 })
   await page.goto('/')
 
@@ -77,7 +77,7 @@ test('keeps map attribution clear of sharing actions and at the lower-right when
 
   expect(viewport.width - bounds.x - bounds.width).toBeLessThanOrEqual(24)
 
-  const shareBounds = await page.getByRole('button', { name: 'Share location' }).boundingBox()
+  const shareBounds = await page.locator('.dock-peers').boundingBox()
   if (!shareBounds) throw new Error('Expected the sharing button to be laid out.')
   const overlapsShare =
     bounds.x < shareBounds.x + shareBounds.width &&
@@ -85,7 +85,7 @@ test('keeps map attribution clear of sharing actions and at the lower-right when
     bounds.y < shareBounds.y + shareBounds.height &&
     bounds.y + bounds.height > shareBounds.y
   expect(overlapsShare).toBe(false)
-  await page.getByRole('button', { name: 'Show sharing actions' }).click()
+  await expect(page.locator('.dock-peers')).toBeVisible()
   const foldedBounds = await attribution.boundingBox()
   if (!foldedBounds) throw new Error('Expected attribution after folding sharing actions.')
   expect(mapBounds.y + mapBounds.height - foldedBounds.y - foldedBounds.height).toBeLessThanOrEqual(
@@ -392,4 +392,218 @@ test('keeps map credit visible and persists the selected basemap family', async 
     'true',
   )
   await expect(page.getByText('© OpenStreetMap contributors')).toBeVisible()
+})
+
+test('shows oversized uncertainty avatars and reports every overflow peer', async ({
+  page,
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(180_000)
+  if (!baseURL) throw new Error('The area workflow requires the local relay.')
+  await page.setViewportSize({ width: 320, height: 640 })
+  await page.route('**/*.pmtiles*', (route) => route.abort())
+  await page.goto('/')
+
+  await page.evaluate(async () => {
+    const vueModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+    const maplibreModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/maplibre-gl.js'))?.name
+    if (!vueModuleUrl || !maplibreModuleUrl)
+      throw new Error('The map browser modules were not loaded.')
+    const { createApp, h } = await import(/* @vite-ignore */ vueModuleUrl)
+    const maplibre = await import(/* @vite-ignore */ maplibreModuleUrl)
+    const { default: LocationMap } = await import('../src/components/LocationMap.vue')
+    const { locationAreaBounds } = await import('../src/location/mapModel.ts')
+    const labels = ['Ada North', 'Ben South', 'Cora East', 'Drew West', 'Eli Center', 'Faye Coast']
+    const locations = labels.map((label, index) => ({
+      id: `synthetic-peer-${index}`,
+      latitude: 20,
+      longitude: 0,
+      precision: 'approximate' as const,
+      radiusMeters: 8_000_000,
+      label,
+    }))
+    const container = document.createElement('div')
+    container.id = 'area-stack-test'
+    Object.assign(container.style, {
+      position: 'fixed',
+      inset: '0 auto auto 0',
+      width: '320px',
+      height: '360px',
+      zIndex: '9999',
+    })
+    document.body.append(container)
+    const cameraBounds: unknown[] = []
+    const originalFitBounds = maplibre.Map.prototype.fitBounds
+    maplibre.Map.prototype.fitBounds = function (bounds: unknown) {
+      cameraBounds.push(bounds)
+      return originalFitBounds.call(this, bounds)
+    }
+    const overflowIds: string[][] = []
+    const app = createApp({
+      render: () =>
+        h(LocationMap, {
+          locations,
+          decluttering: {
+            enabled: true,
+            groupMarkerCollisions: true,
+            groupUncertaintyOverlap: true,
+            uncertaintyOverlapThreshold: 0.45,
+            markerCollisionDistancePx: 48,
+          },
+          onAreaOverflow: (ids: string[]) => overflowIds.push(ids),
+        }),
+    })
+    app.mount(container)
+    const testWindow = window as typeof window & {
+      areaStackTest?: {
+        app: { unmount: () => void }
+        container: HTMLElement
+        cameraBounds: unknown[]
+        expectedBounds: unknown
+        overflowIds: string[][]
+        restoreFitBounds: () => void
+      }
+    }
+    testWindow.areaStackTest = {
+      app,
+      container,
+      cameraBounds,
+      expectedBounds: locationAreaBounds(locations[0]!),
+      overflowIds,
+      restoreFitBounds: () => {
+        maplibre.Map.prototype.fitBounds = originalFitBounds
+      },
+    }
+  })
+
+  const mapRoot = page.locator('#area-stack-test')
+  const stack = mapRoot.locator('.location-map__large-peers')
+  await expect(stack).toBeVisible({ timeout: 30_000 })
+  await expect(stack).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(stack).toHaveCSS('border-width', '0px')
+  await expect(stack.locator('h1, h2, h3, h4, p')).toHaveCount(0)
+  await expect(stack.getByRole('button')).toHaveCount(4)
+  expect(await stack.locator('.peer-avatar').allTextContents()).toEqual(['AN', 'BS', 'CE'])
+
+  const stackBounds = await stack.boundingBox()
+  const mapBounds = await mapRoot.boundingBox()
+  if (!stackBounds || !mapBounds) throw new Error('Expected the avatar stack to fit the map area.')
+  expect(stackBounds.x).toBeGreaterThanOrEqual(mapBounds.x)
+  expect(stackBounds.x + stackBounds.width).toBeLessThanOrEqual(mapBounds.x + mapBounds.width)
+  expect(stackBounds.y + stackBounds.height).toBeLessThanOrEqual(mapBounds.y + mapBounds.height)
+  expect(stackBounds.x - mapBounds.x).toBeLessThanOrEqual(16)
+  expect(mapBounds.y + mapBounds.height - stackBounds.y - stackBounds.height).toBeLessThanOrEqual(
+    24,
+  )
+  for (const control of [
+    mapRoot.locator('.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group'),
+    mapRoot.locator('.maplibregl-ctrl-attrib'),
+  ]) {
+    const controlBounds = await control.boundingBox()
+    if (!controlBounds) throw new Error('Expected map controls and attribution to be laid out.')
+    const overlaps =
+      stackBounds.x < controlBounds.x + controlBounds.width &&
+      stackBounds.x + stackBounds.width > controlBounds.x &&
+      stackBounds.y < controlBounds.y + controlBounds.height &&
+      stackBounds.y + stackBounds.height > controlBounds.y
+    expect(overlaps).toBe(false)
+  }
+
+  await stack.getByRole('button', { name: 'Show all peers in this area' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              areaStackTest: { overflowIds: string[][] }
+            }
+          ).areaStackTest.overflowIds,
+      ),
+    )
+    .toEqual([
+      [
+        'synthetic-peer-0',
+        'synthetic-peer-1',
+        'synthetic-peer-2',
+        'synthetic-peer-3',
+        'synthetic-peer-4',
+        'synthetic-peer-5',
+      ],
+    ])
+
+  await stack.getByRole('button', { name: 'Show Ada North area on map' }).click()
+  const cameraBounds = await page.evaluate(() => {
+    const testWindow = window as typeof window & {
+      areaStackTest: { cameraBounds: unknown[]; expectedBounds: unknown }
+    }
+    return {
+      actual: testWindow.areaStackTest.cameraBounds,
+      expected: testWindow.areaStackTest.expectedBounds,
+    }
+  })
+  expect(cameraBounds.actual).toEqual([cameraBounds.expected])
+
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & {
+      areaStackTest?: {
+        app: { unmount: () => void }
+        container: HTMLElement
+        restoreFitBounds: () => void
+      }
+    }
+    const fixture = testWindow.areaStackTest
+    if (!fixture) return
+    fixture.app.unmount()
+    fixture.restoreFitBounds()
+    fixture.container.remove()
+    delete testWindow.areaStackTest
+  })
+
+  // Component geometry runs in both projects; real transport integration runs once.
+  if (testInfo.project.name !== 'desktop') return
+  await withTwoSources(
+    browser,
+    baseURL,
+    { viewport: { width: 320, height: 640 } },
+    async ({ viewer }) => {
+      await saveLocationPreview(viewer)
+      await openShareCreator(viewer)
+      await viewer.getByRole('button', { name: 'Create private link' }).click()
+      await expect(viewer.getByLabel('Share link')).toBeVisible({ timeout: 30_000 })
+      await viewer.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+      const allPeers = await openPeerList(viewer)
+      await expect(allPeers.locator('details.peer-list__item')).toHaveCount(3)
+      await allPeers.getByRole('button', { name: 'Close' }).click()
+      const introduction = viewer.getByRole('region', { name: 'Privacy introduction' })
+      if (await introduction.isVisible())
+        await introduction.getByRole('button', { name: 'Got it' }).click()
+      // Control the actual map surface geometry to exercise overflow with two real peers.
+      // The screen's minimum height otherwise keeps enough stack slots for both.
+      await viewer.locator('.map-surface').evaluate((surface) => {
+        const element = surface as HTMLElement
+        element.style.height = '250px'
+        element.style.bottom = 'auto'
+      })
+      const overflow = viewer.getByRole('button', { name: 'Show all peers in this area' })
+      await expect(overflow).toBeVisible({ timeout: 30_000 })
+      await overflow.click()
+      const areaPeers = viewer.locator('.peer-list')
+      await expect(areaPeers.locator('details.peer-list__item')).toHaveCount(2)
+      await expect(areaPeers.locator('.peer-list__summary-name')).toHaveText(['Forest', 'River'])
+      await areaPeers.getByRole('button', { name: 'Close' }).click()
+      const restored = await openPeerList(viewer)
+      await expect(restored.locator('details.peer-list__item')).toHaveCount(3)
+      await expect(restored.getByRole('button', { name: 'All', exact: true })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+    },
+    { afterFirstFollow: saveLocationPreview, sourceAccuracyMeters: 8_000_000 },
+  )
 })

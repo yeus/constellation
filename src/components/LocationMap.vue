@@ -34,20 +34,46 @@
           <PeerAvatar :name="member.label || 'Shared location'" :color="member.color" />
         </button>
       </div>
+      <button
+        v-for="marker in individualAvatars"
+        :key="marker.location.id"
+        class="location-map__single-avatar"
+        type="button"
+        :style="{ left: `${marker.x}px`, top: `${marker.y}px` }"
+        :aria-label="`Show ${marker.location.label || 'shared location'} details`"
+        @click.stop="emit('select', marker.location.id)"
+      >
+        <PeerAvatar
+          :name="marker.location.label || 'Shared location'"
+          :color="marker.location.color"
+        />
+      </button>
       <aside
         v-if="presentation.largePeers.length"
         class="location-map__large-peers"
         aria-label="Peers around this area"
       >
-        <h2>Peers around this area</h2>
         <button
-          v-for="location in presentation.largePeers"
+          v-for="location in visibleLargePeers"
           :key="location.id"
           type="button"
-          @click.stop="emit('select', location.id)"
+          :aria-label="`Show ${location.label || 'shared location'} area on map`"
+          @click.stop="centerOn(location)"
         >
           <PeerAvatar :name="location.label || 'Shared location'" :color="location.color" />
-          <span>{{ location.label || 'Shared location' }}</span>
+        </button>
+        <button
+          v-if="presentation.largePeers.length > maxStackItems"
+          type="button"
+          aria-label="Show all peers in this area"
+          @click.stop="
+            emit(
+              'areaOverflow',
+              presentation.largePeers.map(({ id }) => id),
+            )
+          "
+        >
+          …
         </button>
       </aside>
     </div>
@@ -60,7 +86,7 @@
 <script setup lang="ts">
 import { AttributionControl, Map, NavigationControl, type GeoJSONSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { describeDiagnosticError, type SessionLogInput } from '../diagnostics/sessionLog.ts'
 import {
@@ -99,6 +125,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{
   select: [shareId: string]
+  areaOverflow: [shareIds: string[]]
   diagnostic: [entry: SessionLogInput]
 }>()
 
@@ -112,6 +139,18 @@ const presentation = ref<MapPresentation>({
   groups: [],
   largePeers: [],
 })
+const maxStackItems = computed(() =>
+  Math.max(1, Math.floor(Math.max(0, presentation.value.height - 160) / 49)),
+)
+const visibleLargePeers = computed(() =>
+  presentation.value.largePeers.slice(
+    0,
+    presentation.value.largePeers.length > maxStackItems.value
+      ? maxStackItems.value - 1
+      : maxStackItems.value,
+  ),
+)
+const individualAvatars = ref<{ location: MapLocation; x: number; y: number }[]>([])
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
 const runtime = createPmtilesRuntime()
@@ -253,6 +292,18 @@ const updatePresentation = (): void => {
     props.decluttering,
   )
   presentation.value = next
+  const visible = new Set(next.mapLocations.map(({ id }) => id))
+  individualAvatars.value = projectedLocations
+    .filter(
+      ({ location, x, y }) =>
+        !location.isOwn &&
+        visible.has(location.id) &&
+        x >= 0 &&
+        x <= clientWidth &&
+        y >= 0 &&
+        y <= clientHeight,
+    )
+    .map(({ location, x, y }) => ({ location, x, y }))
 }
 
 const updateFeatureData = (): void => {
@@ -380,6 +431,20 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
+.location-map__single-avatar {
+  position: absolute;
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
 .location-map__group-member {
   display: grid;
   width: 2rem;
@@ -400,54 +465,31 @@ onBeforeUnmount(() => {
 
 .location-map__large-peers {
   position: absolute;
-  top: 4.25rem;
+  bottom: 1.25rem;
   left: 0.75rem;
   display: grid;
-  width: min(15rem, calc(100% - 1.5rem));
-  max-height: min(34vh, 18rem);
-  gap: 0.25rem;
-  overflow-y: auto;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 0.8rem;
-  background: var(--surface);
-  box-shadow: 0 2px 12px var(--sheet-shadow);
+  width: 2.6rem;
+  max-height: calc(100% - 9rem);
+  align-content: end;
+  gap: 0.45rem;
   pointer-events: auto;
 }
-
-.location-map__large-peers h2 {
-  margin: 0 0 0.2rem;
-  font-size: 0.75rem;
-}
-
 .location-map__large-peers button {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem;
+  display: grid;
+  width: 2.6rem;
+  height: 2.6rem;
+  place-items: center;
+  padding: 0;
   border: 0;
-  border-radius: 0.5rem;
+  border-radius: 50%;
   background: transparent;
   color: var(--text);
-  text-align: left;
+  font-size: 1.4rem;
   cursor: pointer;
 }
-
-.location-map__large-peers button:hover {
-  background: var(--control-fill);
-}
-
 .location-map__large-peers :deep(.peer-avatar) {
-  width: 1.9rem;
-  height: 1.9rem;
-  font-size: 0.65rem;
-}
-
-@media (max-width: 699px) {
-  .location-map__large-peers {
-    top: calc(4.25rem + 4rem + env(safe-area-inset-top));
-  }
+  width: 2.5rem;
+  height: 2.5rem;
 }
 
 :deep(.maplibregl-ctrl-bottom-right) {
@@ -458,6 +500,14 @@ onBeforeUnmount(() => {
   position: absolute;
   right: 0;
   bottom: calc(2.25rem + var(--map-control-lift, 0rem));
+}
+
+:deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group button) {
+  width: 58px;
+  height: 58px;
+}
+:deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group button .maplibregl-ctrl-icon) {
+  background-size: 44px 44px;
 }
 
 :deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib) {

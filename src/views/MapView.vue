@@ -1,7 +1,7 @@
 <template>
   <main
     class="map-screen"
-    :class="{ 'map-screen--actions-open': actionsExpanded }"
+    :class="{ 'map-screen--menu-open': menuOpen }"
     @click.capture="closeMenuOnOutsideClick"
   >
     <div class="map-surface" aria-label="Location map">
@@ -11,6 +11,7 @@
         :decluttering="mapDecluttering"
         :map-family="mapFamily"
         @select="openFollowDetails"
+        @area-overflow="openAreaPeers"
         @diagnostic="sessionLog.record"
       />
     </div>
@@ -19,7 +20,8 @@
       <button
         class="brand-button"
         type="button"
-        aria-label="Open menu"
+        :aria-label="menuOpen ? 'Close menu' : 'Open menu'"
+        :aria-expanded="menuOpen"
         @click="menuOpen = !menuOpen"
       >
         <Menu aria-hidden="true" />
@@ -35,93 +37,84 @@
       </button>
     </header>
 
-    <section v-if="menuOpen" class="app-menu" aria-label="App menu">
-      <p class="eyebrow">Map style</p>
-      <button
-        type="button"
-        :aria-pressed="mapFamily === 'default'"
-        @click="selectMapFamily('default')"
-      >
-        Default map
-      </button>
-      <button
-        type="button"
-        :aria-pressed="mapFamily === 'minimalist'"
-        @click="selectMapFamily('minimalist')"
-      >
-        Minimalist map
-      </button>
-      <details class="map-decluttering-settings">
-        <summary>Map decluttering</summary>
-        <label>
-          <input v-model="mapDecluttering.enabled" type="checkbox" />
-          Group nearby peers
-        </label>
-        <label>
-          <input
-            v-model="mapDecluttering.groupMarkerCollisions"
-            type="checkbox"
-            :disabled="!mapDecluttering.enabled"
-          />
-          Group colliding markers
-        </label>
-        <label>
-          <input
-            v-model="mapDecluttering.groupUncertaintyOverlap"
-            type="checkbox"
-            :disabled="!mapDecluttering.enabled"
-          />
-          Group overlapping areas
-        </label>
-        <label class="map-decluttering-settings__range">
-          <span
-            >Area overlap:
-            {{ Math.round(mapDecluttering.uncertaintyOverlapThreshold * 100) }}%</span
-          >
-          <input
-            v-model.number="mapDecluttering.uncertaintyOverlapThreshold"
-            type="range"
-            min="0.5"
-            max="1"
-            step="0.05"
-            :disabled="!mapDecluttering.enabled || !mapDecluttering.groupUncertaintyOverlap"
-          />
-        </label>
-        <label class="map-decluttering-settings__range">
-          <span>Marker spacing: {{ mapDecluttering.markerCollisionDistancePx }} px</span>
-          <input
-            v-model.number="mapDecluttering.markerCollisionDistancePx"
-            type="range"
-            min="12"
-            max="48"
-            step="2"
-            :disabled="!mapDecluttering.enabled || !mapDecluttering.groupMarkerCollisions"
-          />
-        </label>
-      </details>
-      <button type="button" @click="openAbout">Privacy and licenses</button>
-      <button type="button" @click="copyLogs">Copy logs</button>
-      <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
-      <button type="button" @click="openDiagnostics">P2P diagnostics</button>
-      <button type="button" @click="openFollowInput">Follow a link</button>
-      <button type="button" @click="openFollowing">Following ({{ activeFollowing.length }})</button>
-      <a
-        v-if="!isNative"
-        href="https://github.com/yeus/constellation/releases/latest"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        Latest release
-      </a>
-      <a
-        v-if="!isNative"
-        href="https://github.com/yeus/constellation"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        GitHub project
-      </a>
-    </section>
+    <Transition name="menu-morph">
+      <section v-if="menuOpen" class="app-menu" aria-label="App menu">
+        <p class="eyebrow">Map style</p>
+        <button
+          type="button"
+          :aria-pressed="mapFamily === 'default'"
+          @click="selectMapFamily('default')"
+        >
+          Default map
+        </button>
+        <button
+          type="button"
+          :aria-pressed="mapFamily === 'minimalist'"
+          @click="selectMapFamily('minimalist')"
+        >
+          Minimalist map
+        </button>
+        <details class="map-decluttering-settings">
+          <summary>Map decluttering</summary>
+          <label>
+            <input v-model="mapDecluttering.enabled" type="checkbox" />
+            Group nearby peers
+          </label>
+          <label>
+            <input
+              v-model="mapDecluttering.groupMarkerCollisions"
+              type="checkbox"
+              :disabled="!mapDecluttering.enabled"
+            />
+            Group colliding markers
+          </label>
+          <label>
+            <input
+              v-model="mapDecluttering.groupUncertaintyOverlap"
+              type="checkbox"
+              :disabled="!mapDecluttering.enabled"
+            />
+            Group overlapping areas
+          </label>
+          <label class="map-decluttering-settings__range">
+            <span
+              >Area overlap:
+              {{ Math.round(mapDecluttering.uncertaintyOverlapThreshold * 100) }}%</span
+            >
+            <input
+              v-model.number="mapDecluttering.uncertaintyOverlapThreshold"
+              type="range"
+              min="0.5"
+              max="1"
+              step="0.05"
+              :disabled="!mapDecluttering.enabled || !mapDecluttering.groupUncertaintyOverlap"
+            />
+          </label>
+          <label class="map-decluttering-settings__range">
+            <span>Marker spacing: {{ mapDecluttering.markerCollisionDistancePx }} px</span>
+            <input
+              v-model.number="mapDecluttering.markerCollisionDistancePx"
+              type="range"
+              min="12"
+              max="48"
+              step="2"
+              :disabled="!mapDecluttering.enabled || !mapDecluttering.groupMarkerCollisions"
+            />
+          </label>
+        </details>
+        <button type="button" @click="openDeviceComparisons">Compare devices</button>
+        <button type="button" @click="openAbout">Privacy and licenses</button>
+        <button type="button" @click="copyLogs">Copy logs</button>
+        <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
+        <button type="button" @click="openDiagnostics">P2P diagnostics</button>
+        <button type="button" @click="openFollowInput">Follow a link</button>
+        <button type="button" @click="openFollowing">
+          Following ({{ activeFollowing.length }})
+        </button>
+        <button type="button" @click="openProjectLink('release')">Latest release</button>
+        <button type="button" @click="openProjectLink('project')">GitHub project</button>
+      </section>
+    </Transition>
 
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
     <DiagnosticsSheet
@@ -178,6 +171,87 @@
       </button>
     </section>
 
+    <div v-if="comparisonOpen" class="sheet-backdrop" @click.self="comparisonOpen = false">
+      <section class="share-sheet" role="dialog" aria-modal="true" aria-label="Device comparison">
+        <header class="sheet-header">
+          <h2>Device comparison</h2>
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="Close"
+            @click="comparisonOpen = false"
+          >
+            <CloseIcon />
+          </button>
+        </header>
+        <p class="field-help">
+          Optional. Compare through a trusted independent channel. Three attempts per link; older
+          apps may not support this.
+        </p>
+        <section
+          v-for="comparison in deviceComparisons"
+          :key="comparison.challenge"
+          aria-label="Device letter comparison"
+        >
+          <p class="eyebrow">{{ comparisonLabel(comparison.shareId) }} · {{ comparison.role }}</p>
+          <strong class="device-comparison-letters">{{ comparison.letters }}</strong>
+          <p>
+            Compare these letters with the other device through a trusted call or in person. A match
+            compares device keys, not a person's identity.
+          </p>
+          <p v-if="comparison.confirmedAt">You confirmed a match on this device.</p>
+          <div class="preview-actions">
+            <button
+              v-if="!comparison.confirmedAt"
+              class="primary-action"
+              type="button"
+              @click="changeDeviceComparison(comparison, 'confirm')"
+            >
+              Letters match
+            </button>
+            <button
+              class="secondary-action"
+              type="button"
+              @click="changeDeviceComparison(comparison, 'cancel')"
+            >
+              Cancel / mismatch
+            </button>
+          </div>
+        </section>
+        <section
+          v-for="follow in comparisonFollows"
+          :key="follow.shareId"
+          aria-label="Optional device comparison"
+        >
+          <span>{{ follow.localName }}</span>
+          <button
+            class="secondary-action"
+            type="button"
+            :disabled="comparingDevice === follow.shareId"
+            @click="startDeviceComparison(follow.shareId)"
+          >
+            Compare device letters
+          </button>
+          <button
+            v-if="comparingDevice === follow.shareId"
+            class="secondary-action"
+            type="button"
+            @click="cancelPendingDeviceComparison(follow.shareId)"
+          >
+            Cancel comparison
+          </button>
+          <span class="field-help"
+            >Optional. Four letters offer about 19 bits of security; three attempts per link. Older
+            apps may not support comparison.</span
+          >
+        </section>
+
+        <p v-if="!deviceComparisons.length && !comparisonFollows.length" class="field-help">
+          The viewer can start comparison from their device. Pending comparisons will appear here.
+        </p>
+      </section>
+    </div>
+
     <section
       v-if="pendingViewerApproval"
       class="accept-card"
@@ -191,6 +265,12 @@
         approval.
       </p>
       <span class="field-help">Device fingerprint: {{ pendingViewerApproval.fingerprint }}</span>
+      <strong v-if="pendingDeviceComparison" class="device-comparison-letters">{{
+        pendingDeviceComparison.letters
+      }}</strong>
+      <button class="secondary-action" type="button" @click="openDeviceComparisons">
+        Optional device comparison
+      </button>
       <div class="preview-actions">
         <button
           class="primary-action"
@@ -221,6 +301,14 @@
         The sender did not approve this device. No location is being received.
       </p>
       <p v-else>This location is visible now. Keep following to save it on this device.</p>
+      <button
+        v-if="previewFollow.status !== 'denied'"
+        class="secondary-action"
+        type="button"
+        @click="openDeviceComparisons"
+      >
+        Compare device letters
+      </button>
       <div class="preview-actions">
         <button
           v-if="previewFollow.status !== 'denied'"
@@ -253,8 +341,8 @@
       <p class="eyebrow">Optional return share</p>
       <strong>Share yours back with {{ shareBackPrompt.name }}?</strong>
       <p>
-        This creates an approximate location link for one hour and sends it only to the original
-        sender over the encrypted connection.
+        Choose how long and how precisely to share. Your return link is offered only to the original
+        sender.
       </p>
       <div class="preview-actions">
         <button
@@ -263,7 +351,7 @@
           :disabled="creatingShare"
           @click="openReturnShare"
         >
-          Share approximate location for 1 hour
+          Share back
         </button>
         <button class="secondary-action" type="button" @click="dismissShareBackPrompt">
           Not now
@@ -280,8 +368,8 @@
       <p class="eyebrow">Private return share</p>
       <strong>A viewer wants to share their location back</strong>
       <p>
-        Accept this location and remember your choice for this link. Other viewers using the same
-        link will be accepted automatically.
+        Save permission now. This location and future authenticated share-backs from the same link
+        will be received when available.
       </p>
       <div class="preview-actions">
         <button
@@ -290,7 +378,7 @@
           :disabled="changingReturnOffer"
           @click="acceptReturnOffer"
         >
-          Accept viewers from this link
+          {{ changingReturnOffer ? 'Saving…' : 'Accept share-backs' }}
         </button>
         <button
           class="secondary-action"
@@ -304,14 +392,6 @@
     </section>
 
     <footer class="connection-dock" aria-label="Connections">
-      <div v-if="actionsExpanded" class="quick-action-row">
-        <button type="button" aria-label="Add location" @click="openFollowInput">
-          Add location <small>Private link</small>
-        </button>
-        <button type="button" aria-label="Share location" @click="shareSheetOpen = true">
-          Share location <small>Encrypted P2P</small>
-        </button>
-      </div>
       <div class="dock-status" role="status">
         <span
           class="connection-state__dot"
@@ -320,30 +400,21 @@
         />
         {{ connectionLabel }} <span aria-hidden="true">·</span> {{ ownLocationLabel }}
       </div>
-      <div class="dock-buttons">
-        <button class="dock-side" type="button" @click="openSharing">
-          <Share2 aria-hidden="true" />
-          <span>{{ sharingLabel }}</span>
-        </button>
-        <button
-          class="dock-add"
-          type="button"
-          aria-label="Show sharing actions"
-          :aria-expanded="actionsExpanded"
-          @click="toggleActions"
-        >
-          <Plus aria-hidden="true" />
-        </button>
-        <button class="dock-side" type="button" @click="openFollowing">
-          <Eye aria-hidden="true" />
-          <span>Seeing {{ activeFollowing.length }}</span>
-        </button>
-      </div>
+      <button class="dock-peers" type="button" @click="openPeerList">
+        <Share2 aria-hidden="true" />
+        Sharing {{ activeShares.length }} · Seeing {{ activeFollowing.length }}
+      </button>
     </footer>
 
     <ShareSheet
       v-if="shareSheetOpen"
       :draft="shareDraft"
+      :return-recipient-name="
+        returnTarget
+          ? runtimeState.following.find((follow) => follow.shareId === returnTarget)?.localName ||
+            'the sender'
+          : undefined
+      "
       :can-submit="canCreateShare(shareDraft) && !creatingShare"
       :background-available="Boolean(backgroundSharing)"
       :runtime-note="
@@ -358,6 +429,7 @@
       @precision="updatePrecision"
       @duration="updateDuration"
       @viewers="updateViewerCapacity"
+      @require-viewer-approval="shareDraft = setRequireViewerApproval(shareDraft, $event)"
       @acknowledge="updateAcknowledgement"
       @name="updateName"
       @publication="updatePublication"
@@ -409,12 +481,20 @@
       :filter="peerListFilter"
       :old-shares="oldSharing"
       :old-following="runtimeState.oldSeeing"
+      :stopped-viewers="[
+        ...runtimeState.stoppedViewers,
+        ...(backgroundStatus?.stoppedViewers ?? []),
+      ]"
       :viewable-ids="viewableIds"
       :selected-id="selectedFollowId"
+      :limited-ids="areaPeerIds"
       :share-back-busy="creatingShare"
       :peer-name-preferences="peerNamePreferences"
       @profile="setPeerNamePreferences"
       @close="peerListOpen = false"
+      @add-peer="openFollowInput"
+      @share-location="openNewShare"
+      @focus-peer="focusPeer"
       @filter="peerListFilter = $event"
       @show="showExistingShare"
       @revoke="revokeShare"
@@ -426,6 +506,7 @@
       @focus-all="focusAllFollowing"
       @unfollow="stopFollowing"
       @keep="keepFollowing"
+      @dismiss-stopped="dismissStoppedViewer"
       @share-back="shareBackFromFollowing"
     />
 
@@ -458,12 +539,11 @@
 </template>
 
 <script setup lang="ts">
+import type { DeviceComparison } from '../sharing/deviceComparison.ts'
 import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 import {
-  LucideEye as Eye,
   LucideLocateFixed as LocateFixed,
   LucideMenu as Menu,
-  LucidePlus as Plus,
   LucideQrCode as QrCode,
   LucideShare2 as Share2,
 } from '@lucide/vue'
@@ -511,6 +591,7 @@ import {
   setNetworkPolicy,
   setPrecision,
   setPublication,
+  setRequireViewerApproval,
   setViewerCapacity,
   type LocationPrecision,
   type ShareBatteryPolicy,
@@ -521,7 +602,7 @@ import {
 } from '../shareDraft.ts'
 import { bytesToBase64Url } from '../sharing/encoding.ts'
 import { resolveShareBaseUrl } from '../sharing/shareBaseUrl.ts'
-import { parseShareInvitation } from '../sharing/shareLink.ts'
+import { parseShareInvitation, verifyReturnOwner } from '../sharing/shareLink.ts'
 import { createBrowserPrivateStore, createNativePrivateStore } from '../sharing/privateStore.ts'
 import {
   acceptReturnShare,
@@ -629,12 +710,15 @@ const runtimeState = ref<SharingRuntimeState>({
   pendingViewerApprovals: [],
   oldSharing: [],
   oldSeeing: [],
+  stoppedViewers: [],
   endNotifications: [],
   message: '',
   canSave: true,
 })
 const pendingReturnOffer = computed(() => {
-  const foreground = runtimeState.value.returnOffers[0]
+  const foreground = runtimeState.value.returnOffers.find(
+    ({ shareId }) => !runtimeState.value.approvedReturnLinks.includes(shareId),
+  )
   if (foreground) return foreground
   return backgroundStatus.value?.returnOffers?.find(
     ({ shareId, viewerFingerprint, url }) =>
@@ -658,12 +742,34 @@ watch(
   { deep: true },
 )
 const introSeenKey = 'constellation.privacy-intro-seen'
-const actionsExpanded = ref(window.localStorage.getItem('constellation.actions-expanded') !== '0')
+const actionsExpanded = ref(false)
 const introOpen = ref(window.localStorage.getItem(introSeenKey) !== '1')
 const menuOpen = ref(false)
+const onMenuKeyDown = (event: KeyboardEvent): void => {
+  if (event.key !== 'Escape' || !menuOpen.value) return
+  menuOpen.value = false
+  document.querySelector<HTMLButtonElement>('.brand-button')?.focus()
+}
 const closeMenuOnOutsideClick = (event: MouseEvent): void => {
   if (event.target instanceof Element && event.target.closest('.brand-button, .app-menu')) return
   menuOpen.value = false
+}
+const openProjectLink = async (target: 'project' | 'release'): Promise<void> => {
+  menuOpen.value = false
+  try {
+    if (isAndroid) {
+      await invoke('android_open_project_link', { target })
+      return
+    }
+    const url =
+      target === 'project'
+        ? 'https://github.com/yeus/constellation'
+        : 'https://github.com/yeus/constellation/releases/latest'
+    const opened = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!opened && !isNative) throw new Error('Your browser blocked the project link.')
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not open external browser.'
+  }
 }
 const aboutOpen = ref(false)
 const browserDiagnosticsOpen = ref(false)
@@ -678,6 +784,7 @@ const returnToBrowserDiagnostics = () => {
 }
 const diagnosticsOpen = ref(false)
 const peerListOpen = ref(false)
+const areaPeerIds = ref<readonly string[]>()
 const peerListFilter = ref<'all' | 'sharing' | 'viewing' | 'both'>('all')
 const followInputOpen = ref(false)
 const qrScannerOpen = ref(false)
@@ -911,33 +1018,94 @@ const setPeerNamePreferences = async (
 }
 const oldSharing = computed(() => {
   const records = [...runtimeState.value.oldSharing, ...(backgroundStatus.value?.oldSharing ?? [])]
-  return [...new Map(records.map((record) => [record.shareId, record])).values()].sort(
-    (left, right) => right.endedAt - left.endedAt,
-  )
+  return [
+    ...new Map(
+      records.map((record) => [JSON.stringify([record.shareId, record.peerId ?? null]), record]),
+    ).values(),
+  ].sort((left, right) => right.endedAt - left.endedAt)
 })
 const activeFollowing = computed(() =>
   runtimeState.value.following.filter(
     (entry) => entry.status !== 'expired' && entry.status !== 'revoked',
   ),
 )
-const sharingLabel = computed(() => {
-  const shares = activeShares.value
-  if (shares.length === 0) return 'Sharing 0'
-  const expiries = shares
-    .map(({ expiresAt }) => expiresAt)
-    .filter((expiresAt): expiresAt is number => expiresAt !== null)
-  if (expiries.length === 0) return `Sharing ${shares.length} · until stopped`
-  const nextExpiry = new Date(Math.min(...expiries)).toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-  return `Sharing ${shares.length} · next ends ${nextExpiry}`
-})
 const previewFollow = computed(() => activeFollowing.value.find((entry) => !entry.saved))
+const comparisonOpen = ref(false)
+const openDeviceComparisons = (): void => {
+  menuOpen.value = false
+  comparisonOpen.value = true
+}
+const comparisonLabel = (shareId: string): string =>
+  runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
+  activeShares.value.find((entry) => entry.shareId === shareId)?.name ||
+  'Single-recipient link'
+const comparingDevice = ref<string>()
+const deviceComparisons = computed(() => [
+  ...(runtimeState.value.deviceComparisons ?? []),
+  ...(backgroundStatus.value?.deviceComparisons ?? []),
+])
+const comparisonFollows = computed(() =>
+  runtimeState.value.following.filter(
+    (follow) =>
+      !['denied', 'revoked', 'expired'].includes(follow.status) &&
+      !deviceComparisons.value.some((comparison) => comparison.shareId === follow.shareId),
+  ),
+)
+const startDeviceComparison = async (shareId: string): Promise<void> => {
+  comparingDevice.value = shareId
+  comparisonOpen.value = true
+  try {
+    await runtime.startDeviceComparison(shareId)
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Device comparison unavailable.'
+  } finally {
+    comparingDevice.value = undefined
+  }
+}
+const cancelPendingDeviceComparison = async (shareId: string): Promise<void> => {
+  try {
+    await runtime.cancelDeviceComparison(shareId, '')
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not cancel comparison.'
+  }
+}
+const changeDeviceComparison = async (
+  comparison: DeviceComparison,
+  action: 'confirm' | 'cancel',
+): Promise<void> => {
+  try {
+    if (
+      backgroundStatus.value?.deviceComparisons?.some(
+        (entry) => entry.challenge === comparison.challenge,
+      ) &&
+      backgroundSharing
+    )
+      backgroundStatus.value = await backgroundSharing.deviceComparison(
+        comparison.shareId,
+        comparison.challenge,
+        action,
+      )
+    else if (action === 'confirm')
+      await runtime.confirmDeviceComparison(comparison.shareId, comparison.challenge)
+    else await runtime.cancelDeviceComparison(comparison.shareId, comparison.challenge)
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not save device comparison.'
+  }
+}
+
 const pendingViewerApproval = computed(
   () =>
     runtimeState.value.pendingViewerApprovals[0] ??
     backgroundStatus.value?.pendingViewerApprovals?.[0],
+)
+
+const pendingDeviceComparison = computed(() =>
+  deviceComparisons.value.find(
+    (entry) =>
+      entry.role === 'sender' &&
+      entry.shareId === pendingViewerApproval.value?.shareId &&
+      entry.peerId === pendingViewerApproval.value?.peerId,
+  ),
 )
 
 const locations = computed(() => {
@@ -997,10 +1165,6 @@ const ownLocationLabel = computed(() => {
 const collapseActions = (): void => {
   actionsExpanded.value = false
   window.localStorage.setItem('constellation.actions-expanded', '0')
-}
-const toggleActions = (): void => {
-  actionsExpanded.value = !actionsExpanded.value
-  window.localStorage.setItem('constellation.actions-expanded', actionsExpanded.value ? '1' : '0')
 }
 const policyPauseMessage = computed(() => {
   const status = backgroundStatus.value
@@ -1086,20 +1250,35 @@ const dismissIntro = (): void => {
   window.localStorage.setItem(introSeenKey, '1')
 }
 const openFollowInput = (): void => {
+  peerListOpen.value = false
   followInputOpen.value = true
   menuOpen.value = false
 }
 const openFollowing = (): void => {
+  areaPeerIds.value = undefined
   selectedFollowId.value = undefined
   peerListFilter.value = 'viewing'
   peerListOpen.value = true
   menuOpen.value = false
 }
-const openSharing = (): void => {
+const openPeerList = (): void => {
+  areaPeerIds.value = undefined
   selectedFollowId.value = undefined
-  peerListFilter.value = 'sharing'
+  peerListFilter.value = 'all'
   peerListOpen.value = true
   menuOpen.value = false
+}
+const openAreaPeers = (ids: string[]): void => {
+  areaPeerIds.value = ids
+  peerListFilter.value = 'all'
+  selectedFollowId.value = undefined
+  peerListOpen.value = true
+}
+const openNewShare = (): void => {
+  peerListOpen.value = false
+  shareDraft.value = createShareDraft()
+  returnTarget.value = undefined
+  shareSheetOpen.value = true
 }
 
 const updatePrecision = (precision: LocationPrecision) => {
@@ -1168,6 +1347,15 @@ const focusFollowing = (shareId: string): void => {
   locationMap.value?.centerOn(location)
   peerListOpen.value = false
 }
+const focusPeer = (shareIds: readonly string[]): void => {
+  const ids = new Set(shareIds)
+  const peerLocations = locations.value.filter(
+    ({ id }) => id && ids.has(id) && viewableIds.value.includes(id),
+  )
+  if (peerLocations.length === 0) return
+  locationMap.value?.focusLocations(peerLocations)
+  peerListOpen.value = false
+}
 const focusAllFollowing = (): void => {
   const peerLocations = locations.value.filter(({ id }) => viewableIds.value.includes(id))
   if (peerLocations.length === 0) return
@@ -1198,13 +1386,26 @@ const acceptScannedLink = (url: string): void => {
 const createShare = async (): Promise<void> => {
   if (creatingShare.value) return
   const shareBackTarget = returnTarget.value
+  const returnFollow = shareBackTarget
+    ? runtimeState.value.following.find(({ shareId }) => shareId === shareBackTarget)
+    : undefined
+  const useBackground = Boolean(
+    backgroundSharing && (!shareBackTarget || shareDraft.value.publication === 'background'),
+  )
+  // A return share always has exactly one recipient regardless of form state.
+  const draft = shareBackTarget
+    ? { ...shareDraft.value, viewerCapacity: 1 as const, requireViewerApproval: true }
+    : shareDraft.value
   readyShareIsReturn.value = Boolean(shareBackTarget)
   browserLocationDeferred.value = false
   creatingShare.value = true
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.share.create.started' })
   try {
-    if (backgroundSharing && !shareBackTarget) {
+    if (useBackground && backgroundSharing) {
+      if (shareBackTarget && !returnFollow?.peerId) {
+        throw new Error('The original sender has no verified device identity.')
+      }
       await refreshBackgroundStatus()
       let deadline = Date.now() + 30_000
       while (backgroundStatus.value?.state === 'starting' && Date.now() < deadline) {
@@ -1214,7 +1415,7 @@ const createShare = async (): Promise<void> => {
       const existingShareIds = new Set(backgroundStatus.value?.shares.map(({ shareId }) => shareId))
       locationSource.stop()
       backgroundStatus.value = await backgroundSharing.start(
-        shareDraft.value,
+        draft,
         shareBaseUrl,
         document.visibilityState === 'visible',
       )
@@ -1227,18 +1428,56 @@ const createShare = async (): Promise<void> => {
         await new Promise((resolve) => window.setTimeout(resolve, 250))
         await refreshBackgroundStatus()
       }
-      readyShare.value = backgroundStatus.value.shares.find(
+      const created = backgroundStatus.value.shares.find(
         ({ shareId }) => !existingShareIds.has(shareId),
       )
-      if (!readyShare.value) {
+      if (!created) {
         throw new Error(backgroundStatus.value.message || 'Could not create the location link.')
       }
+      // Adopt the foreground owner proof before the link is presented so a
+      // return offer can never be bound to the unattended native identity.
+      const binding =
+        shareBackTarget && returnFollow?.peerId
+          ? ({ mode: 'recipient', recipientPeerId: returnFollow.peerId } as const)
+          : ({ mode: 'source' } as const)
+      try {
+        const source = parseShareInvitation(created.url)
+        const owner = await runtime.signReturnOwnership(source.shareId, source.sourcePeerId)
+        const adopted = await backgroundSharing.replaceBackgroundOwner(
+          source.shareId,
+          source.sourcePeerId,
+          owner.ownerPeerId,
+          owner.ownerProof,
+          binding,
+        )
+        const updated = adopted.shares.find(({ shareId }) => shareId === source.shareId)
+        if (!updated) throw new Error('Background ownership change was not confirmed.')
+        const updatedCapability = parseShareInvitation(updated.url)
+        if (
+          updatedCapability.sourcePeerId !== source.sourcePeerId ||
+          updatedCapability.secret !== source.secret ||
+          !(await verifyReturnOwner(updatedCapability, owner.ownerPeerId))
+        ) {
+          throw new Error('The background link failed ownership verification.')
+        }
+        backgroundStatus.value = adopted
+        readyShare.value = updated
+      } catch (error) {
+        // Never serve or offer a native-owned link whose returns cannot reach
+        // the foreground owner.
+        await backgroundSharing.stop(created.shareId).catch(() => undefined)
+        throw error
+      }
     } else {
-      readyShare.value = await runtime.createShare(shareDraft.value)
+      readyShare.value = await runtime.createShare(draft)
     }
     if (shareBackTarget && readyShare.value) {
       try {
-        await runtime.offerReturnShare(shareBackTarget, readyShare.value.url)
+        await runtime.offerReturnShare(
+          shareBackTarget,
+          readyShare.value.url,
+          useBackground ? { externalBoundRecipientPeerId: returnFollow?.peerId } : undefined,
+        )
         await runtime.markReturnPromptSeen(shareBackTarget)
         readyShare.value = undefined
       } catch (error) {
@@ -1253,9 +1492,8 @@ const createShare = async (): Promise<void> => {
   } catch (error) {
     sessionLog.record({ level: 'error', event: 'sharing.share.create.failed' })
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'
-    if (shareBackTarget) {
-      const follow = runtimeState.value.following.find((entry) => entry.shareId === shareBackTarget)
-      if (follow) shareBackPrompt.value = { shareId: shareBackTarget, name: follow.localName }
+    if (shareBackTarget && returnFollow) {
+      shareBackPrompt.value = { shareId: shareBackTarget, name: returnFollow.localName }
     }
   } finally {
     if (returnTarget.value === shareBackTarget) returnTarget.value = undefined
@@ -1356,7 +1594,7 @@ const openReturnShare = (): void => {
   shareBackPrompt.value = undefined
   shareDraft.value = createShareDraft()
   browserLocationDeferred.value = false
-  void createShare()
+  shareSheetOpen.value = true
 }
 
 const dismissShareBackPrompt = (): void => {
@@ -1368,7 +1606,6 @@ const shareBackFromFollowing = async (shareId: string): Promise<void> => {
   const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
   if (
     !follow ||
-    follow.returnPromptSeen ||
     follow.status === 'approval-pending' ||
     follow.status === 'denied' ||
     creatingShare.value
@@ -1380,12 +1617,11 @@ const shareBackFromFollowing = async (shareId: string): Promise<void> => {
     shareDraft.value = createShareDraft()
     browserLocationDeferred.value = false
     peerListOpen.value = false
-    await createShare()
+    shareSheetOpen.value = true
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Could not start a return share.'
+    localError.value = error instanceof Error ? error.message : 'Could not prepare a return share.'
   }
 }
-
 const closeShareSheet = (): void => {
   shareSheetOpen.value = false
   returnTarget.value = undefined
@@ -1421,7 +1657,7 @@ const dismissReturnOffer = (): void => {
   })()
 }
 
-const acceptReturnOffer = (): void => {
+const acceptReturnOffer = async (): Promise<void> => {
   const offer = pendingReturnOffer.value
   if (!offer || changingReturnOffer.value) return
   changingReturnOffer.value = true
@@ -1434,32 +1670,20 @@ const acceptReturnOffer = (): void => {
         candidate.url === offer.url,
     ),
   )
-  void (async () => {
-    try {
-      await acceptReturnShare(runtime, offer, (shareId) =>
-        runtimeState.value.following.some((entry) => entry.shareId === shareId && entry.connected),
-      )
-      if (backgroundOffer) {
-        if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
-        await backgroundSharing.approveReturnLink(offer.shareId)
-        await backgroundSharing.dismissReturnOffer(offer.shareId, offer.viewerFingerprint)
-        dismissedBackgroundOffers.value.set(
-          `${offer.shareId}:${offer.viewerFingerprint}`,
-          offer.url,
-        )
-        await refreshBackgroundStatus()
-      } else {
-        await runtime.approveReturnLink(offer.shareId)
-      }
-      localError.value =
-        'Return location accepted. Future shares from this link will be accepted automatically.'
-    } catch (error) {
-      localError.value =
-        error instanceof Error ? error.message : 'Could not accept this return link.'
-    } finally {
-      changingReturnOffer.value = false
+  try {
+    if (backgroundOffer) {
+      if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+      await backgroundSharing.approveReturnLink(offer.shareId)
+    } else {
+      await runtime.approveReturnLink(offer.shareId)
     }
-  })()
+    copyNotice.value = 'Share-back permission saved. Waiting for the location.'
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not save permission.'
+  } finally {
+    changingReturnOffer.value = false
+    if (backgroundOffer) void refreshBackgroundStatus().catch(() => undefined)
+  }
 }
 
 const closeShareReady = (): void => {
@@ -1540,6 +1764,24 @@ const stopFollowing = async (shareId: string): Promise<void> => {
   if (selectedFollowId.value === shareId) peerListOpen.value = false
 }
 
+const dismissStoppedViewer = async (shareId: string, peerId: string): Promise<void> => {
+  try {
+    if (
+      backgroundStatus.value?.stoppedViewers?.some(
+        (record) => record.shareId === shareId && record.peerId === peerId,
+      )
+    ) {
+      if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+      await backgroundSharing.dismissStoppedViewer(shareId, peerId)
+      await refreshBackgroundStatus()
+    } else {
+      await runtime.dismissStoppedViewer(shareId, peerId)
+    }
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not dismiss the stop notice.'
+  }
+}
+
 const updateLocationOwnership = (): void => {
   const visible = document.visibilityState === 'visible'
   const serviceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
@@ -1556,6 +1798,7 @@ const updateVisibility = (): void => {
 }
 onMounted(() => {
   document.addEventListener('visibilitychange', updateVisibility)
+  window.addEventListener('keydown', onMenuKeyDown)
   if (isAndroid) {
     void receiveSharedText().catch(() => undefined)
     sharedTextPoll = window.setInterval(
@@ -1583,6 +1826,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', updateVisibility)
+  window.removeEventListener('keydown', onMenuKeyDown)
   unmounted = true
   stopDeepLinks()
   unsubscribe()

@@ -16,6 +16,9 @@
         </button>
       </header>
 
+      <p v-if="returnRecipientName" class="field-help">
+        Sharing back to {{ returnRecipientName }}. Only this sender receives the private offer.
+      </p>
       <p class="field-help">
         End-to-end encrypted P2P. No central location history; relays cannot read your location.
       </p>
@@ -170,7 +173,7 @@
         <span>I understand this link stays active until I stop it.</span>
       </label>
 
-      <fieldset>
+      <fieldset v-if="!returnRecipientName">
         <legend>Star viewers</legend>
         <div class="viewer-options">
           <button
@@ -188,6 +191,17 @@
           </button>
         </div>
         <p class="field-help">Viewers see you, not each other. Return shares come only to you.</p>
+        <label v-if="draft.viewerCapacity === 1" class="warning">
+          <input
+            type="checkbox"
+            :checked="draft.requireViewerApproval !== false"
+            @change="emit('requireViewerApproval', ($event.target as HTMLInputElement).checked)"
+          />
+          <span
+            >Approve the recipient device before sharing (recommended). Without approval, the first
+            device using this link permanently claims it.</span
+          >
+        </label>
       </fieldset>
 
       <p class="runtime-note">{{ runtimeNote }}</p>
@@ -216,6 +230,7 @@ defineProps<{
   canSubmit: boolean
   runtimeNote?: string
   backgroundAvailable: boolean
+  returnRecipientName?: string
 }>()
 
 const emit = defineEmits<{
@@ -224,6 +239,7 @@ const emit = defineEmits<{
   precision: [value: LocationPrecision]
   duration: [value: ShareDuration]
   viewers: [value: ViewerCapacity]
+  requireViewerApproval: [value: boolean]
   acknowledge: [value: boolean]
   name: [value: string]
   publication: [value: SharePublication]

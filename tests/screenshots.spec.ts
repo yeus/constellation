@@ -4,6 +4,7 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
 import { withTwoSources } from './fixtures/two-sources.ts'
+import { openPeerFilter, openShareCreator } from './fixtures/peer-navigation.ts'
 
 const capture = async (page: Page, name: string): Promise<void> => {
   await expect(page.locator('.location-map')).toHaveAttribute('data-rendered', 'true', {
@@ -32,7 +33,7 @@ test('capture welcome, sharing choices, and two fictional followed locations', a
   await expect(page.getByRole('region', { name: 'Privacy introduction' })).toBeVisible()
   await capture(page, 'welcome')
   await page.getByRole('button', { name: 'Got it' }).click()
-  await page.getByRole('button', { name: 'Share location' }).click()
+  await openShareCreator(page)
   await expect(page.getByRole('button', { name: 'Create private link' })).toBeVisible()
   await capture(page, 'share')
 
@@ -47,9 +48,7 @@ test('capture welcome, sharing choices, and two fictional followed locations', a
       reducedMotion: 'reduce',
     },
     async ({ viewer }) => {
-      await viewer.getByRole('button', { name: 'Open menu' }).click()
-      await viewer.getByRole('button', { name: 'Following (2)' }).click()
-      const following = viewer.getByRole('dialog', { name: 'Following' })
+      const following = await openPeerFilter(viewer, 'Viewing')
       const peers = following.locator('details.peer-list__item')
       await expect(peers).toHaveCount(2)
       for (const peer of await peers.all()) await peer.locator('summary').click()
