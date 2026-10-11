@@ -11,6 +11,7 @@ export interface ShareDraft {
   readonly precision: LocationPrecision
   readonly duration: ShareDuration
   readonly viewerCapacity: ViewerCapacity
+  readonly requireViewerApproval?: boolean
   readonly untilRevokedAcknowledged: boolean
   readonly name: string
   readonly publication: SharePublication
@@ -22,6 +23,7 @@ export const createShareDraft = (): ShareDraft => ({
   precision: 'approximate',
   duration: '1h',
   viewerCapacity: 1,
+  requireViewerApproval: true,
   untilRevokedAcknowledged: false,
   name: '',
   publication: 'foreground',
@@ -47,6 +49,11 @@ export const setViewerCapacity = (
   draft: ShareDraft,
   viewerCapacity: ViewerCapacity,
 ): ShareDraft => ({ ...draft, viewerCapacity })
+
+export const setRequireViewerApproval = (
+  draft: ShareDraft,
+  requireViewerApproval: boolean,
+): ShareDraft => ({ ...draft, requireViewerApproval })
 
 export const acknowledgeUntilRevoked = (
   draft: ShareDraft,

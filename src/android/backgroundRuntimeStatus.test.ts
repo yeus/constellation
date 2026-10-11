@@ -15,6 +15,7 @@ test('failed creation retains the revocation work and history that keep the serv
     pendingViewerApprovals: [],
     oldSharing: [{ shareId: 'synthetic-ended-link', endedAt: 100, reason: 'revoked' }],
     oldSeeing: [],
+    stoppedViewers: [],
     endNotifications: [
       { shareId: 'synthetic-ended-link', publication: 'background', retainUntil: 200 },
     ],

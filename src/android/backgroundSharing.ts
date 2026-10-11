@@ -1,11 +1,15 @@
+import { DeviceComparison } from '../sharing/deviceComparison.ts'
 import type { BrowserLocationState } from '../location/browser.ts'
 import { shareExpiryFor, type ShareDraft, type SharePauseReason } from '../shareDraft.ts'
 import type { PrivateState } from '../sharing/privateStore.ts'
 import type { ShareSummary } from '../sharing/sharingRuntime.ts'
 import type { NetworkDiagnostics } from '../sharing/sharingRuntime.ts'
+import { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import { PeerNamePreference } from '../sharing/peerNames.ts'
+import { parseShareInvitation, verifyReturnOwner } from '../sharing/shareLink.ts'
 
 export interface AndroidBackgroundStatus {
+  readonly deviceComparisons?: readonly DeviceComparison[]
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
   readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
   readonly diagnostics?: NetworkDiagnostics
@@ -26,10 +30,12 @@ export interface AndroidBackgroundStatus {
   }[]
   readonly oldSharing?: readonly {
     shareId: string
+    peerId?: string
     name?: string
     endedAt: number
     reason: 'revoked' | 'expired'
   }[]
+  readonly stoppedViewers?: readonly StoppedViewerRecord[]
   readonly location: BrowserLocationState
   readonly message: string
   readonly pauseReason?: SharePauseReason
@@ -110,9 +116,15 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
           (record) =>
             !record ||
             typeof record.shareId !== 'string' ||
+            (record.peerId !== undefined && typeof record.peerId !== 'string') ||
             typeof record.endedAt !== 'number' ||
             !['revoked', 'expired'].includes(record.reason),
-        )))
+        ))) ||
+    (candidate.deviceComparisons !== undefined &&
+      !DeviceComparison.array().max(256).safeParse(candidate.deviceComparisons).success) ||
+    // Validate native status before presenting persisted stop notices.
+    (candidate.stoppedViewers !== undefined &&
+      !StoppedViewerRecord.array().max(128).safeParse(candidate.stoppedViewers).success)
   ) {
     throw new Error('Invalid background sharing status.')
   }
@@ -138,8 +150,23 @@ export const createAndroidBackgroundSharing = (
       stop: (shareId: string) => Promise<AndroidBackgroundStatus>
       setVisible: (visible: boolean) => Promise<void>
       approveReturnLink: (shareId: string) => Promise<void>
+      deviceComparison: (
+        shareId: string,
+        challenge: string,
+        action: 'confirm' | 'cancel',
+      ) => Promise<AndroidBackgroundStatus>
       approveViewer: (shareId: string, peerId: string) => Promise<AndroidBackgroundStatus>
       dismissReturnOffer: (shareId: string, fingerprint: string) => Promise<void>
+      dismissStoppedViewer: (shareId: string, peerId: string) => Promise<void>
+      replaceBackgroundOwner: (
+        shareId: string,
+        sourcePeerId: string,
+        ownerPeerId: string,
+        ownerProof: string,
+        binding:
+          | { readonly mode: 'source' }
+          | { readonly mode: 'recipient'; readonly recipientPeerId: string },
+      ) => Promise<AndroidBackgroundStatus>
       importSourceState: (state: PrivateState) => Promise<void>
       setViewerName: (
         shareId: string,
@@ -175,6 +202,7 @@ export const createAndroidBackgroundSharing = (
           request: {
             precision: draft.precision,
             viewerCapacity: draft.viewerCapacity,
+            requireViewerApproval: draft.requireViewerApproval !== false,
             name: draft.name,
             publication: draft.publication,
             battery: draft.battery,
@@ -195,6 +223,12 @@ export const createAndroidBackgroundSharing = (
     approveReturnLink: async (shareId) => {
       await dependencies.invoke('android_approve_background_return_link', { shareId })
     },
+    deviceComparison: async (shareId, challenge, action) => {
+      await dependencies.invoke('android_background_device_comparison', {
+        request: JSON.stringify({ shareId, challenge, action }),
+      })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
+    },
     approveViewer: async (shareId, peerId) => {
       await dependencies.invoke('android_approve_background_viewer', { shareId, peerId })
       return parseStatus(await dependencies.invoke('android_background_share_status'))
@@ -204,6 +238,46 @@ export const createAndroidBackgroundSharing = (
         shareId,
         fingerprint,
       })
+    },
+    dismissStoppedViewer: async (shareId, peerId) => {
+      await dependencies.invoke('android_dismiss_background_stopped_viewer', { shareId, peerId })
+    },
+    replaceBackgroundOwner: async (shareId, sourcePeerId, ownerPeerId, ownerProof, binding) => {
+      try {
+        await dependencies.invoke('android_replace_background_owner', {
+          request: JSON.stringify({
+            shareId,
+            sourcePeerId,
+            ownerPeerId,
+            ownerProof,
+            mode: binding.mode,
+            ...(binding.mode === 'recipient' ? { recipientPeerId: binding.recipientPeerId } : {}),
+          }),
+        })
+        return parseStatus(await dependencies.invoke('android_background_share_status'))
+      } catch (error) {
+        // A timed-out native command may have persisted successfully before its
+        // callback was lost. Read back the atomic signed owner handoff rather
+        // than revoking a correctly created share.
+        try {
+          const current = parseStatus(await dependencies.invoke('android_background_share_status'))
+          const link = current.shares.find((share) => share.shareId === shareId)
+          if (link) {
+            const capability = parseShareInvitation(link.url)
+            if (
+              capability.sourcePeerId === sourcePeerId &&
+              capability.ownerPeerId === ownerPeerId &&
+              capability.ownerProof === ownerProof &&
+              (await verifyReturnOwner(capability, ownerPeerId))
+            ) {
+              return current
+            }
+          }
+        } catch {
+          // Keep the original native error when readback is unavailable or invalid.
+        }
+        throw error
+      }
     },
     importSourceState: async (state) => {
       await dependencies.invoke('android_import_source_state', {

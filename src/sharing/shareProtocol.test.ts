@@ -84,3 +84,25 @@ test('single-recipient redemption can wait for approval or deny a different peer
     true,
   )
 })
+
+test('offline stop notices do not require a location session or expose location access', () => {
+  const parsed = constellationProtocolV2.message.safeParse({
+    type: 'share.stopNoticeRequest',
+    requestId: 'synthetic-stop-request',
+    shareId: 'synthetic-share-id',
+    eventId: 'synthetic-stop-event',
+    proof: 'A'.repeat(43),
+  })
+  assert.equal(parsed.success, true)
+  assert.equal(
+    constellationProtocolV2.message.safeParse({
+      type: 'share.stopNoticeRequest',
+      requestId: 'synthetic-stop-request',
+      shareId: 'synthetic-share-id',
+      eventId: 'synthetic-stop-event',
+      proof: 'A'.repeat(43),
+      sessionId: 'unexpected-subscription',
+    }).success,
+    false,
+  )
+})

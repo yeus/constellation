@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
 
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
+import { DeviceComparison, ComparisonBudget } from './deviceComparison.ts'
 import { PeerNamePreference } from './peerNames.ts'
 
 const ShareRecord = z.object({
@@ -11,6 +12,8 @@ const ShareRecord = z.object({
   precision: z.enum(['exact', 'approximate', 'very-coarse']),
   capacity: z.number().int().min(1).max(128),
   approvedPeerId: z.string().min(1).max(256).optional(),
+  viewerPeerIds: z.array(z.string().min(1).max(256)).max(128).optional(),
+  requireViewerApproval: z.boolean().optional(),
   name: z.string().max(32).optional(),
   publication: z.enum(['foreground', 'background']),
   battery: z.enum(['balanced', 'saver']).optional(),
@@ -49,10 +52,40 @@ const ViewerLabelRecord = z.object({
 
 const LifecycleRecord = z.object({
   shareId: z.string().min(16).max(64),
+  peerId: z.string().min(1).max(256).optional(),
   name: z.string().max(32).optional(),
   endedAt: z.number().int().positive(),
   reason: z.enum(['revoked', 'expired']),
 })
+
+export const StoppedViewerRecord = z.object({
+  shareId: z.string().min(16).max(64),
+  peerId: z.string().min(1).max(256),
+  eventId: z.string().min(16).max(64),
+  recordedAt: z.number().int().positive(),
+  recentEvents: z
+    .array(
+      z.object({
+        eventId: z.string().min(16).max(64),
+        recordedAt: z.number().int().positive(),
+      }),
+    )
+    .max(16)
+    .optional(),
+  dismissed: z.boolean().optional(),
+})
+export type StoppedViewerRecord = z.infer<typeof StoppedViewerRecord>
+
+export const PendingStopNotice = z.object({
+  shareId: z.string().min(16).max(64),
+  sourcePeerId: z.string().min(1).max(256),
+  viewerPeerId: z.string().min(1).max(256),
+  addresses: z.array(z.string().min(1).max(512)).max(4),
+  proof: z.string().min(32).max(128),
+  eventId: z.string().min(16).max(64),
+  queuedAt: z.number().int().positive(),
+})
+export type PendingStopNotice = z.infer<typeof PendingStopNotice>
 
 const PendingReturnRecord = z.object({
   shareId: z.string().min(16).max(64),
@@ -68,6 +101,8 @@ const ReturnOfferRecord = z.object({
 
 const PrivateStateSchema = z.object({
   version: z.literal(1),
+  deviceComparisons: z.array(DeviceComparison).max(256).optional(),
+  comparisonBudgets: z.array(ComparisonBudget).max(256).optional(),
   privateKey: z.string().min(40).max(1_024),
   shares: z.array(ShareRecord).max(128),
   followed: z.array(FollowRecord).max(128),
@@ -78,10 +113,14 @@ const PrivateStateSchema = z.object({
   returnOffers: z.array(ReturnOfferRecord).max(128).optional(),
   oldSharing: z.array(LifecycleRecord).max(128).optional(),
   oldSeeing: z.array(LifecycleRecord).max(128).optional(),
+  stoppedViewers: z.array(StoppedViewerRecord).max(128).optional(),
+  pendingStopNotices: z.array(PendingStopNotice).max(128).optional(),
   endedShares: z
     .array(
       z.object({
         url: z.string().url().max(4_096),
+        capacity: z.number().int().min(1).max(128).optional(),
+        approvedPeerId: z.string().min(1).max(256).optional(),
         sourcePrivateKey: z.string().min(40).max(1_024).optional(),
         publication: z.enum(['foreground', 'background']),
         reason: z.enum(['revoked', 'expired']),

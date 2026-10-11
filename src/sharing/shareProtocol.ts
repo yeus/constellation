@@ -58,6 +58,27 @@ export const shareProtocolV2 = defineFrpServiceProtocol({
       request: z.object({ sessionId: z.string().min(16).max(64) }).strict(),
       defaultTimeoutMs: 5_000,
     },
+    stopFollowing: {
+      request: z
+        .object({
+          sessionId: z.string().min(16).max(64),
+          eventId: z.string().min(16).max(64),
+        })
+        .strict(),
+      response: z.object({ recordedAt: z.number().int().positive() }).strict(),
+      defaultTimeoutMs: 10_000,
+    },
+    stopNotice: {
+      request: z
+        .object({
+          shareId: z.string().min(16).max(64),
+          eventId: z.string().min(16).max(64),
+          proof: z.string().min(32).max(128),
+        })
+        .strict(),
+      response: z.object({ recordedAt: z.number().int().positive() }).strict(),
+      defaultTimeoutMs: 10_000,
+    },
     offerReturn: {
       request: z
         .object({

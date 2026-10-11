@@ -146,7 +146,9 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
         ...adbEnvironment,
         ANDROID_SERIAL: device.serial,
         ...(testArgs.some((argument) =>
-          ['--local-share-flow', '--direct-transport-smoke'].includes(argument),
+          ['--local-share-flow', '--direct-transport-smoke', '--stop-notice-smoke'].includes(
+            argument,
+          ),
         )
           ? { VITE_CONSTELLATION_RELAY_ADDRS: localRelayAddress }
           : {}),
@@ -329,6 +331,18 @@ const main = async () => {
     await runProfile('modern', undefined, ['--power-network-smoke'])
     return
   }
+  if (process.argv.includes('--stop-notice-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runProfile('modern', undefined, ['--stop-notice-smoke'], threeWayApk)
+    console.log(
+      'Android delivered one durable stopped-following notice and retained its dismissal.',
+    )
+    return
+  }
   if (process.argv.includes('--direct-transport-smoke')) {
     if (process.argv.includes('--skip-build')) {
       if (!fs.existsSync(threeWayApk)) {
@@ -376,6 +390,13 @@ const main = async () => {
   }
   if (process.argv.includes('--native-fallback-smoke')) {
     await runProfile('modern', undefined, ['--native-fallback-smoke'])
+    return
+  }
+  if (process.argv.includes('--project-links-smoke')) {
+    await runProfile('compat', undefined, ['--project-links-smoke'])
+    console.log(
+      'Android project links opened the allowlisted destination and failed safely without a browser.',
+    )
     return
   }
   if (process.argv.includes('--ui-policy-smoke')) {

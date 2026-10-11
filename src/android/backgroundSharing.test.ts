@@ -78,6 +78,7 @@ test('Android start request contains policy but no location', async () => {
         request: {
           precision: 'approximate',
           viewerCapacity: 10,
+          requireViewerApproval: true,
           name: 'River',
           publication: 'background',
           battery: 'saver',
@@ -90,6 +91,110 @@ test('Android start request contains policy but no location', async () => {
     },
   ])
   assert.equal(JSON.stringify(calls).includes('latitude'), false)
+})
+
+test('return owner handoff sends only the proof, never the foreground private key', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: Date.now,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return readyStatus
+    },
+  })
+  await controller?.replaceBackgroundOwner(
+    'synthetic-share',
+    'synthetic-source',
+    'synthetic-owner',
+    'synthetic-proof',
+    { mode: 'recipient', recipientPeerId: 'synthetic-recipient' },
+  )
+  assert.equal(calls[0]?.command, 'android_replace_background_owner')
+  assert.deepEqual(JSON.parse(String(calls[0]?.args?.request)), {
+    shareId: 'synthetic-share',
+    sourcePeerId: 'synthetic-source',
+    ownerPeerId: 'synthetic-owner',
+    ownerProof: 'synthetic-proof',
+    mode: 'recipient',
+    recipientPeerId: 'synthetic-recipient',
+  })
+  await controller?.replaceBackgroundOwner(
+    'synthetic-share',
+    'synthetic-source',
+    'synthetic-owner',
+    'synthetic-proof',
+    { mode: 'source' },
+  )
+  const sourceRequests = calls.filter((call) => call.command === 'android_replace_background_owner')
+  assert.deepEqual(JSON.parse(String(sourceRequests[1]?.args?.request)), {
+    shareId: 'synthetic-share',
+    sourcePeerId: 'synthetic-source',
+    ownerPeerId: 'synthetic-owner',
+    ownerProof: 'synthetic-proof',
+    mode: 'source',
+  })
+  assert.equal(JSON.stringify(calls).includes('privateKey'), false)
+})
+
+test('lost native acknowledgement is reconciled only against a verified signed return link', async () => {
+  const { generateKeyPair } = await import('@libp2p/crypto/keys')
+  const { createShareInvitation } = await import('../sharing/shareLink.ts')
+  const owner = await generateKeyPair('Ed25519')
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source',
+    addresses: [],
+    expiresAt: null,
+    ownerPrivateKey: owner,
+  })
+  const signed = invitation.capability
+  const status = {
+    ...readyStatus,
+    shares: [{ ...readyStatus.shares[0]!, shareId: signed.shareId, url: invitation.url }],
+  }
+  let polls = 0
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: Date.now,
+    invoke: async (command) => {
+      if (command === 'android_replace_background_owner') {
+        throw new Error('native command timed out')
+      }
+      polls++
+      return status
+    },
+  })
+  const result = await controller?.replaceBackgroundOwner(
+    signed.shareId,
+    signed.sourcePeerId,
+    signed.ownerPeerId!,
+    signed.ownerProof!,
+    { mode: 'recipient', recipientPeerId: 'synthetic-recipient' },
+  )
+  assert.deepEqual(result, status)
+  assert.equal(polls, 1)
+
+  const unchanged = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: Date.now,
+    invoke: async (command) => {
+      if (command === 'android_replace_background_owner') {
+        throw new Error('native command timed out')
+      }
+      return readyStatus
+    },
+  })
+  await assert.rejects(
+    unchanged!.replaceBackgroundOwner(
+      signed.shareId,
+      signed.sourcePeerId,
+      signed.ownerPeerId!,
+      signed.ownerProof!,
+      { mode: 'recipient', recipientPeerId: 'synthetic-recipient' },
+    ),
+    /native command timed out/,
+  )
 })
 
 test('Android forwards the very coarse preset to its background service', async () => {
@@ -266,16 +371,22 @@ test('Android status validates pending one-recipient approvals', async () => {
 test('Android status carries ended source links and rejects malformed return offers', async () => {
   const record = {
     shareId: 'synthetic-share-id',
+    peerId: 'synthetic-authenticated-peer',
     endedAt: 1_000,
     reason: 'revoked' as const,
+  }
+  const legacyRecord = {
+    shareId: 'synthetic-legacy-share-id',
+    endedAt: 2_000,
+    reason: 'expired' as const,
   }
   const controller = createAndroidBackgroundSharing({
     isAndroid: true,
     now: () => 0,
-    invoke: async () => ({ ...readyStatus, oldSharing: [record] }),
+    invoke: async () => ({ ...readyStatus, oldSharing: [record, legacyRecord] }),
   })
   assert.ok(controller)
-  assert.deepEqual((await controller.status()).oldSharing, [record])
+  assert.deepEqual((await controller.status()).oldSharing, [record, legacyRecord])
 
   const malformed = createAndroidBackgroundSharing({
     isAndroid: true,
@@ -369,4 +480,51 @@ test('Android forwards a dismissed return offer to the sharing service', async (
       args: { shareId: 'synthetic-share-id', fingerprint: 'synthetic-device' },
     },
   ])
+})
+
+test('Android comparison forwards only explicit confirmation/cancellation and validates status', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const comparison = {
+    shareId: 'synthetic-share-0001',
+    ownPeerId: 'synthetic-source',
+    peerId: 'synthetic-viewer',
+    role: 'sender' as const,
+    challenge: 'A'.repeat(43),
+    letters: 'ABCD',
+    expiresAt: 123456,
+  }
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 1000,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return { ...readyStatus, deviceComparisons: [comparison] }
+    },
+  })!
+  for (const action of ['confirm', 'cancel'] as const) {
+    assert.deepEqual(
+      (await controller.deviceComparison(comparison.shareId, comparison.challenge, action))
+        .deviceComparisons,
+      [comparison],
+    )
+    assert.deepEqual(calls.at(-2), {
+      command: 'android_background_device_comparison',
+      args: {
+        request: JSON.stringify({
+          shareId: comparison.shareId,
+          challenge: comparison.challenge,
+          action,
+        }),
+      },
+    })
+  }
+  const invalid = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 1000,
+    invoke: async () => ({
+      ...readyStatus,
+      deviceComparisons: [{ ...comparison, letters: 'abcd' }],
+    }),
+  })!
+  await assert.rejects(invalid.status(), /Invalid background sharing status/)
 })

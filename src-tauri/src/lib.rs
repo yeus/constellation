@@ -179,6 +179,21 @@ async fn android_import_source_state(
 }
 
 #[tauri::command]
+async fn android_replace_background_owner(
+    app: tauri::AppHandle,
+    request: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().replace_background_owner(&request)
+        .await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, request);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_approve_background_return_link(
     app: tauri::AppHandle,
     share_id: String,
@@ -197,6 +212,20 @@ async fn android_approve_background_return_link(
 }
 
 #[tauri::command]
+async fn android_background_device_comparison(
+    app: tauri::AppHandle,
+    request: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().device_comparison(&request).await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, request);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_approve_background_viewer(
     app: tauri::AppHandle,
     share_id: String,
@@ -208,6 +237,23 @@ async fn android_approve_background_viewer(
         .approve_viewer(&share_id, &peer_id)
         .await
         .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id, peer_id);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_dismiss_background_stopped_viewer(
+    app: tauri::AppHandle,
+    share_id: String,
+    peer_id: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android()
+        .dismiss_stopped_viewer(&share_id, &peer_id)
+        .await.map_err(|error| error.to_string());
     #[cfg(not(target_os = "android"))]
     {
         let _ = (app, share_id, peer_id);
@@ -309,6 +355,27 @@ async fn android_take_shared_text(app: tauri::AppHandle) -> Result<serde_json::V
 }
 
 #[tauri::command]
+async fn android_open_project_link(
+    app: tauri::AppHandle,
+    target: String,
+) -> Result<serde_json::Value, String> {
+    if target != "project" && target != "release" {
+        return Err("Unknown public destination.".into());
+    }
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .open_project_link(&target)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Android external browser is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_load_private_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     return app
@@ -389,13 +456,17 @@ pub fn run() {
             android_stop_background_share,
             android_set_background_visibility,
             android_import_source_state,
+            android_replace_background_owner,
             android_approve_background_return_link,
             android_approve_background_viewer,
+            android_background_device_comparison,
             android_dismiss_background_return_offer,
+            android_dismiss_background_stopped_viewer,
             android_set_background_viewer_name,
             android_set_background_peer_names,
             android_block_background_viewer,
             android_take_shared_text,
+            android_open_project_link,
             android_load_private_state,
             android_save_private_state,
             desktop_load_private_state,

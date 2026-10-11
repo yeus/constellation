@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 
-import { chromium } from '@playwright/test'
+import { chromium, expect } from '@playwright/test'
 import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 
 import { compileAndroidWebViewExpression } from './android-cdp-source.mjs'
@@ -381,20 +381,124 @@ const clickButton = (cdp, label) =>
   return true;
 })()`)
 
-const tapAndroidButton = async (cdp, label) => {
-  const center = await cdp.evaluate(`(() => {
-    const button = [...document.querySelectorAll('button')]
-      .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(label)});
-    if (!button) return null;
-    const rect = button.getBoundingClientRect();
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
+const openNativePeerList = async (cdp) => {
+  await waitFor(
+    () => cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`),
+    'the compact Android peer dock',
+  )
+  const alreadyOpen = await cdp.evaluate(`(() => {
+    const list = document.querySelector('.peer-list');
+    return Boolean(list && list.getClientRects().length > 0);
   })()`)
-  if (!center) return false
-  await cdp.tap(center.x, center.y)
-  return true
+  if (!alreadyOpen) {
+    const opened = await cdp.evaluate(`(() => {
+      const dock = document.querySelector('button.dock-peers');
+      if (!dock) return false;
+      dock.click();
+      return true;
+    })()`)
+    assert.equal(opened, true)
+    await waitFor(
+      () => cdp.evaluate(`Boolean(document.querySelector('.peer-list'))`),
+      'Android peer list',
+    )
+  }
+}
+
+const selectNativePeerFilter = async (cdp, filter) => {
+  await openNativePeerList(cdp)
+  await waitFor(
+    async () => {
+      const state = await cdp.evaluate(`(() => {
+        const button = [...document.querySelectorAll('.peer-list__filters button')]
+          .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(filter)});
+        if (!button) return 'missing';
+        if (button.getAttribute('aria-pressed') !== 'true') {
+          button.click();
+          return 'clicked';
+        }
+        return 'selected';
+      })()`)
+      return state === 'selected'
+    },
+    `Android ${filter} peer filter`,
+    10_000,
+  )
+}
+
+const expandNativePeerRows = (cdp) =>
+  cdp.evaluate(`(() => {
+    const rows = [...document.querySelectorAll('.peer-list__item:not([open]) > .peer-list__summary')];
+    rows.forEach((summary) => summary.click());
+    return rows.length;
+  })()`)
+
+const clickNativePeerAction = async (cdp, filter, label) => {
+  await selectNativePeerFilter(cdp, filter)
+  await expandNativePeerRows(cdp)
+  const clicked = await cdp.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.peer-list button')]
+      .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(label)});
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`)
+  assert.equal(clicked, true, `find Android peer-list action: ${label}`)
+}
+
+const waitForNativeApp = async (cdp, label) =>
+  waitFor(() => cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`), label)
+
+const restartAndroidApp = async (cdp, expectedText = 'Sharing 1') => {
+  cdp?.close()
+  adb(['shell', 'am', 'force-stop', packageName])
+  adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    let candidate
+    try {
+      candidate = await connectCdp()
+      await wait(500)
+      const responsive = await Promise.race([
+        androidTextIncludes(candidate, expectedText),
+        wait(5_000).then(() => false),
+      ])
+      if (responsive) return candidate
+    } catch {
+      // Process restart may expose a stale WebView debugger target before the new UI settles.
+    }
+    candidate?.close()
+    await wait(1_000)
+  }
+  throw new Error('Android app did not stabilize after process restart.')
+}
+
+const tapAndroidButton = async (cdp, label, attempts = 16) => {
+  let previous
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const center = await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(label)});
+      if (!button) return null;
+      const rect = button.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || (hit !== button && !button.contains(hit))) return null;
+      return { x, y };
+    })()`)
+    if (!center) {
+      previous = undefined
+      await wait(200)
+      continue
+    }
+    if (previous && Math.abs(previous.x - center.x) < 1 && Math.abs(previous.y - center.y) < 1) {
+      await cdp.tap(center.x, center.y)
+      return true
+    }
+    previous = center
+    await wait(200)
+  }
+  return false
 }
 
 const clickAriaButton = (cdp, label) =>
@@ -409,13 +513,13 @@ const androidTextIncludes = (cdp, text) =>
   cdp.evaluate(`document.body?.innerText?.includes(${JSON.stringify(text)}) === true`)
 
 const receivedUpdateCount = async (viewer) => {
-  const text = await viewer.getByText(/Updates this session:/).innerText()
+  const text = await viewer
+    .locator('.peer-list article.peer-link-item')
+    .filter({ hasText: 'Last location:' })
+    .first()
+    .textContent()
   return Number(text.match(/Updates this session:\s*(\d+)/)?.[1] ?? 0)
 }
-
-const androidButtonCount = (cdp, label) =>
-  cdp.evaluate(`([...document.querySelectorAll('button')]
-    .filter((button) => button.textContent?.trim() === ${JSON.stringify(label)})).length`)
 
 const fillAndroidInput = (cdp, label, value) =>
   cdp.evaluate(`(() => {
@@ -450,10 +554,7 @@ const readAndroidShareLink = async (cdp) => {
 }
 
 const createAndroidStarShare = async (cdp, name) => {
-  if (!(await androidTextIncludes(cdp, 'Share location'))) {
-    assert.equal(await clickAriaButton(cdp, 'Show sharing actions'), true)
-  }
-  assert.equal(await clickButton(cdp, 'Share location'), true)
+  await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await fillAndroidInput(cdp, 'Share a name', name), true)
   assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, '10'), true)
@@ -503,8 +604,8 @@ const createAndroidStarShare = async (cdp, name) => {
 }
 
 const createBackgroundShareForSmoke = async (cdp) => {
-  await waitFor(() => androidTextIncludes(cdp, 'Share location'), 'Android app startup')
-  assert.equal(await clickButton(cdp, 'Share location'), true)
+  await waitForNativeApp(cdp, 'Android app startup')
+  await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, 'Device accuracy'), true)
   assert.equal(await clickButton(cdp, 'Create private link'), true)
@@ -693,8 +794,8 @@ const runPermissionDenialSmoke = async () => {
     grantIfSupported('android.permission.POST_NOTIFICATIONS')
     adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
     cdp = await connectCdp()
-    await waitFor(() => androidTextIncludes(cdp, 'Share location'), 'Android app startup')
-    assert.equal(await clickButton(cdp, 'Share location'), true)
+    await waitForNativeApp(cdp, 'Android app startup')
+    await clickNativePeerAction(cdp, 'All', 'Share location')
     assert.equal(await clickButton(cdp, 'In background'), true)
     assert.equal(await clickButton(cdp, 'Create private link'), true)
     await waitFor(
@@ -728,6 +829,7 @@ const startDirectBackgroundShare = async (
     expectedShareCount = 1,
     battery = 'balanced',
     network = 'always',
+    requireViewerApproval = true,
   } = {},
 ) => {
   const started = await cdp.evaluate(`(async () => {
@@ -737,6 +839,7 @@ const startDirectBackgroundShare = async (
       request: {
         precision: 'exact',
         viewerCapacity: 1,
+        requireViewerApproval: ${requireViewerApproval ? 'true' : 'false'},
         name: ${JSON.stringify(name)},
         publication: ${JSON.stringify(publication)},
         battery: ${JSON.stringify(battery)},
@@ -852,6 +955,7 @@ const readBackgroundStatus = async (cdp) => {
       message: status.message ?? '',
       endNotificationCount: status.endNotificationCount ?? 0,
       returnOfferCount: status.returnOffers?.length ?? 0,
+      approvedReturnLinkCount: status.approvedReturnLinks?.length ?? 0,
       capturedAt: status.location?.observation?.capturedAt ?? null,
       oldSharing: (status.oldSharing ?? []).map((share) => ({
         shareId: share.shareId,
@@ -871,6 +975,36 @@ const readBackgroundStatus = async (cdp) => {
   return status
 }
 
+const readStoppedViewers = async (cdp) => {
+  const serialized = await cdp.evaluate(`(async () => {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return JSON.stringify({ error: 'bridge unavailable' });
+    const status = await invoke('android_background_share_status');
+    return JSON.stringify({
+      records: (status.stoppedViewers ?? []).map((record) => ({
+        shareId: record.shareId,
+        peerId: record.peerId,
+        recordedAt: record.recordedAt ?? 0,
+        dismissed: record.dismissed === true,
+      })),
+    });
+  })()`)
+  assert.equal(typeof serialized, 'string')
+  const parsed = JSON.parse(serialized)
+  if (parsed.error) throw new Error(parsed.error)
+  return parsed.records
+}
+
+const readBrowserStopState = (viewer) =>
+  viewer.evaluate(async () => {
+    const { createBrowserPrivateStore } = await import('/src/sharing/privateStore.ts')
+    const state = await createBrowserPrivateStore().load()
+    return {
+      followedCount: state?.followed?.length ?? 0,
+      pendingStopCount: state?.pendingStopNotices?.length ?? 0,
+    }
+  })
+
 const directTransportKinds = new Set(['WebRTC', 'WebRTC over relay', 'WebSocket', 'WebTransport'])
 
 const readBackgroundTransportSummary = async (cdp) => {
@@ -882,6 +1016,10 @@ const readBackgroundTransportSummary = async (cdp) => {
       state: status.state,
       peerStatus: status.peerStatus ?? '',
       activeShares: status.shares?.length ?? 0,
+      returnOfferCount: status.returnOffers?.length ?? 0,
+      approvedReturnLinkCount: status.approvedReturnLinks?.length ?? 0,
+      publishedAt: status.shares?.map((share) => share.lastUpdateAt ?? null) ?? [],
+      runtimeMessagePresent: Boolean(status.message),
       endedReasons: (status.oldSharing ?? []).map((share) => share.reason),
       locationStatus: status.location?.status ?? '',
       locationAgeMs: status.location?.observation?.capturedAt
@@ -953,7 +1091,7 @@ const setupNativeBackgroundSmoke = async () => {
   grantIfSupported('android.permission.POST_NOTIFICATIONS')
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
   const cdp = await connectCdp()
-  await waitFor(() => androidTextIncludes(cdp, 'Share location'), 'Android app startup')
+  await waitForNativeApp(cdp, 'Android app startup')
   return cdp
 }
 
@@ -1300,19 +1438,10 @@ const runMultipleSourceLinksSmoke = async () => {
       'Android dock to render two active shares',
       15_000,
     )
-    const openedShares = await cdp.evaluate(`(() => {
-      const button = [...document.querySelectorAll('.connection-dock .dock-side')]
-        .find((candidate) => candidate.textContent?.includes('Sharing 2'));
-      if (!button) return false;
-      button.click();
-      return true;
-    })()`)
-    assert.equal(openedShares, true)
-    await waitFor(() => androidTextIncludes(cdp, 'Active shares'), 'Android active-share list')
+    await selectNativePeerFilter(cdp, 'Sharing')
+    await expandNativePeerRows(cdp)
     const listState = await cdp.evaluate(`(() => {
-      const dialog = document.querySelector('[aria-labelledby="shares-title"]');
-      if (!dialog) return null;
-      const articles = [...dialog.querySelectorAll('article')].map((article) => ({
+      const articles = [...document.querySelectorAll('.peer-list article.peer-link-item')].map((article) => ({
         text: article.textContent ?? '',
         buttons: [...article.querySelectorAll('button')].map((button) => button.textContent?.trim() ?? ''),
       }));
@@ -1327,7 +1456,7 @@ const runMultipleSourceLinksSmoke = async () => {
       assert.ok(article.buttons.includes('Revoke link'))
     }
     const reopened = await cdp.evaluate(`(() => {
-      const article = [...document.querySelectorAll('.share-list-item')]
+      const article = [...document.querySelectorAll('.peer-list article.peer-link-item')]
         .find((candidate) => candidate.textContent?.includes('Independent Android link A'));
       const button = article && [...article.querySelectorAll('button')]
         .find((candidate) => candidate.textContent?.includes('Show link / QR'));
@@ -1616,8 +1745,8 @@ const followOnAndroid = async (
   save = true,
 ) => {
   if (method === 'paste') {
-    assert.equal(await clickAriaButton(cdp, 'Open menu'), true, 'open Android link menu')
-    assert.equal(await clickButton(cdp, 'Follow a link'), true, 'open Android paste dialog')
+    await waitForNativeApp(cdp, 'Android peer controls')
+    await clickNativePeerAction(cdp, 'All', 'Add peer')
     assert.equal(
       await fillAndroidInput(cdp, 'Paste location link', url),
       true,
@@ -1805,11 +1934,23 @@ const followOnAndroid = async (
   return true
 }
 
+const openBrowserPeerList = async (page) => {
+  const peers = page.locator('.peer-list')
+  if (!(await peers.isVisible())) await page.locator('.dock-peers').click()
+  await peers.waitFor({ state: 'visible' })
+  return peers
+}
+
+const openBrowserPeerFilter = async (page, filter) => {
+  const peers = await openBrowserPeerList(page)
+  const button = peers.getByRole('button', { name: filter, exact: true })
+  if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
+  return peers
+}
+
 const createBrowserStarShare = async (page, name) => {
-  if (!(await page.getByRole('button', { name: 'Share location' }).isVisible())) {
-    await page.getByRole('button', { name: 'Show sharing actions' }).click()
-  }
-  await page.getByRole('button', { name: 'Share location' }).click()
+  const peers = await openBrowserPeerList(page)
+  await peers.getByRole('button', { name: 'Share location', exact: true }).click()
   await page.getByRole('textbox', { name: 'Share a name' }).fill(name)
   await page.getByRole('dialog').getByRole('button', { name: '10', exact: true }).click()
   await page.getByRole('button', { name: 'Create private link' }).click()
@@ -1819,26 +1960,32 @@ const createBrowserStarShare = async (page, name) => {
 }
 
 const followInBrowser = async (page, url, expectedCount) => {
-  await page.getByRole('button', { name: 'Open menu' }).click()
-  await page.getByRole('button', { name: 'Follow a link' }).click()
+  const peers = await openBrowserPeerList(page)
+  await peers.getByRole('button', { name: 'Add peer' }).click()
   await page.getByLabel('Paste location link').fill(url)
   await page.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
   await page.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
   await page.getByRole('button', { name: 'Keep following' }).click()
   await page.getByRole('button', { name: 'Save location' }).click()
   await page.getByRole('button', { name: 'Not now' }).click()
-  await page.getByRole('button', { name: `Seeing ${expectedCount}` }).waitFor()
+  await page
+    .locator('.dock-peers')
+    .filter({ hasText: `Seeing ${expectedCount}` })
+    .waitFor()
 }
 
 const verifyAndroidTwoLocations = async (cdp, label) => {
-  assert.equal(await clickButton(cdp, 'Seeing 2'), true)
+  await selectNativePeerFilter(cdp, 'Viewing')
   await waitFor(
-    async () => (await androidButtonCount(cdp, 'Show on map')) === 2,
+    () =>
+      cdp.evaluate(
+        `document.querySelectorAll('.peer-list__map-action:not(:disabled)').length === 2`,
+      ),
     'both received locations on Android',
     75_000,
   )
   assert.equal(await closeAndroidDialog(cdp), true)
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  await selectNativePeerFilter(cdp, 'Sharing')
   try {
     await waitFor(
       () => androidTextIncludes(cdp, '2 connected'),
@@ -1847,7 +1994,7 @@ const verifyAndroidTwoLocations = async (cdp, label) => {
     )
   } catch (error) {
     const state = await cdp.evaluate(`(() => ({
-      shareDialog: Boolean(document.querySelector('[aria-labelledby="shares-title"]')),
+      shareDialog: Boolean(document.querySelector('.peer-list')),
       zeroViewers: document.body?.innerText?.includes('0 connected') === true,
       oneViewer: document.body?.innerText?.includes('1 connected') === true,
       twoViewers: document.body?.innerText?.includes('2 connected') === true,
@@ -1861,19 +2008,26 @@ const verifyAndroidTwoLocations = async (cdp, label) => {
 }
 
 const verifyAndroidFollowingControls = async (cdp) => {
-  assert.equal(await clickButton(cdp, 'Seeing 2'), true)
+  await selectNativePeerFilter(cdp, 'Viewing')
   await waitFor(
-    async () => (await androidButtonCount(cdp, 'Show on map')) === 2,
+    () =>
+      cdp.evaluate(
+        `document.querySelectorAll('.peer-list__map-action:not(:disabled)').length === 2`,
+      ),
     'two viewable Android follows before control acceptance',
     30_000,
   )
-  const originalName = await cdp.evaluate(
-    `document.querySelector('.follow-item strong')?.textContent?.trim() ?? ''`,
-  )
+  await expandNativePeerRows(cdp)
+  const originalName = await cdp.evaluate(`(() => {
+    const article = [...document.querySelectorAll('.peer-list article.peer-link-item')]
+      .find((item) => item.querySelector('button[aria-label^="Edit nickname for "]'));
+    return article?.querySelector('strong')?.textContent?.trim() ?? '';
+  })()`)
   assert.ok(originalName)
   const edited = await cdp.evaluate(`(() => {
-    const row = document.querySelector('.follow-item');
-    const button = row?.querySelector('.nickname-button');
+    const article = [...document.querySelectorAll('.peer-list article.peer-link-item')]
+      .find((item) => item.querySelector('button[aria-label^="Edit nickname for "]'));
+    const button = article?.querySelector('button[aria-label^="Edit nickname for "]');
     if (!button) return false;
     button.click();
     return true;
@@ -1881,11 +2035,11 @@ const verifyAndroidFollowingControls = async (cdp) => {
   assert.equal(edited, true)
   const changedName = 'Android UI acceptance alias'
   const changed = await cdp.evaluate(`(() => {
-    const input = document.querySelector('.follow-item input[aria-label="Your nickname"]');
+    const input = document.querySelector('.peer-list input[aria-label="Your nickname"]');
     if (!input) return false;
     input.value = ${JSON.stringify('Android UI acceptance alias')};
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    const row = input.closest('.follow-item');
+    const row = input.closest('.peer-link-item');
     const save = [...(row?.querySelectorAll('button') ?? [])]
       .find((button) => button.textContent?.trim() === 'Save');
     if (!save) return false;
@@ -1896,8 +2050,9 @@ const verifyAndroidFollowingControls = async (cdp) => {
   await waitFor(() => androidTextIncludes(cdp, changedName), 'edited Android follow nickname')
 
   const color = await cdp.evaluate(`(() => {
-    const row = document.querySelector('.follow-item');
-    const button = row?.querySelector('.follow-item__colors button[aria-pressed="false"]');
+    const row = [...document.querySelectorAll('.peer-list article.peer-link-item')]
+      .find((item) => item.querySelector('.peer-link-item__colors'));
+    const button = row?.querySelector('.peer-link-item__colors button[aria-pressed="false"]');
     if (!button) return '';
     const label = button.getAttribute('aria-label') ?? '';
     button.click();
@@ -1907,8 +2062,9 @@ const verifyAndroidFollowingControls = async (cdp) => {
   await waitFor(
     async () =>
       await cdp.evaluate(`(() => {
-        const row = document.querySelector('.follow-item');
-        const button = [...(row?.querySelectorAll('.follow-item__colors button') ?? [])]
+        const row = [...document.querySelectorAll('.peer-list article.peer-link-item')]
+          .find((item) => item.querySelector('.peer-link-item__colors'));
+        const button = [...(row?.querySelectorAll('.peer-link-item__colors button') ?? [])]
           .find((candidate) => candidate.getAttribute('aria-label') === ${JSON.stringify(color)});
         return button?.getAttribute('aria-pressed') === 'true';
       })()`),
@@ -1916,8 +2072,9 @@ const verifyAndroidFollowingControls = async (cdp) => {
   )
 
   const restoreEdit = await cdp.evaluate(`(() => {
-    const row = document.querySelector('.follow-item');
-    const edit = row?.querySelector('.nickname-button');
+    const row = [...document.querySelectorAll('.peer-list article.peer-link-item')]
+      .find((item) => item.querySelector('.peer-link-item__colors'));
+    const edit = row?.querySelector('button[aria-label^="Edit nickname for "]');
     if (!edit) return false;
     edit.click();
     return true;
@@ -1926,16 +2083,16 @@ const verifyAndroidFollowingControls = async (cdp) => {
   await waitFor(
     async () =>
       await cdp.evaluate(
-        `Boolean(document.querySelector('.follow-item input[aria-label="Your nickname"]'))`,
+        `Boolean(document.querySelector('.peer-list input[aria-label="Your nickname"]'))`,
       ),
     'Android nickname editor to reopen',
   )
   const restored = await cdp.evaluate(`(() => {
-    const input = document.querySelector('.follow-item input[aria-label="Your nickname"]');
+    const input = document.querySelector('.peer-list input[aria-label="Your nickname"]');
     if (!input) return false;
     input.value = ${JSON.stringify(originalName)};
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    const row = input.closest('.follow-item');
+    const row = input.closest('.peer-link-item');
     const save = [...(row?.querySelectorAll('button') ?? [])]
       .find((button) => button.textContent?.trim() === 'Save');
     if (!save) return false;
@@ -1946,8 +2103,9 @@ const verifyAndroidFollowingControls = async (cdp) => {
   await waitFor(() => androidTextIncludes(cdp, originalName), 'restored Android follow nickname')
 
   const focused = await cdp.evaluate(`(() => {
-    const row = document.querySelector('.follow-item');
-    const button = [...(row?.querySelectorAll('button') ?? [])]
+    const row = [...document.querySelectorAll('.peer-list article.peer-link-item')]
+      .find((item) => item.querySelector('button[aria-label^="Edit nickname for "]'));
+    const button = [...(row?.querySelectorAll('.peer-link-item__actions button') ?? [])]
       .find((candidate) => candidate.textContent?.trim() === 'Show on map');
     if (!button) return false;
     button.click();
@@ -1955,16 +2113,13 @@ const verifyAndroidFollowingControls = async (cdp) => {
   })()`)
   assert.equal(focused, true)
   await waitFor(
-    async () =>
-      !(await cdp.evaluate(
-        `Boolean(document.querySelector('[aria-labelledby="following-title"]'))`,
-      )),
+    async () => !(await cdp.evaluate(`Boolean(document.querySelector('.peer-list'))`)),
     'single Android follow map focus',
   )
 
-  assert.equal(await clickButton(cdp, 'Seeing 2'), true)
+  await selectNativePeerFilter(cdp, 'Viewing')
   const focusedAll = await cdp.evaluate(`(() => {
-    const dialog = document.querySelector('[aria-labelledby="following-title"]');
+    const dialog = document.querySelector('.peer-list');
     const button = [...(dialog?.querySelectorAll('button') ?? [])]
       .find((candidate) => candidate.textContent?.trim() === 'Show all on map');
     if (!button) return false;
@@ -1973,16 +2128,13 @@ const verifyAndroidFollowingControls = async (cdp) => {
   })()`)
   assert.equal(focusedAll, true)
   await waitFor(
-    async () =>
-      !(await cdp.evaluate(
-        `Boolean(document.querySelector('[aria-labelledby="following-title"]'))`,
-      )),
+    async () => !(await cdp.evaluate(`Boolean(document.querySelector('.peer-list'))`)),
     'all Android follows map focus',
   )
 }
 
 const sourceHasViewerCount = async (cdp, count) => {
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  await selectNativePeerFilter(cdp, 'Sharing')
   try {
     await waitFor(
       () => androidTextIncludes(cdp, `${count} connected`),
@@ -1998,19 +2150,22 @@ const sourceHasViewerCount = async (cdp, count) => {
 }
 
 const currentSourceViewerCount = async (cdp) => {
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  await selectNativePeerFilter(cdp, 'Sharing')
+  await expandNativePeerRows(cdp)
   const count = await cdp.evaluate(`(() => {
-    const text = document.querySelector('.share-list-item span')?.textContent ?? '';
-    return Number(text.match(/(\\d+) connected/)?.[1] ?? -1);
+    const counts = [...document.querySelectorAll('.peer-viewer-details summary')]
+      .map((summary) => Number(summary.textContent?.match(/Connected viewers \\((\\d+)\\)/)?.[1] ?? -1));
+    return counts.length ? Math.max(...counts) : -1;
   })()`)
   assert.equal(await closeAndroidDialog(cdp), true)
   return count
 }
 
 const androidFollowStatus = async (cdp, name) => {
-  assert.equal(await clickButton(cdp, 'Seeing 2'), true)
+  await selectNativePeerFilter(cdp, 'Viewing')
+  await expandNativePeerRows(cdp)
   const status = await cdp.evaluate(`(() => {
-    const row = [...document.querySelectorAll('.follow-item')]
+    const row = [...document.querySelectorAll('.peer-list article.peer-link-item')]
       .find((candidate) => candidate.querySelector('strong')?.textContent?.trim() === ${JSON.stringify(name)});
     const text = row?.innerText ?? '';
     return {
@@ -2025,13 +2180,10 @@ const androidFollowStatus = async (cdp, name) => {
 }
 
 const browserFollowStatus = async (page, name) => {
-  await page.getByRole('button', { name: 'Seeing 2' }).click()
-  const row = page.locator('.follow-item').filter({ hasText: name })
+  const peers = await openBrowserPeerFilter(page, 'Viewing')
+  const row = peers.locator('.peer-link-item').filter({ hasText: name })
   const text = (await row.count()) === 1 ? await row.innerText() : ''
-  await page
-    .getByRole('dialog', { name: 'Following' })
-    .getByRole('button', { name: 'Close' })
-    .click()
+  await peers.getByRole('button', { name: 'Close' }).click()
   return {
     found: Boolean(text),
     connected: text.includes('Connected ·'),
@@ -2058,7 +2210,7 @@ const sourceConnectionRoles = async (cdp) => {
     });
   })()`)
   assert.equal(await closeAndroidDialog(cdp), true)
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  await selectNativePeerFilter(cdp, 'Sharing')
   return roles
 }
 
@@ -2073,7 +2225,7 @@ const sourceSessionEvents = async (cdp) => {
       .map((item) => item.textContent?.replace(/\\s+/g, ' ').trim() ?? '');
   })()`)
   assert.equal(await closeAndroidDialog(cdp), true)
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  await selectNativePeerFilter(cdp, 'Sharing')
   return events
 }
 
@@ -2092,12 +2244,12 @@ const sourceNativeStatus = async (cdp) =>
   })()`)
 
 const browserStopEffect = async (page, cdp, name) => {
-  await page.getByRole('button', { name: 'Seeing 2' }).click()
-  await page
-    .locator('.follow-item')
-    .filter({ hasText: name })
-    .getByRole('button', { name: 'Stop following' })
-    .click()
+  const peers = await openBrowserPeerFilter(page, 'Viewing')
+  const following = peers.locator('.peer-list__item').filter({ hasText: name })
+  if (!(await following.evaluate((item) => item.open))) {
+    await following.locator('.peer-list__summary').click()
+  }
+  await following.getByRole('button', { name: 'Stop following' }).click()
   await wait(5_000)
   return {
     zeroViewers: await androidTextIncludes(cdp, '0 connected'),
@@ -2216,7 +2368,7 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
       waitUntil: 'domcontentloaded',
       timeout: 90_000,
     })
-    await desktop.getByRole('button', { name: 'Share location' }).waitFor({ timeout: 90_000 })
+    await desktop.locator('.dock-peers').waitFor({ timeout: 90_000 })
     console.log('Three-way peers started.')
 
     const firstLink = await createAndroidStarShare(first, 'Synthetic phone A')
@@ -2303,18 +2455,13 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
       desktop,
     )
     console.log('Second Android peer received both locations and saw two viewers.')
-    await desktop.getByRole('button', { name: 'Seeing 2' }).click()
-    await desktop
-      .getByRole('dialog', { name: 'Following' })
-      .getByRole('button', { name: 'Show on map' })
+    const desktopPeers = await openBrowserPeerFilter(desktop, 'Viewing')
+    await desktopPeers
+      .locator('.peer-list__map-action:not(:disabled)')
       .first()
       .waitFor({ timeout: 75_000 })
     await waitFor(
-      async () =>
-        (await desktop
-          .getByRole('dialog', { name: 'Following' })
-          .getByRole('button', { name: 'Show on map' })
-          .count()) === 2,
+      async () => (await desktop.locator('.peer-list__map-action:not(:disabled)').count()) === 2,
       'both received locations on desktop',
       75_000,
     )
@@ -2322,10 +2469,10 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
       .getByRole('dialog', { name: 'Following' })
       .getByRole('button', { name: 'Close' })
       .click()
-    await desktop.getByRole('button', { name: 'Sharing 1' }).click()
+    await openBrowserPeerFilter(desktop, 'Sharing')
     await desktop
-      .getByRole('dialog', { name: 'Active shares' })
-      .getByText('2 connected')
+      .locator('.peer-list__count')
+      .getByText(/2 connected/)
       .waitFor({ timeout: 75_000 })
     console.log('Two Android peers and a desktop browser exchanged all three Star shares.')
 
@@ -2338,8 +2485,10 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
         () => androidTextIncludes(first, 'Seeing 2'),
         'saved Android follows after restart',
       )
-      assert.equal(await clickButton(first, 'Seeing 2'), true)
-      const restoredFollows = await first.evaluate(`([...document.querySelectorAll('.follow-item')]
+      await selectNativePeerFilter(first, 'Viewing')
+      await expandNativePeerRows(first)
+      const restoredFollows =
+        await first.evaluate(`([...document.querySelectorAll('.peer-list article.peer-link-item')]
         .map((item) => ({
           name: item.querySelector('strong')?.textContent?.trim(),
           saved: item.textContent?.includes('Saved') === true,
@@ -2353,7 +2502,10 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
         true,
       )
       await waitFor(
-        async () => (await androidButtonCount(first, 'Show on map')) === 2,
+        () =>
+          first.evaluate(
+            `document.querySelectorAll('.peer-list__map-action:not(:disabled)').length === 2`,
+          ),
         'both saved Android follows reconnecting after restart',
         75_000,
       )
@@ -2388,7 +2540,10 @@ const runDirectTransportSmoke = async () => {
     server = await startWebServer()
     adb(['reverse', 'tcp:9111', 'tcp:9111'])
     cdp = await setupNativeBackgroundSmoke()
-    share = await startDirectBackgroundShare(cdp, null, { name: 'Direct transport smoke' })
+    share = await startDirectBackgroundShare(cdp, null, {
+      name: 'Direct transport smoke',
+      requireViewerApproval: false,
+    })
     adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
     await waitFor(
       () =>
@@ -2409,13 +2564,32 @@ const runDirectTransportSmoke = async () => {
       const { webRtcShareInvitation } = await import('../tests/fixtures/share-probe.ts')
       return webRtcShareInvitation(url)
     }, share.url)
-    await viewer.goto(`http://127.0.0.1:4173/${new URL(directInvitation).hash}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 90_000,
+    const directDiagnostics = []
+    viewer.on('console', (message) => {
+      const text = message.text()
+      if (message.type() === 'error' || text.includes('sharing.'))
+        directDiagnostics.push(text.slice(0, 240))
+      if (directDiagnostics.length > 40) directDiagnostics.shift()
     })
-    try {
-      await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
-    } catch (error) {
+    viewer.on('pageerror', (error) =>
+      directDiagnostics.push(`pageerror: ${String(error).slice(0, 240)}`),
+    )
+    let previewError
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await viewer.goto(`http://127.0.0.1:4173/${new URL(directInvitation).hash}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 90_000,
+      })
+      try {
+        await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 60_000 })
+        previewError = undefined
+        break
+      } catch (error) {
+        previewError = error
+        await wait(2_000)
+      }
+    }
+    if (previewError) {
       const viewerState = await viewer.evaluate(() => {
         const text = document.body.innerText
         return {
@@ -2424,20 +2598,38 @@ const runDirectTransportSmoke = async () => {
           unavailable: text.includes('unavailable'),
           failed: text.includes('failed'),
           unreachable: text.includes('reachable'),
+          excerpt: text.slice(0, 400),
         }
       })
       const native = await readBackgroundTransportSummary(cdp)
+      const addressForms = await describeInvitationAddresses(viewer, directInvitation)
       throw new Error(
-        `WebRTC invitation failed before preview: ${JSON.stringify({ viewerState, native })}`,
-        { cause: error },
+        `WebRTC invitation failed before preview: ${JSON.stringify({ viewerState, addressForms, native, directDiagnostics })}`,
+        { cause: previewError },
       )
     }
     await viewer.getByRole('button', { name: 'Keep following' }).click()
     await viewer.getByRole('button', { name: 'Save location' }).click()
-    await viewer.getByRole('button', { name: 'Not now' }).click()
-    await viewer.getByRole('button', { name: 'Open menu' }).click()
-    await viewer.getByRole('button', { name: 'Following (1)' }).click()
-    await viewer.getByRole('button', { name: 'Show on map' }).waitFor({ timeout: 30_000 })
+    const shareBack = viewer.getByRole('region', { name: 'Share back invitation' })
+    await shareBack.waitFor({ timeout: 5_000 }).catch(() => undefined)
+    if (await shareBack.count()) await shareBack.getByRole('button', { name: 'Not now' }).click()
+    const peers = await openBrowserPeerFilter(viewer, 'Viewing')
+    try {
+      await peers.locator('.peer-list__map-action:not(:disabled)').waitFor({ timeout: 30_000 })
+    } catch (error) {
+      const followRows = await peers
+        .locator('.peer-list article.peer-link-item')
+        .evaluateAll((rows) => rows.map((row) => row.textContent?.trim() ?? ''))
+      throw new Error(
+        `Direct transport never delivered a usable location: ${JSON.stringify({
+          followRows,
+          viewerOnline: await viewer.getByText('P2P online').isVisible(),
+          native: await readBackgroundTransportSummary(cdp),
+          directDiagnostics,
+        })}`,
+        { cause: error },
+      )
+    }
 
     let observed = await readBackgroundTransportSummary(cdp)
     try {
@@ -2529,7 +2721,7 @@ const runCaptiveTransportSmoke = async () => {
     }
     adb(['reverse', 'tcp:9111', 'tcp:9112'])
     cdp = await setupNativeBackgroundSmoke()
-    assert.equal(await clickButton(cdp, 'Share location'), true)
+    await clickNativePeerAction(cdp, 'All', 'Share location')
     assert.equal(await clickButton(cdp, 'Create private link'), true)
     let blocked
     try {
@@ -2743,10 +2935,25 @@ const runMeteredPolicySmoke = async () => {
       const pausedSaver = shareById(meteredStatus, saverShare.shareId)
       const alwaysBefore = shareById(meteredStatus, alwaysShare.shareId)
       assert.equal(meteredStatus.sampling, 'balanced', 'the always link keeps balanced sampling')
-      assert.ok(
-        notificationDump().includes('1 of 2 links paused on metered network'),
-        'the notification must report the partial pause honestly',
-      )
+      try {
+        await waitFor(
+          () => notificationDump().includes('1 of 2 links paused on metered network'),
+          'the partial-pause notification',
+          10_000,
+        )
+      } catch (error) {
+        const meteredNotification = notificationDump()
+        throw new Error(
+          `the notification must report the partial pause honestly: ${JSON.stringify({
+            status: await readPolicyStatus(cdp).catch(() => undefined),
+            notification: meteredNotification
+              .split(/\r?\n/)
+              .filter((line) => /paused|links|constellation/i.test(line))
+              .slice(0, 10),
+          })}`,
+          { cause: error },
+        )
+      }
       adb(['emu', 'geo', 'fix', '-70.0301', '40.0301'])
       await waitForShare(
         'the always link to keep publishing while the metered link is paused',
@@ -3055,12 +3262,15 @@ const describeInvitationAddresses = (viewer, shareUrl) =>
 
 const verifyBrowserRevocation = async (viewer, cdp) => {
   try {
-    await viewer.getByRole('button', { name: 'Seeing 0' }).waitFor({ timeout: 15_000 })
+    await viewer.locator('.dock-peers').filter({ hasText: 'Seeing 0' }).waitFor({ timeout: 15_000 })
   } catch (error) {
     throw new Error(
       `Revocation delivery failed: ${JSON.stringify({
         source: await readBackgroundTransportSummary(cdp),
-        viewerStillFollowing: await viewer.getByRole('button', { name: 'Seeing 1' }).isVisible(),
+        viewerStillFollowing: await viewer
+          .locator('.dock-peers')
+          .filter({ hasText: 'Seeing 1' })
+          .isVisible(),
         viewerOnline: await viewer.getByText('P2P online').isVisible(),
       })}`,
       { cause: error },
@@ -3070,12 +3280,27 @@ const verifyBrowserRevocation = async (viewer, cdp) => {
   if (await openSheet.isVisible()) {
     await openSheet.getByRole('button', { name: 'Close', exact: true }).click()
   }
-  await viewer.getByRole('button', { name: 'Seeing 0' }).click()
-  const history = viewer.getByRole('dialog', { name: 'Following' })
-  await history.getByText('Old seeing shares (1)').waitFor()
-  await history.getByText('Old seeing shares (1)').click()
-  await history.getByText('Revoked by sender').waitFor()
-  assert.equal(await history.getByRole('button', { name: 'Show on map' }).count(), 0)
+  const history = await openBrowserPeerFilter(viewer, 'Viewing')
+  const showEnded = history.getByLabel('Show ended')
+  if (!(await showEnded.isChecked())) await showEnded.check()
+  await expect(history.locator('.peer-list__item')).toHaveCount(1)
+  await expect(history).toContainText('Viewed · revoked')
+  await expect(history.locator('.peer-list__map-action')).toHaveCount(0)
+}
+
+const createBrowserReturnShare = async (page) => {
+  const invitation = page.getByRole('region', { name: 'Share back invitation' })
+  await invitation.getByRole('button', { name: 'Share back' }).click()
+  const form = page.getByRole('dialog', { name: 'Share your location' })
+  await expect(form).toContainText('Only this sender receives the private offer')
+  await expect(form.getByText('Star viewers')).toHaveCount(0)
+  await expect(form.getByRole('button', { name: 'Approximate' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(form.getByRole('button', { name: '1 hour' })).toHaveAttribute('aria-pressed', 'true')
+  await form.getByRole('button', { name: 'Create private link' }).click()
+  await expect(form).toHaveCount(0, { timeout: 30_000 })
 }
 
 const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
@@ -3090,7 +3315,7 @@ const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
     })
     await peer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
     await peer.getByRole('button', { name: 'Save location' }).click()
-    await peer.getByRole('button', { name: 'Share approximate location for 1 hour' }).click()
+    await createBrowserReturnShare(peer)
     await waitFor(
       () => androidTextIncludes(cdp, 'Seeing 2'),
       'an automatically accepted second return',
@@ -3105,13 +3330,15 @@ const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
       await androidTextIncludes(cdp, 'A viewer wants to share their location back'),
       false,
     )
-    assert.equal(await clickButton(cdp, 'Seeing 2'), true)
+    await selectNativePeerFilter(cdp, 'Viewing')
     await waitFor(
-      async () => (await androidButtonCount(cdp, 'Show on map')) === 2,
+      async () =>
+        (await cdp.evaluate(
+          `document.querySelectorAll('.peer-list__map-action:not(:disabled)').length`,
+        )) === 2,
       'both returned locations',
       30_000,
     )
-    assert.equal(await androidTextIncludes(cdp, 'Share approximate location for 1 hour'), false)
     assert.equal(await closeAndroidDialog(cdp), true)
   } finally {
     await context.close()
@@ -3128,26 +3355,8 @@ const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
 
 const runShareFlow = async (cdp, browser, options = {}) => {
   console.log('[android-test] creating background share')
-  await waitFor(
-    () =>
-      cdp.evaluate(`Boolean(
-        document.querySelector('button[aria-label="Share location"]') ||
-        document.querySelector('button[aria-label="Show sharing actions"]')
-      )`),
-    'Android sharing controls',
-    30_000,
-  )
-  const shareActionVisible = await cdp.evaluate(
-    `Boolean(document.querySelector('button[aria-label="Share location"]'))`,
-  )
-  if (!shareActionVisible) {
-    assert.equal(await clickAriaButton(cdp, 'Show sharing actions'), true)
-    await waitFor(
-      () => cdp.evaluate(`Boolean(document.querySelector('button[aria-label="Share location"]'))`),
-      'expanded Android share action',
-    )
-  }
-  assert.equal(await clickAriaButton(cdp, 'Share location'), true)
+  await waitForNativeApp(cdp, 'Android sharing controls')
+  await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, '10'), true)
   await waitFor(
@@ -3230,6 +3439,10 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     permissions: ['geolocation'],
   })
   const viewer = await viewerContext.newPage()
+  const locationDiagnostics = []
+  viewer.on('console', (message) => {
+    if (message.type() === 'error') locationDiagnostics.push(`browser-error: ${message.text()}`)
+  })
   const invitation = new URL(shareUrl)
   await viewer.goto(`http://127.0.0.1:4173/${invitation.hash}`, {
     waitUntil: 'domcontentloaded',
@@ -3237,9 +3450,8 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   })
   try {
     await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
-    await viewer.getByRole('button', { name: 'Open menu' }).click()
-    await viewer.getByRole('button', { name: 'Following (1)' }).click()
-    await viewer.getByRole('button', { name: 'Show on map' }).waitFor({ timeout: 30_000 })
+    const peers = await openBrowserPeerFilter(viewer, 'Viewing')
+    await peers.locator('.peer-list__map-action:not(:disabled)').waitFor({ timeout: 30_000 })
   } catch (error) {
     const browserState = {
       p2pOnline: await viewer.getByText('P2P online').isVisible(),
@@ -3247,7 +3459,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
         .getByText('Someone shared their location with you')
         .isVisible(),
       previewVisible: await viewer.getByRole('button', { name: 'Keep following' }).isVisible(),
-      locationVisible: await viewer.getByRole('button', { name: 'Show on map' }).isVisible(),
+      locationVisible: await viewer.locator('.peer-list__map-action:not(:disabled)').isVisible(),
     }
     const androidState = {
       p2pOnline: await androidTextIncludes(cdp, 'P2P online'),
@@ -3255,19 +3467,114 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       connectedViewer: await androidTextIncludes(cdp, '1 connected'),
     }
     throw new Error(
-      `No location reached the browser. Address forms: ${JSON.stringify(await describeInvitationAddresses(viewer, shareUrl))}; Browser state: ${JSON.stringify(browserState)}; Android state: ${JSON.stringify(androidState)}`,
+      `No location reached the browser. Address forms: ${JSON.stringify(await describeInvitationAddresses(viewer, shareUrl))}; Browser state: ${JSON.stringify(browserState)}; Android state: ${JSON.stringify(androidState)}; Native transport: ${JSON.stringify(await readBackgroundTransportSummary(cdp))}; Location diagnostics: ${JSON.stringify(locationDiagnostics)}`,
       { cause: error },
     )
   }
-  await viewer.getByRole('button', { name: 'Show on map' }).click()
-  await viewer.getByRole('button', { name: 'Open menu' }).click()
-  await viewer.getByRole('button', { name: 'Following (1)' }).click()
+  await viewer.locator('.peer-list__map-action:not(:disabled)').first().click()
+  await openBrowserPeerFilter(viewer, 'Viewing')
+  const updatesBeforeBackgroundFix = await receivedUpdateCount(viewer)
+  console.log('[android-test] checking screen-on background update')
+  adb(['emu', 'geo', 'fix', '-70.0021', '40.0021'])
+  try {
+    await waitFor(
+      async () => (await receivedUpdateCount(viewer)) > updatesBeforeBackgroundFix,
+      'a fresh location update while Android sharing is in the background',
+      45_000,
+    )
+  } catch (error) {
+    const updatesBeforeForegroundRetry = await receivedUpdateCount(viewer)
+    adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+    await waitForNativeApp(cdp, 'Android app after background location retry')
+    const transport = await readBackgroundTransportSummary(cdp)
+    const policy = await readPolicyStatus(cdp)
+    await wait(1_000)
+    adb(['emu', 'geo', 'fix', '-70.0031', '40.0031'])
+    await waitFor(
+      async () => (await receivedUpdateCount(viewer)) > updatesBeforeForegroundRetry,
+      'a fresh location update after reopening the Android app',
+      10_000,
+    ).catch(() => undefined)
+    const foregroundRetryObserved =
+      (await receivedUpdateCount(viewer)) > updatesBeforeForegroundRetry
+    const postRetryTransport = await readBackgroundTransportSummary(cdp)
+    const locationDump = adb(['shell', 'dumpsys', 'location'])
+    const locationMode = adb(['shell', 'settings', 'get', 'secure', 'location_mode']).trim()
+    const enabledProviders = adb([
+      'shell',
+      'settings',
+      'get',
+      'secure',
+      'location_providers_allowed',
+    ])
+      .trim()
+      .split(',')
+    const locationEntries = locationDump
+      .split(/\r?\n/)
+      .filter((line) => line.includes(packageName)).length
+    const packageState = adb(['shell', 'dumpsys', 'package', packageName])
+    const permissionStatus = (permission) => {
+      const line = packageState
+        .split(/\r?\n/)
+        .find((candidate) => candidate.includes(`${permission}:`))
+      return line?.match(/granted=(true|false)/)?.[1] ?? 'unknown'
+    }
+    const locationAppOps = adb(['shell', 'cmd', 'appops', 'get', packageName])
+      .split(/\r?\n/)
+      .flatMap((line) => {
+        const match = line.match(
+          /(?:android:)?(fine_location|coarse_location|background_location):\s*(\w+)/i,
+        )
+        return match ? [`${match[1].toLowerCase()}:${match[2].toLowerCase()}`] : []
+      })
+    throw new Error(
+      `Screen-on background location update failed: ${JSON.stringify({
+        state: transport.state,
+        locationStatus: transport.locationStatus,
+        locationAgeMs: transport.locationAgeMs,
+        viewerCount: transport.viewerCount,
+        sessionEvents: transport.sessionEvents,
+        connections: transport.connections,
+        publishedAt: transport.publishedAt,
+        runtimeMessagePresent: transport.runtimeMessagePresent,
+        pauseReason: policy.pauseReason,
+        pausedShares: policy.shares.filter(({ paused }) => paused !== null).length,
+        sampling: policy.sampling,
+        locationEntries,
+        locationMode,
+        gpsEnabled: enabledProviders.includes('gps'),
+        networkLocationEnabled: enabledProviders.includes('network'),
+        injectedFixObserved: locationDump.includes('40.0021') && locationDump.includes('-70.0021'),
+        finePermission: permissionStatus('android.permission.ACCESS_FINE_LOCATION'),
+        backgroundPermission: permissionStatus('android.permission.ACCESS_BACKGROUND_LOCATION'),
+        locationAppOps,
+        updatesBeforeFix: updatesBeforeBackgroundFix,
+        updatesAfterFix: await receivedUpdateCount(viewer),
+        locationDiagnostics,
+        browserFollowSummaries: await viewer
+          .locator('.peer-list article.peer-link-item')
+          .evaluateAll((articles) =>
+            articles.map((article) => {
+              const text = article.textContent ?? ''
+              return {
+                lastLocation: text.match(/Last location:\s*([^·]+?)(?:\s*·|$)/)?.[1]?.trim() ?? '',
+                updates: Number(text.match(/Updates this session:\s*(\d+)/)?.[1] ?? 0),
+              }
+            }),
+          ),
+        foregroundRetryObserved,
+        postRetryLocationStatus: postRetryTransport.locationStatus,
+        postRetryLocationAgeMs: postRetryTransport.locationAgeMs,
+      })}`,
+      { cause: error },
+    )
+  }
   const updatesBeforeLock = await receivedUpdateCount(viewer)
   console.log('[android-test] checking locked-screen update')
   adb(['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
   let lockedUpdateError
   try {
-    adb(['emu', 'geo', 'fix', '-70.0101', '40.0101'])
+    adb(['emu', 'geo', 'fix', '-70.0201', '40.0201'])
     await waitFor(
       async () => (await receivedUpdateCount(viewer)) > updatesBeforeLock,
       'a location update while the Android screen is locked',
@@ -3298,13 +3605,12 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   }
   console.log('[android-test] checking debugger after wake')
   await cdp.evaluate('document.readyState')
-  await viewer
-    .getByRole('dialog', { name: 'Following' })
-    .getByRole('button', { name: 'Close' })
-    .click()
+  const viewerPeers = viewer.locator('.peer-list')
+  if (await viewerPeers.isVisible())
+    await viewerPeers.getByRole('button', { name: 'Close' }).click()
   await viewer.getByRole('button', { name: 'Keep following' }).click()
   await viewer.getByRole('button', { name: 'Save location' }).click()
-  await viewer.getByRole('button', { name: 'Share approximate location for 1 hour' }).click()
+  await createBrowserReturnShare(viewer)
   console.log('[android-test] checking return offer')
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
   await waitFor(
@@ -3312,7 +3618,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     'the private return offer in Android',
     30_000,
   )
-  assert.equal(await clickButton(cdp, 'Accept this and future shares from this link'), true)
+  assert.equal(await clickButton(cdp, 'Accept share-backs'), true)
   try {
     await waitFor(() => androidTextIncludes(cdp, 'Seeing 1'), 'Android return viewer', 75_000)
   } catch (error) {
@@ -3328,7 +3634,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       return {
         seeing: text.match(/Seeing (\\d+)/)?.[1] ?? null,
         accepting: [...document.querySelectorAll('button')].some(button =>
-          button.textContent?.includes('Accept this and future') && button.disabled),
+          button.textContent?.includes('Accept share-backs') && button.disabled),
         errors: errors.filter(error => text.includes(error)),
       };
     })()`)
@@ -3341,53 +3647,77 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       { cause: error },
     )
   }
-  await waitFor(
-    async () => (await readBackgroundStatus(cdp)).returnOfferCount === 0,
-    'the background source to finish accepting the return offer',
-    30_000,
-  )
+  const returnNotices = new Set()
+  try {
+    await waitFor(
+      async () => {
+        const notice = await cdp.evaluate(
+          'document.querySelector(".toast")?.textContent?.trim() ?? ""',
+        )
+        if (notice) returnNotices.add(notice)
+        return (await readBackgroundStatus(cdp)).returnOfferCount === 0
+      },
+      'the background source to finish accepting the return offer',
+      30_000,
+    )
+  } catch (error) {
+    const bestEffort = async (action) => {
+      try {
+        return await action()
+      } catch (diagnosticError) {
+        return { diagnosticError: String(diagnosticError) }
+      }
+    }
+    const followingRows = await bestEffort(async () => {
+      await selectNativePeerFilter(cdp, 'Viewing')
+      await expandNativePeerRows(cdp)
+      return cdp.evaluate(`
+        [...document.querySelectorAll('.peer-list article.peer-link-item')]
+          .map((row) => row.textContent?.trim() ?? '')
+      `)
+    })
+    const viewerText = await bestEffort(() =>
+      viewer
+        .locator('body')
+        .innerText()
+        .then((text) => text.slice(0, 1_500)),
+    )
+    throw new Error(
+      `Background return offer was not acknowledged: ${JSON.stringify({
+        native: await bestEffort(() => readBackgroundStatus(cdp)),
+        transport: await bestEffort(() => readBackgroundTransportSummary(cdp)),
+        notices: [...returnNotices],
+        followingRows,
+        locationDiagnostics,
+        viewerText,
+      })}`,
+      { cause: error },
+    )
+  }
   assert.equal(await androidTextIncludes(cdp, 'Someone shared their location with you'), false)
   assert.equal(await androidTextIncludes(cdp, 'Keep following'), false)
   assert.equal(await androidTextIncludes(cdp, 'Save location'), false)
-  assert.equal(await clickButton(cdp, 'Seeing 1'), true)
-  await waitFor(() => androidTextIncludes(cdp, 'Show on map'), 'the return location', 30_000)
-  assert.equal(await androidTextIncludes(cdp, 'Share approximate location for 1 hour'), false)
+  await selectNativePeerFilter(cdp, 'Viewing')
+  await waitFor(
+    () =>
+      cdp.evaluate(`document.querySelectorAll('.peer-list__map-action:not(:disabled)').length > 0`),
+    'the return location',
+    30_000,
+  )
   assert.equal(await closeAndroidDialog(cdp), true)
   await verifyNativeAutomaticReturn(cdp, browser, shareUrl)
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  await selectNativePeerFilter(cdp, 'Sharing')
   await waitFor(() => androidTextIncludes(cdp, '1 connected'), 'Android viewer presence', 30_000)
   if (options.skipProcessRestart) {
-    assert.equal(await clickButton(cdp, 'Revoke link'), true)
+    await clickNativePeerAction(cdp, 'Sharing', 'Revoke link')
     await verifyBrowserRevocation(viewer, cdp)
     await viewerContext.close()
     return cdp
   }
   cdp.close()
   console.log('[android-test] checking process restart')
-  adb(['shell', 'am', 'force-stop', packageName])
-  adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
-  cdp = undefined
-  for (let attempt = 0; attempt < 8 && !cdp; attempt += 1) {
-    let candidate
-    try {
-      candidate = await connectCdp()
-      await wait(500)
-      const responsive = await Promise.race([
-        androidTextIncludes(candidate, 'Sharing 1'),
-        wait(5_000).then(() => false),
-      ])
-      if (responsive) {
-        cdp = candidate
-        break
-      }
-    } catch {
-      // Process restart may expose a stale WebView debugger target before the new UI settles.
-    }
-    candidate?.close()
-    await wait(1_000)
-  }
-  if (!cdp) throw new Error('Android share UI did not stabilize after process restart.')
-  assert.equal(await clickButton(cdp, 'Sharing 1'), true)
+  cdp = await restartAndroidApp(cdp)
+  await selectNativePeerFilter(cdp, 'Sharing')
   try {
     await waitFor(
       () => androidTextIncludes(cdp, '1 connected'),
@@ -3406,7 +3736,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     }
     throw new Error(`Android viewer reconnect failed: ${JSON.stringify(state)}`, { cause: error })
   }
-  assert.equal(await clickButton(cdp, 'Revoke link'), true)
+  await clickNativePeerAction(cdp, 'Sharing', 'Revoke link')
   await verifyBrowserRevocation(viewer, cdp)
   await viewerContext.close()
 
@@ -3425,6 +3755,262 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     'the cold-start shared-text approval',
   )
   return cdp
+}
+
+const projectLinkHandlers = () =>
+  adb([
+    'shell',
+    'cmd',
+    'package',
+    'query-activities',
+    '--brief',
+    '-a',
+    'android.intent.action.VIEW',
+    '-c',
+    'android.intent.category.BROWSABLE',
+    '-d',
+    'https://github.com/yeus/constellation',
+  ])
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = line.trim().match(/^([a-z][A-Za-z0-9_.]*)\//)
+      return match ? [match[1]] : []
+    })
+
+const resumedActivityIncludes = (fragment) =>
+  adb(['shell', 'dumpsys', 'activity', 'activities'])
+    .split(/\r?\n/)
+    .filter((line) => line.includes('ResumedActivity'))
+    .some((line) => line.includes(fragment))
+
+const runProjectLinksSmoke = async () => {
+  let cdp
+  const handlers = projectLinkHandlers()
+  const disabled = []
+  try {
+    adb(['shell', 'pm', 'clear', packageName])
+    grantIfSupported('android.permission.ACCESS_FINE_LOCATION')
+    adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+    cdp = await connectCdp()
+    await waitForNativeApp(cdp, 'Android project-link smoke startup')
+    if (await androidTextIncludes(cdp, 'Got it'))
+      assert.equal(await clickButton(cdp, 'Got it'), true)
+
+    const rejected = await cdp.evaluate(`(async () => {
+      try {
+        await window.__TAURI_INTERNALS__.invoke('android_open_project_link', {
+          target: 'https://evil.example/',
+        });
+        return 'accepted';
+      } catch (error) {
+        return String(error);
+      }
+    })()`)
+    assert.equal(rejected, 'Unknown public destination.')
+    assert.equal(resumedActivityIncludes(`${packageName}/`), true)
+    assert.equal(await cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`), true)
+
+    if (handlers.length) {
+      assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
+      assert.equal(await tapAndroidButton(cdp, 'GitHub project'), true)
+      await waitFor(
+        () => handlers.some((handler) => resumedActivityIncludes(`${handler}/`)),
+        'an external browser activity for the allowlisted project link',
+        20_000,
+      )
+      for (const handler of handlers) adb(['shell', 'am', 'force-stop', handler])
+      adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+      cdp.close()
+      cdp = await connectCdp()
+      await waitForNativeApp(cdp, 'Android app after the external browser')
+    }
+
+    for (const handler of handlers) {
+      adb(['shell', 'pm', 'disable-user', '--user', '0', handler])
+      disabled.push(handler)
+    }
+    if (handlers.length) {
+      await waitFor(
+        () =>
+          adb([
+            'shell',
+            'cmd',
+            'package',
+            'resolve-activity',
+            '--brief',
+            '-a',
+            'android.intent.action.VIEW',
+            '-c',
+            'android.intent.category.BROWSABLE',
+            '-d',
+            'https://github.com/yeus/constellation',
+          ]).includes('No activity found'),
+        'the browser VIEW handler to be unavailable',
+        10_000,
+      )
+    }
+    assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
+    assert.equal(await tapAndroidButton(cdp, 'GitHub project'), true)
+    await waitFor(
+      () => androidTextIncludes(cdp, 'Could not open external browser.'),
+      'the safe missing-browser failure notice',
+    )
+    assert.equal(resumedActivityIncludes(`${packageName}/`), true)
+    assert.equal(await cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`), true)
+  } finally {
+    for (const handler of disabled) {
+      try {
+        adb(['shell', 'pm', 'enable', '--user', '0', handler])
+      } catch {
+        // Best-effort restoration of the synthetic emulator's browser.
+      }
+    }
+    cdp?.close()
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+  console.log(
+    'Android project links rejected arbitrary destinations, opened the allowlisted URL externally and failed safely without a browser.',
+  )
+}
+
+const runStopNoticeSmoke = async () => {
+  let cdp
+  let server
+  let relay
+  let browser
+  let viewerContext
+  try {
+    relay = await startLocalRelay()
+    server = await startWebServer()
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    cdp = await setupNativeBackgroundSmoke()
+    const share = await startDirectBackgroundShare(cdp, null, {
+      name: 'Stop notice smoke',
+      requireViewerApproval: false,
+    })
+    adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+    await waitFor(
+      () =>
+        adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+          'LocationShareService',
+        ),
+      'the Android foreground service for the stop-notice smoke',
+    )
+
+    browser = await chromium.launch({ env: browserProcessEnvironment(process.env) })
+    viewerContext = await browser.newContext({
+      geolocation: { latitude: 40.0002, longitude: -70.0002 },
+      permissions: ['geolocation'],
+    })
+    const viewer = await viewerContext.newPage()
+    await viewer.goto(`http://127.0.0.1:4173/${new URL(share.url).hash}`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90_000,
+    })
+    await viewer.getByRole('button', { name: 'Keep following' }).click({ timeout: 60_000 })
+    await viewer.getByRole('button', { name: 'Save location' }).click()
+    const shareBack = viewer.getByRole('region', { name: 'Share back invitation' })
+    await shareBack.waitFor({ timeout: 5_000 }).catch(() => undefined)
+    if (await shareBack.count()) await shareBack.getByRole('button', { name: 'Not now' }).click()
+    await waitFor(
+      async () => (await readBackgroundTransportSummary(cdp)).viewerCount === 1,
+      'the browser viewer connection',
+      45_000,
+    )
+    assert.deepEqual(await readStoppedViewers(cdp), [])
+    assert.equal((await readBrowserStopState(viewer)).followedCount, 1)
+
+    console.log('[android-test] checking an ordinary disconnect without a stop notice')
+    adb(['shell', 'am', 'force-stop', packageName])
+    const viewingPeers = await openBrowserPeerFilter(viewer, 'Viewing')
+    await expect(viewingPeers).toContainText('Unavailable', { timeout: 60_000 })
+    cdp = await restartAndroidApp(cdp)
+    await waitFor(
+      async () => (await readBackgroundTransportSummary(cdp)).viewerCount === 1,
+      'the viewer reconnecting after the ordinary disconnect',
+      75_000,
+    )
+    assert.deepEqual(await readStoppedViewers(cdp), [])
+
+    console.log('[android-test] checking an explicit stop while the source is offline')
+    adb(['shell', 'am', 'force-stop', packageName])
+    const savedPeer = viewingPeers.locator('.peer-list__item').filter({ hasText: 'Saved' })
+    await savedPeer.first().locator('.peer-list__summary-name').click()
+    await savedPeer.first().getByRole('button', { name: 'Stop following' }).click()
+    await waitFor(
+      async () => (await readBrowserStopState(viewer)).pendingStopCount === 1,
+      'the queued protected stop notice',
+      15_000,
+    )
+    cdp = await restartAndroidApp(cdp)
+    await viewer.reload()
+    await waitFor(
+      async () => {
+        const records = await readStoppedViewers(cdp)
+        return records.length === 1 && records[0].recordedAt > 0 && records[0].dismissed === false
+      },
+      'one durable stopped-following record on Android',
+      90_000,
+    )
+    const [record] = await readStoppedViewers(cdp)
+    await waitFor(
+      async () => (await readBrowserStopState(viewer)).pendingStopCount === 0,
+      'the acknowledged stop-notice queue',
+      30_000,
+    )
+
+    console.log('[android-test] checking the stopped-following notice and dismissal')
+    await openNativePeerList(cdp)
+    await waitFor(
+      () => androidTextIncludes(cdp, 'Stopped following'),
+      'the stopped-following notice in the Android peer list',
+    )
+    const dismissed = await cdp.evaluate(`(() => {
+      const item = [...document.querySelectorAll('.peer-history-item')]
+        .find((entry) => entry.textContent?.includes('Stopped following'));
+      const button = item?.querySelector('button');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`)
+    assert.equal(dismissed, true)
+    await waitFor(
+      async () => (await readStoppedViewers(cdp))[0]?.dismissed === true,
+      'the persisted stop-notice dismissal',
+      30_000,
+    )
+    assert.equal(await androidTextIncludes(cdp, 'Stopped following'), false)
+    const showEnded = await cdp.evaluate(`(() => {
+      const input = document.querySelector('.peer-list__ended-toggle input');
+      if (!input) return false;
+      if (!input.checked) input.click();
+      return true;
+    })()`)
+    assert.equal(showEnded, true)
+    await waitFor(
+      () => androidTextIncludes(cdp, 'Stopped following'),
+      'the dismissed notice under Show ended',
+    )
+
+    console.log('[android-test] checking dismissal persistence across restart')
+    cdp = await restartAndroidApp(cdp)
+    const restored = await readStoppedViewers(cdp)
+    assert.equal(restored.length, 1)
+    assert.equal(restored[0].dismissed, true)
+    assert.equal(restored[0].recordedAt, record.recordedAt)
+    await openNativePeerList(cdp)
+    assert.equal(await androidTextIncludes(cdp, 'Stopped following'), false)
+  } finally {
+    await browser?.close()
+    cdp?.close()
+    server?.kill('SIGTERM')
+    relay?.kill('SIGTERM')
+    if (relay) adb(['reverse', '--remove', 'tcp:9111'])
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+  console.log(
+    'Android delivered one durable stopped-following notice, ignored an ordinary disconnect and retained the dismissal.',
+  )
 }
 
 const main = async () => {
@@ -3517,7 +4103,7 @@ const main = async () => {
     try {
       adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
       cdp = await connectCdp()
-      await waitFor(() => androidTextIncludes(cdp, 'Share location'), 'Android app startup')
+      await waitForNativeApp(cdp, 'Android app startup')
       const privateKey = Buffer.from(
         privateKeyToProtobuf(await generateKeyPair('Ed25519')),
       ).toString('base64url')
@@ -3613,7 +4199,7 @@ const main = async () => {
       const fallbackStart = Date.now()
       await cdp.reload()
       await waitFor(
-        () => androidTextIncludes(cdp, 'Share location'),
+        () => cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`),
         'Android fallback smoke reload',
       )
       await waitFor(
@@ -3653,6 +4239,14 @@ const main = async () => {
     console.log('Android native no-fix timeout handed off to WebView geolocation.')
     return
   }
+  if (process.argv.includes('--stop-notice-smoke')) {
+    await runStopNoticeSmoke()
+    return
+  }
+  if (process.argv.includes('--project-links-smoke')) {
+    await runProjectLinksSmoke()
+    return
+  }
   if (process.argv.includes('--ui-policy-smoke')) {
     let cdp
     try {
@@ -3661,7 +4255,7 @@ const main = async () => {
       adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
       cdp = await connectCdp()
       await waitFor(
-        () => androidTextIncludes(cdp, 'Share location'),
+        () => cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`),
         'Android UI policy smoke startup',
       )
       const intro = await cdp.evaluate(
@@ -3713,7 +4307,7 @@ const main = async () => {
         try {
           candidate = await connectCdp()
           await wait(750)
-          if (await androidTextIncludes(candidate, 'Share location')) {
+          if (await candidate.evaluate(`Boolean(document.querySelector('button.dock-peers'))`)) {
             cdp = candidate
             break
           }

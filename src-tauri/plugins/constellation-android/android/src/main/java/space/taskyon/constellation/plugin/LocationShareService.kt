@@ -127,6 +127,22 @@ class LocationShareService : Service(), LocationListener {
           startRuntime()
           START_STICKY
         }
+        ShareServiceContract.ACTION_DEVICE_COMPARISON -> {
+          val command = JSONObject(intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST) ?: "{}")
+            .put("type", "device-comparison")
+            .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
+          queueCommand(command)
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_REPLACE_BACKGROUND_OWNER -> {
+          val command = JSONObject(intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST) ?: "{}")
+            .put("type", "replace-background-owner")
+            .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
+          queueCommand(command)
+          startRuntime()
+          START_STICKY
+        }
         ShareServiceContract.ACTION_APPROVE_VIEWER -> {
           queueCommand(
             JSONObject()
@@ -155,6 +171,17 @@ class LocationShareService : Service(), LocationListener {
               .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
               .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
               .put("fingerprint", intent?.getStringExtra(ShareServiceContract.EXTRA_FINGERPRINT)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_DISMISS_STOPPED_VIEWER -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "dismiss-stopped-viewer")
+              .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID))
+              .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID))
+              .put("peerId", intent?.getStringExtra(ShareServiceContract.EXTRA_PEER_ID)),
           )
           startRuntime()
           START_STICKY

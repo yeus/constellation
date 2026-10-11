@@ -99,6 +99,11 @@ class AndroidCurrentArgs {
 class AndroidWatchIdArgs {
   var watchId: Long = 0
 }
+@InvokeArg
+class ProjectLinkArgs {
+  var target: String = ""
+}
+
 
 @TauriPlugin(permissions = [Permission(
   strings = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION],
@@ -124,6 +129,25 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   private fun locationPermissionResult(): JSObject = JSObject()
     .put("grant", locationGrant(activity))
     .put("servicesEnabled", locationManager.isLocationEnabled)
+
+  @Command
+  fun openProjectLink(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(ProjectLinkArgs::class.java)
+      val url = when (args.target) {
+        "project" -> "https://github.com/yeus/constellation"
+        "release" -> "https://github.com/yeus/constellation/releases/latest"
+        else -> throw IllegalArgumentException("Unknown public destination.")
+      }
+      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        .addCategory(Intent.CATEGORY_BROWSABLE)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      activity.startActivity(intent)
+      invoke.resolve(JSObject())
+    } catch (_: Exception) {
+      invoke.reject("No external browser could open the project link.")
+    }
+  }
 
   @Command
   fun locationPermission(invoke: Invoke) {
@@ -454,6 +478,50 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   @Command
+  fun backgroundDeviceComparison(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(BackgroundShareArgs::class.java)
+      check(args.request.length <= 1024) { "Invalid device comparison request." }
+      val request = JSONObject(args.request)
+      check(request.optString("shareId").matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      check(request.optString("challenge").matches(Regex("[A-Za-z0-9_-]{43}"))) { "Invalid comparison session." }
+      check(request.optString("action") in setOf("confirm", "cancel")) { "Invalid comparison action." }
+      runReturnCommand(invoke, ShareServiceContract.ACTION_DEVICE_COMPARISON, request.optString("shareId"), request = request.toString())
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not save device comparison.")
+    }
+  }
+
+  @Command
+  fun replaceBackgroundOwner(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(BackgroundShareArgs::class.java)
+      check(args.request.length <= 2_048) { "Invalid owner request." }
+      val request = JSONObject(args.request)
+      check(request.optString("shareId").matches(Regex("[A-Za-z0-9_-]{16,64}"))) {
+        "Invalid share ID."
+      }
+      check(request.optString("sourcePeerId").length in 1..256) { "Invalid source identity." }
+      check(request.optString("ownerPeerId").length in 1..256) { "Invalid owner identity." }
+      check(request.optString("ownerProof").matches(Regex("[A-Za-z0-9_-]{40,256}"))) {
+        "Invalid owner proof."
+      }
+      when (request.optString("mode")) {
+        "recipient" ->
+          check(request.optString("recipientPeerId").length in 1..256) {
+            "Invalid recipient identity."
+          }
+        "source" -> check(request.has("recipientPeerId").not()) { "Unexpected recipient identity." }
+        else -> throw IllegalArgumentException("Invalid ownership mode.")
+      }
+      runReturnCommand(invoke, ShareServiceContract.ACTION_REPLACE_BACKGROUND_OWNER,
+        request.optString("shareId"), request = request.toString())
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not authenticate the foreground location owner.")
+    }
+  }
+
+  @Command
   fun approveBackgroundViewer(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(ReturnApprovalArgs::class.java)
@@ -483,6 +551,19 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       )
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not dismiss this return offer.")
+    }
+  }
+
+  @Command
+  fun dismissBackgroundStoppedViewer(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(ReturnApprovalArgs::class.java)
+      check(args.shareId.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid share ID." }
+      check(args.peerId.length in 1..256) { "Invalid peer identity." }
+      runReturnCommand(invoke, ShareServiceContract.ACTION_DISMISS_STOPPED_VIEWER,
+        args.shareId, peerId = args.peerId)
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not dismiss the stop notice.")
     }
   }
 

@@ -102,6 +102,12 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub async fn replace_background_owner(&self, request: &str) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("replaceBackgroundOwner",
+            json!({ "request": request }))
+            .await.map_err(Into::into)
+    }
+
     pub async fn approve_return_link(&self, share_id: &str) -> crate::Result<Value> {
         self.0
             .run_mobile_plugin_async(
@@ -112,6 +118,11 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub async fn device_comparison(&self, request: &str) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("backgroundDeviceComparison", json!({ "request": request }))
+            .await.map_err(Into::into)
+    }
+
     pub async fn approve_viewer(&self, share_id: &str, peer_id: &str) -> crate::Result<Value> {
         self.0
             .run_mobile_plugin_async(
@@ -120,6 +131,12 @@ impl<R: Runtime> ConstellationAndroid<R> {
             )
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn dismiss_stopped_viewer(&self, share_id: &str, peer_id: &str) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("dismissBackgroundStoppedViewer",
+            json!({ "shareId": share_id, "peerId": peer_id }))
+            .await.map_err(Into::into)
     }
 
     pub async fn dismiss_return_offer(
@@ -163,6 +180,13 @@ impl<R: Runtime> ConstellationAndroid<R> {
                 "blockBackgroundViewer",
                 json!({ "shareId": share_id, "fingerprint": fingerprint }),
             )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn open_project_link(&self, target: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async("openProjectLink", json!({ "target": target }))
             .await
             .map_err(Into::into)
     }

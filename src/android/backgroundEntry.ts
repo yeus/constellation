@@ -27,6 +27,7 @@ declare global {
 type CreateRequest = {
   readonly precision: ShareDraft['precision']
   readonly viewerCapacity: ShareDraft['viewerCapacity']
+  readonly requireViewerApproval?: boolean
   readonly name: string
   readonly publication: ShareDraft['publication']
   readonly battery?: ShareDraft['battery']
@@ -36,7 +37,25 @@ type CreateRequest = {
   readonly shareBaseUrl: string
 }
 
+type ReplaceOwnerCommand = {
+  readonly type: 'replace-background-owner'
+  readonly requestId: string
+  readonly shareId: string
+  readonly sourcePeerId: string
+  readonly ownerPeerId: string
+  readonly ownerProof: string
+  readonly mode: 'source' | 'recipient'
+  readonly recipientPeerId?: string
+}
+
 type BackgroundCommand =
+  | {
+      readonly type: 'device-comparison'
+      readonly requestId: string
+      readonly shareId: string
+      readonly challenge: string
+      readonly action: 'confirm' | 'cancel'
+    }
   | {
       readonly type: 'set-peer-names'
       readonly requestId: string
@@ -60,6 +79,7 @@ type BackgroundCommand =
       readonly shareId: string
       readonly peerId: string
     }
+  | ReplaceOwnerCommand
   | BackgroundReturnCommand
   | {
       readonly type: 'set-viewer-name'
@@ -86,6 +106,7 @@ const draftFor = (request: CreateRequest): ShareDraft => ({
   precision: request.precision,
   duration: durationFor(request.expiresAt),
   viewerCapacity: request.viewerCapacity,
+  requireViewerApproval: request.requireViewerApproval !== false,
   untilRevokedAcknowledged: request.expiresAt === null,
   name: request.name,
   publication: request.publication,
@@ -254,6 +275,42 @@ const start = (): void => {
       }
       return
     }
+    if (command.type === 'replace-background-owner') {
+      try {
+        await runtime.replaceBackgroundShareOwner(
+          command.shareId,
+          command.sourcePeerId,
+          command.ownerPeerId,
+          command.ownerProof,
+          command.mode === 'recipient' && command.recipientPeerId
+            ? { mode: 'recipient', recipientPeerId: command.recipientPeerId }
+            : { mode: 'source' },
+        )
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not authenticate the foreground location owner.',
+        })
+      }
+      return
+    }
+    if (command.type === 'device-comparison') {
+      try {
+        if (command.action === 'confirm')
+          await runtime.confirmDeviceComparison(command.shareId, command.challenge)
+        else await runtime.cancelDeviceComparison(command.shareId, command.challenge)
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Device comparison expired, cancelled or could not be saved.',
+        })
+      }
+      return
+    }
     if (command.type === 'approve-viewer') {
       try {
         await runtime.approveViewer(command.shareId, command.peerId)
@@ -284,7 +341,11 @@ const start = (): void => {
       }
       return
     }
-    if (command.type === 'approve-return-link' || command.type === 'dismiss-return-offer') {
+    if (
+      command.type === 'approve-return-link' ||
+      command.type === 'dismiss-return-offer' ||
+      command.type === 'dismiss-stopped-viewer'
+    ) {
       await executeBackgroundReturnCommand(runtime, command, post)
       return
     }

@@ -20,6 +20,7 @@ test('new shares use privacy-preserving defaults', () => {
     precision: 'approximate',
     duration: '1h',
     viewerCapacity: 1,
+    requireViewerApproval: true,
     untilRevokedAcknowledged: false,
     name: '',
     publication: 'foreground',

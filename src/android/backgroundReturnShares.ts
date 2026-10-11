@@ -13,6 +13,11 @@ export const receiveApprovedBackgroundReturns = async (
     if (!approved.has(offer.shareId)) continue
     try {
       await receive(offer)
+    } catch {
+      failed += 1
+      continue
+    }
+    try {
       await acknowledge(offer)
       accepted += 1
     } catch {

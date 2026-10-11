@@ -13,6 +13,7 @@ test('return approval is acknowledged only after persistence finishes', async ()
     {
       approveReturnLink: () => persistence,
       dismissReturnOffer: async () => undefined,
+      dismissStoppedViewer: async () => undefined,
     },
     {
       type: 'approve-return-link',
@@ -35,6 +36,7 @@ test('failed return approval is acknowledged as a failure', async () => {
         throw new Error('Synthetic private storage failure')
       },
       dismissReturnOffer: async () => undefined,
+      dismissStoppedViewer: async () => undefined,
     },
     {
       type: 'approve-return-link',
@@ -60,6 +62,7 @@ test('failed dismissal remains a correlated failure instead of hiding the offer'
       dismissReturnOffer: async () => {
         throw new Error('Synthetic private storage failure')
       },
+      dismissStoppedViewer: async () => undefined,
     },
     {
       type: 'dismiss-return-offer',
@@ -76,4 +79,27 @@ test('failed dismissal remains a correlated failure instead of hiding the offer'
       error: 'Could not save the return-sharing change.',
     },
   ])
+})
+
+test('dismissal of a stopped-viewer notice remains correlated to protected persistence', async () => {
+  const results: unknown[] = []
+  const calls: string[] = []
+  await executeBackgroundReturnCommand(
+    {
+      approveReturnLink: async () => undefined,
+      dismissReturnOffer: async () => undefined,
+      dismissStoppedViewer: async (shareId, peerId) => {
+        calls.push(`${shareId}:${peerId}`)
+      },
+    },
+    {
+      type: 'dismiss-stopped-viewer',
+      requestId: 'synthetic-stop-dismiss',
+      shareId: 'synthetic-share',
+      peerId: 'synthetic-peer',
+    },
+    (result) => results.push(result),
+  )
+  assert.deepEqual(calls, ['synthetic-share:synthetic-peer'])
+  assert.deepEqual(results, [{ type: 'command-complete', requestId: 'synthetic-stop-dismiss' }])
 })

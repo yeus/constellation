@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 import { bytesToBase64Url } from './encoding.ts'
-import { createShareInvitation } from './shareLink.ts'
+import { createShareInvitation, returnOwnerMessage } from './shareLink.ts'
 import type { PrivateState } from './privateStore.ts'
 
 import { createBrowserLocationSource } from '../location/browser.ts'
 import {
   acceptReturnShare,
   appendSessionEvent,
+  claimSingleRecipient,
   followStatusFor,
   createSharingRuntime,
   generatedFollowName,
@@ -17,6 +18,55 @@ import {
   sessionSweepReason,
   type SharingRuntimeState,
 } from './sharingRuntime.ts'
+
+test('a concurrent first-device claim grants nothing before durable persistence', async () => {
+  const share: { approvedPeerId?: string; claimPending?: boolean } = {}
+  let release!: () => void
+  let saves = 0
+  const saving = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const first = claimSingleRecipient(share, 'peer-A', async () => {
+    saves++
+    await saving
+  })
+  assert.equal(share.claimPending, true)
+  assert.equal(
+    await claimSingleRecipient(share, 'peer-A', async () => {
+      saves++
+    }),
+    'pending',
+  )
+  assert.equal(
+    await claimSingleRecipient(share, 'peer-B', async () => {
+      saves++
+    }),
+    'denied',
+  )
+  assert.equal(saves, 1)
+  release()
+  assert.equal(await first, 'claimed')
+  assert.equal(
+    await claimSingleRecipient(share, 'peer-A', async () => {
+      saves++
+    }),
+    'claimed',
+  )
+  assert.equal(saves, 1)
+})
+
+test('storage failure rolls back the first-device claim', async () => {
+  const share: { approvedPeerId?: string; claimPending?: boolean } = {}
+  await assert.rejects(
+    claimSingleRecipient(share, 'peer-A', async () => {
+      throw new Error('storage failed')
+    }),
+    /storage failed/,
+  )
+  assert.equal(share.approvedPeerId, undefined)
+  assert.equal(share.claimPending, false)
+  assert.equal(await claimSingleRecipient(share, 'peer-B', async () => undefined), 'claimed')
+})
 
 test('retrying a received return after acknowledgement failure preserves its single viewer', async () => {
   const returned = await createShareInvitation({
@@ -248,6 +298,7 @@ test('failed link-group approval keeps the offer and permits a persisted retry',
     assert.equal(state.endNotifications.length, 1)
     assert.equal(saved.endedShares?.[0]?.reason, 'revoked')
     assert.deepEqual(Object.keys(saved.endedShares?.[0] ?? {}).sort(), [
+      'capacity',
       'endedAt',
       'publication',
       'reason',
@@ -310,6 +361,344 @@ test('an external return receiver preserves saved follows without restoring view
     await assert.rejects(acceptShare('invalid invitation'), /foreground receiver/)
   } finally {
     await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('device comparison confirmation is explicit, durable, rollback-safe and bound to the admitted identity', async () => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source',
+    addresses: [],
+    expiresAt: null,
+  })
+  const comparison = {
+    shareId: invitation.capability.shareId,
+    ownPeerId: 'synthetic-source',
+    peerId: 'synthetic-viewer',
+    role: 'sender' as const,
+    challenge: 'A'.repeat(43),
+    letters: 'ABCD',
+    expiresAt: Date.now() + 120000,
+  }
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(await generateKeyPair('Ed25519'))),
+    shares: [
+      {
+        url: invitation.url,
+        precision: 'approximate',
+        capacity: 1,
+        approvedPeerId: comparison.peerId,
+        publication: 'foreground',
+      },
+    ],
+    followed: [],
+    deviceComparisons: [comparison],
+  }
+  let saved = structuredClone(initial),
+    fail = false
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => initial,
+      save: async (state) => {
+        if (fail) throw new Error('Synthetic storage failure')
+        saved = structuredClone(state)
+      },
+    },
+  )
+  let state!: SharingRuntimeState
+  runtime.subscribe((value) => {
+    state = value
+  })
+  try {
+    await runtime.approveReturnLink(comparison.shareId)
+    assert.equal(state.deviceComparisons?.[0]?.confirmedAt, undefined)
+    assert.deepEqual(saved.deviceComparisons, [])
+    fail = true
+    await assert.rejects(
+      runtime.confirmDeviceComparison(comparison.shareId, comparison.challenge),
+      /storage failure/,
+    )
+    assert.equal(state.deviceComparisons?.[0]?.confirmedAt, undefined)
+    fail = false
+    await runtime.confirmDeviceComparison(comparison.shareId, comparison.challenge)
+    assert.ok(state.deviceComparisons?.[0]?.confirmedAt)
+    await runtime.cancelDeviceComparison(comparison.shareId, comparison.challenge)
+    assert.deepEqual(saved.deviceComparisons, [])
+    await assert.rejects(
+      runtime.confirmDeviceComparison(comparison.shareId, comparison.challenge),
+      /expired or cancelled/,
+    )
+    for (const changed of [
+      { ...comparison, peerId: 'different-viewer' },
+      { ...comparison, ownPeerId: 'different-source' },
+      { ...comparison, expiresAt: Date.now() - 1 },
+    ]) {
+      const other = createSharingRuntime(
+        createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+        'https://example.test/',
+        {
+          load: async () => ({ ...initial, deviceComparisons: [changed] }),
+          save: async () => undefined,
+        },
+      )
+      try {
+        await assert.rejects(
+          other.confirmDeviceComparison(comparison.shareId, comparison.challenge),
+          /expired or cancelled/,
+        )
+      } finally {
+        await other.stop()
+      }
+    }
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('Android background return share accepts the foreground owner proof without sharing its private identity', async () => {
+  const { peerIdFromPrivateKey } = await import('@libp2p/peer-id')
+  const { parseShareInvitation, verifyReturnOwner } = await import('./shareLink.ts')
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  const nativeIdentity = await generateKeyPair('Ed25519')
+  const nativeShareKey = await generateKeyPair('Ed25519')
+  const viewerIdentity = await generateKeyPair('Ed25519')
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: peerIdFromPrivateKey(nativeShareKey).toString(),
+    addresses: [],
+    expiresAt: null,
+    ownerPrivateKey: nativeIdentity,
+  })
+  const nativeInitial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(nativeIdentity)),
+    shares: [
+      {
+        url: invitation.url,
+        sourcePrivateKey: bytesToBase64Url(privateKeyToProtobuf(nativeShareKey)),
+        publication: 'background',
+        precision: 'approximate',
+        capacity: 1,
+      },
+    ],
+    followed: [],
+  }
+  let saves = 0
+  let saved = structuredClone(nativeInitial)
+  const background = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'native', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => saved,
+      save: async (state) => {
+        saves += 1
+        saved = structuredClone(state)
+      },
+    },
+  )
+  const foreground = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'foreground', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => ({
+        version: 1,
+        privateKey: bytesToBase64Url(privateKeyToProtobuf(viewerIdentity)),
+        shares: [],
+        followed: [],
+      }),
+      save: async () => undefined,
+    },
+  )
+  try {
+    const signed = await foreground.signReturnOwnership(
+      invitation.capability.shareId,
+      invitation.capability.sourcePeerId,
+    )
+    assert.equal(signed.ownerPeerId, peerIdFromPrivateKey(viewerIdentity).toString())
+    assert.equal(signed.ownerPeerId === invitation.capability.ownerPeerId, false)
+    await assert.rejects(
+      background.replaceBackgroundShareOwner(
+        invitation.capability.shareId,
+        invitation.capability.sourcePeerId,
+        signed.ownerPeerId,
+        invitation.capability.ownerProof!,
+        { mode: 'recipient', recipientPeerId: peerIdFromPrivateKey(nativeIdentity).toString() },
+      ),
+      /Invalid return ownership proof/,
+    )
+    const updated = await background.replaceBackgroundShareOwner(
+      invitation.capability.shareId,
+      invitation.capability.sourcePeerId,
+      signed.ownerPeerId,
+      signed.ownerProof,
+      { mode: 'recipient', recipientPeerId: peerIdFromPrivateKey(nativeIdentity).toString() },
+    )
+    const capability = parseShareInvitation(updated.url)
+    assert.equal(capability.sourcePeerId, invitation.capability.sourcePeerId)
+    assert.equal(capability.secret, invitation.capability.secret)
+    assert.equal(capability.ownerPeerId, signed.ownerPeerId)
+    assert.equal(await verifyReturnOwner(capability, signed.ownerPeerId), true)
+    assert.equal(saved.privateKey, nativeInitial.privateKey)
+    assert.equal(saved.shares[0]?.sourcePrivateKey, nativeInitial.shares[0]?.sourcePrivateKey)
+    assert.equal(saved.shares[0]?.approvedPeerId, peerIdFromPrivateKey(nativeIdentity).toString())
+    assert.equal(saved.shares[0]?.url, updated.url)
+    const savedAfterHandoff = saves
+    // Native command acknowledgement may be lost after the proof was saved.
+    const again = await background.replaceBackgroundShareOwner(
+      invitation.capability.shareId,
+      invitation.capability.sourcePeerId,
+      signed.ownerPeerId,
+      signed.ownerProof,
+      { mode: 'recipient', recipientPeerId: peerIdFromPrivateKey(nativeIdentity).toString() },
+    )
+    assert.equal(again.url, updated.url)
+    assert.equal(saves, savedAfterHandoff)
+    await assert.rejects(
+      background.replaceBackgroundShareOwner(
+        invitation.capability.shareId,
+        invitation.capability.sourcePeerId,
+        signed.ownerPeerId,
+        signed.ownerProof,
+        { mode: 'recipient', recipientPeerId: 'synthetic-different-recipient' },
+      ),
+      /not available/,
+    )
+  } finally {
+    await foreground.stop()
+    await background.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('Android background source share adopts the foreground owner proof for return targeting', async () => {
+  const { peerIdFromPrivateKey } = await import('@libp2p/peer-id')
+  const { parseShareInvitation, verifyReturnOwner } = await import('./shareLink.ts')
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  const nativeIdentity = await generateKeyPair('Ed25519')
+  const nativeShareKey = await generateKeyPair('Ed25519')
+  const foregroundIdentity = await generateKeyPair('Ed25519')
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: peerIdFromPrivateKey(nativeShareKey).toString(),
+    addresses: [],
+    expiresAt: null,
+    ownerPrivateKey: nativeIdentity,
+  })
+  const nativeInitial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(nativeIdentity)),
+    shares: [
+      {
+        url: invitation.url,
+        sourcePrivateKey: bytesToBase64Url(privateKeyToProtobuf(nativeShareKey)),
+        publication: 'background',
+        precision: 'approximate',
+        capacity: 10,
+      },
+    ],
+    followed: [],
+  }
+  let saves = 0
+  let saved = structuredClone(nativeInitial)
+  const background = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'native', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => saved,
+      save: async (state) => {
+        saves += 1
+        saved = structuredClone(state)
+      },
+    },
+  )
+  const foreground = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'foreground', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => ({
+        version: 1,
+        privateKey: bytesToBase64Url(privateKeyToProtobuf(foregroundIdentity)),
+        shares: [],
+        followed: [],
+      }),
+      save: async () => undefined,
+    },
+  )
+  try {
+    const signed = await foreground.signReturnOwnership(
+      invitation.capability.shareId,
+      invitation.capability.sourcePeerId,
+    )
+    assert.equal(signed.ownerPeerId, peerIdFromPrivateKey(foregroundIdentity).toString())
+    assert.equal(signed.ownerPeerId === invitation.capability.ownerPeerId, false)
+    await assert.rejects(
+      background.replaceBackgroundShareOwner(
+        invitation.capability.shareId,
+        invitation.capability.sourcePeerId,
+        signed.ownerPeerId,
+        invitation.capability.ownerProof!,
+        { mode: 'source' },
+      ),
+      /Invalid return ownership proof/,
+    )
+    const updated = await background.replaceBackgroundShareOwner(
+      invitation.capability.shareId,
+      invitation.capability.sourcePeerId,
+      signed.ownerPeerId,
+      signed.ownerProof,
+      { mode: 'source' },
+    )
+    const capability = parseShareInvitation(updated.url)
+    assert.equal(capability.sourcePeerId, invitation.capability.sourcePeerId)
+    assert.equal(capability.secret, invitation.capability.secret)
+    assert.equal(capability.ownerPeerId, signed.ownerPeerId)
+    assert.equal(await verifyReturnOwner(capability, signed.ownerPeerId), true)
+    assert.equal(saved.privateKey, nativeInitial.privateKey)
+    assert.equal(saved.shares[0]?.sourcePrivateKey, nativeInitial.shares[0]?.sourcePrivateKey)
+    assert.equal(saved.shares[0]?.approvedPeerId, undefined)
+    assert.equal(saved.shares[0]?.url, updated.url)
+    const savedAfterHandoff = saves
+    const again = await background.replaceBackgroundShareOwner(
+      invitation.capability.shareId,
+      invitation.capability.sourcePeerId,
+      signed.ownerPeerId,
+      signed.ownerProof,
+      { mode: 'source' },
+    )
+    assert.equal(again.url, updated.url)
+    assert.equal(saves, savedAfterHandoff)
+    const other = await generateKeyPair('Ed25519')
+    const otherOwnerPeerId = peerIdFromPrivateKey(other).toString()
+    const otherOwnerProof = bytesToBase64Url(
+      await other.sign(
+        returnOwnerMessage(invitation.capability.shareId, invitation.capability.sourcePeerId),
+      ),
+    )
+    await assert.rejects(
+      background.replaceBackgroundShareOwner(
+        invitation.capability.shareId,
+        invitation.capability.sourcePeerId,
+        otherOwnerPeerId,
+        otherOwnerProof,
+        { mode: 'source' },
+      ),
+      /already replaced/,
+    )
+  } finally {
+    await foreground.stop()
+    await background.stop()
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
     else Reflect.deleteProperty(globalThis, 'window')
   }

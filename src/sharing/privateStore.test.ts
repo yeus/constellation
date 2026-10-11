@@ -78,6 +78,52 @@ test('restores directional name consent and private association only from encryp
   assert.equal(parsePrivateState(state).peerNamePreferences, undefined)
 })
 
+test('retains offline stop notices and recipient binding in protected state across reload', async () => {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ])
+  const pending = {
+    shareId: 'synthetic-stop-share-id',
+    sourcePeerId: 'synthetic-source-peer',
+    viewerPeerId: 'synthetic-viewer-peer',
+    addresses: ['/dns4/synthetic.invalid/tcp/443/wss'],
+    proof: 'A'.repeat(43),
+    eventId: 'synthetic-offline-event-123',
+    queuedAt: 12_345,
+  }
+  const ended = {
+    url: 'https://example.invalid/#share=synthetic-ended',
+    publication: 'background' as const,
+    reason: 'expired' as const,
+    capacity: 1,
+    approvedPeerId: 'synthetic-bound-peer',
+    endedAt: 12_345,
+  }
+  const stopped = {
+    shareId: pending.shareId,
+    peerId: 'synthetic-viewer-peer',
+    eventId: 'synthetic-new-stop-event-id',
+    recordedAt: 2_000,
+    recentEvents: [{ eventId: pending.eventId, recordedAt: 1_000 }],
+  }
+  const encrypted = await encryptPrivateState(
+    {
+      ...state,
+      pendingStopNotices: [pending],
+      endedShares: [ended],
+      stoppedViewers: [stopped],
+    },
+    key,
+  )
+  assert.equal(JSON.stringify(encrypted).includes('synthetic-stop-share-id'), false)
+  const restored = await decryptPrivateState(encrypted, key)
+  assert.deepEqual(restored.pendingStopNotices, [pending])
+  assert.deepEqual(restored.endedShares, [ended])
+  assert.deepEqual(restored.stoppedViewers, [stopped])
+  assert.equal(parsePrivateState(state).pendingStopNotices, undefined)
+})
+
 test('preserves link-group return approval, prompt history and old-share records', () => {
   const current = parsePrivateState({
     ...state,
@@ -103,6 +149,25 @@ test('preserves link-group return approval, prompt history and old-share records
   assert.equal(current.pendingReturns?.length, 1)
   assert.equal(current.oldSeeing?.[0]?.reason, 'revoked')
   assert.equal(current.oldSharing?.[0]?.reason, 'expired')
+})
+
+test('loads legacy shares and bounded authenticated viewer history', () => {
+  const legacy = parsePrivateState({
+    ...state,
+    shares: [{ ...state.shares[0] }],
+  })
+  assert.equal(legacy.shares[0]?.viewerPeerIds, undefined)
+
+  const current = parsePrivateState({
+    ...state,
+    shares: [
+      {
+        ...state.shares[0],
+        viewerPeerIds: ['synthetic-viewer-a', 'synthetic-viewer-b'],
+      },
+    ],
+  })
+  assert.deepEqual(current.shares[0]?.viewerPeerIds, ['synthetic-viewer-a', 'synthetic-viewer-b'])
 })
 
 test('keeps legacy link-wide return consent scoped to the same share ID', () => {
