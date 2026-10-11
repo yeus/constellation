@@ -30,6 +30,8 @@ Canonical requirements: `SYSTEM_DEFINITION.csv` entries 208–228. Ordered scope
 | `corepack yarn ci:quick`                                                                                   | Passed 2026-10-11: formatting, vendor builds/tests, lint, application and script tests, Android config, web build and release metadata (`0.1.1-rc.3`); Vite reported a 2.1 MB minified chunk warning |
 | `corepack yarn test:unit`                                                                                  | 197 passed (includes the new source owner-proof handoff regression)                                                                                                                                  |
 
+Committed-tree preflight: `corepack yarn ci:preflight` passed on clean revision `2382415` on 2026-10-11 and confirmed the revision remained unchanged. It covered immutable install, formatting, vendor build, lint, unit/script tests, application build, share-flow, P2P, map UI, diagnostics, Pages and screenshots. It does not run `tests/device-comparison.spec.ts`; that browser suite separately passed 2/2 on 2026-10-09. GitHub Actions remains unverified.
+
 ### Native Android (2026-10-09)
 
 All native runs used the project flake on the sandbox emulators; the debug APK built for x86_64 (emulator) and arm64 (device target). API 29 compat and API 36 modern emulator profiles were exercised.
@@ -56,7 +58,7 @@ Harness corrections made during the campaign: the Android peer-filter helper now
 - Physical-device acceptance has not run: real lock screen, foreground-service notification and background-location permission flow, Doze/battery restrictions, app process death under memory pressure, external default browser launching, real network transitions and trusted human four-letter comparison remain open. Emulator coverage is strong but is not a substitute.
 - Native project/release link launching, allowlist rejection and missing-browser failure passed on API 29 and API 36 (`--project-links-smoke`). Pages emitted the expected missing `ANDROID_APP_LINK_SHA256` warning, so signed/deployed App Links association remains unverified.
 - Full compact-row mobile accessibility and native safe areas remain partially manual; the browser and WebView automation cover the documented workflows.
-- At this report's 2026-10-11 update, GitHub Actions and committed-checkout `ci:preflight` had not run. The preflight is scheduled on the clean tree after this documentation/catalog update is committed.
+- GitHub Actions has not run. The clean committed-tree `ci:preflight` passed for revision `2382415`; the device-comparison browser spec passed separately, as described above.
 - Four-letter comparison has about 19 bits of SAS strength and requires explicit trusted human-channel confirmation; browser commitment/challenge/reveal success is not physical-device acceptance or formal cryptographic proof. See [security review](DEVICE_COMPARISON_SECURITY.md).
 - Stop retries require the viewer app to run and sender to become reachable within seven days; the sender's 16-event ledger bounds replay deduplication; unseen out-of-order events and evicted IDs have no total-order guarantee.
 

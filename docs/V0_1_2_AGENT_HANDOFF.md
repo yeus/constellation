@@ -271,7 +271,7 @@ If blocked, continue with other independent safe tasks and leave a precise repro
 
 Do not restart the completed history implementation or repeat passing suites without a changed behavior or unresolved concern. The native emulator campaign is complete (2026-10-09), including direct transport and project/release links. The maintainer authorized commits on `main`; the next steps are:
 
-1. Run `corepack yarn ci:preflight` on the clean committed tree and record its result. GitHub Actions remains an external check.
+1. `corepack yarn ci:preflight` passed on clean revision `2382415` on 2026-10-11; the runner confirmed the committed revision was unchanged. GitHub Actions remains an external check.
 2. The maintainer plans to bump the version to `0.1.2-rc.1` and perform additional testing after this commit sequence.
 3. Physical Android device: lock screen, foreground-service notification and background-location permission flow, Doze/battery restrictions, process death under memory pressure, external default browser behavior and real network transitions, using the worksheet in `V0_1_2_IMPLEMENTATION_STATUS.md`.
 4. Verify signed/deployed App Links association; the sandbox has no release signing fingerprint. Keep release acceptance `planned` until the physical-device gates are met.
