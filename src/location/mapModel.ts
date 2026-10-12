@@ -22,6 +22,7 @@ export interface MapLocation {
 }
 
 interface LocationProperties {
+  readonly isOwn: boolean
   readonly id: string
   readonly precision: MapLocation['precision']
   readonly shape: 'position' | 'accuracy' | 'approximate'
@@ -65,6 +66,7 @@ const propertiesFor = (
   shape: LocationProperties['shape'],
 ): LocationProperties => ({
   id: location.id,
+  isOwn: location.isOwn === true,
   precision: location.precision,
   shape,
   state: location.state ?? 'live',

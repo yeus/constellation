@@ -19,7 +19,7 @@ const projected = (location: MapLocation, x: number, y: number, uncertaintyRadiu
   uncertaintyRadiusPx,
 })
 
-test('groups colliding peer markers and keeps own location independent', () => {
+test('groups colliding locations including our own location', () => {
   const own: MapLocation = {
     id: 'own',
     isOwn: true,
@@ -43,18 +43,18 @@ test('groups colliding peer markers and keeps own location independent', () => {
   }
 
   const presentation = createMapPresentation(
-    [projected(own, 50, 50), projected(first, 100, 100), projected(second, 112, 100)],
+    [projected(own, 106, 100), projected(first, 100, 100), projected(second, 112, 100)],
     { width: 300, height: 200 },
     settings,
   )
 
   assert.deepEqual(
     presentation.groups.map(({ members }) => members.map(({ id }) => id)),
-    [['first', 'second']],
+    [['first', 'own', 'second']],
   )
   assert.deepEqual(
     presentation.mapLocations.map(({ id }) => id),
-    ['own'],
+    [],
   )
   assert.equal(presentation.groups[0]?.x, 106)
   assert.ok((presentation.groups[0]?.radiusPx ?? 0) >= settings.markerCollisionDistancePx / 2)
@@ -172,4 +172,74 @@ test('rejects invalid viewport and grouping thresholds', () => {
       { ...settings, uncertaintyOverlapThreshold: 1.1 },
     ),
   )
+})
+
+test('hides oversized own areas before grouping and restores them at the threshold', () => {
+  const own: MapLocation = { id: 'own', isOwn: true, latitude: 0, longitude: 0, precision: 'exact' }
+  const peer: MapLocation = { ...own, id: 'peer', isOwn: false }
+  const viewport = { width: 300, height: 200 }
+  const hidden = createMapPresentation(
+    [projected(own, 100, 100, 101), projected(peer, 100, 100)],
+    viewport,
+    settings,
+  )
+  assert.equal(hidden.ownAreaHidden, true)
+  assert.deepEqual(
+    hidden.mapLocations.map(({ id }) => id),
+    ['peer'],
+  )
+  assert.deepEqual(hidden.groups, [])
+  assert.deepEqual(hidden.largePeers, [])
+  const restored = createMapPresentation(
+    [projected(own, 100, 100, 100), projected(peer, 100, 100)],
+    viewport,
+    settings,
+  )
+  assert.equal(restored.ownAreaHidden, false)
+  assert.deepEqual(
+    restored.groups[0]?.members.map(({ id }) => id),
+    ['own', 'peer'],
+  )
+  const disabled = createMapPresentation(
+    [projected(own, 100, 100), projected(peer, 100, 100)],
+    viewport,
+    { ...settings, enabled: false },
+  )
+  assert.equal(disabled.groups.length, 0)
+  assert.equal(disabled.mapLocations.length, 2)
+  const offscreen = createMapPresentation([projected(own, 500, 100, 101)], viewport, settings)
+  assert.equal(offscreen.ownAreaHidden, false)
+  assert.equal(offscreen.mapLocations.length, 1)
+})
+
+test('groups own uncertainty with a peer through overlap when marker grouping is disabled', () => {
+  const own: MapLocation = {
+    id: 'own',
+    isOwn: true,
+    latitude: 0,
+    longitude: 0,
+    precision: 'exact',
+    accuracyMeters: 100,
+  }
+  const peer: MapLocation = { ...own, id: 'peer', isOwn: false }
+  const entries = [projected(own, 200, 200, 80), projected(peer, 205, 200, 80)]
+  const presentation = createMapPresentation(
+    entries,
+    { width: 600, height: 400 },
+    { ...settings, groupMarkerCollisions: false },
+  )
+  assert.equal(presentation.ownAreaHidden, false)
+  assert.equal(presentation.mapLocations.length, 0)
+  const group = presentation.groups[0]
+  assert.ok(group)
+  assert.deepEqual(
+    group.members.map(({ id }) => id),
+    ['own', 'peer'],
+  )
+  for (const entry of entries) {
+    assert.ok(
+      Math.hypot(entry.x - group.x, entry.y - group.y) + entry.uncertaintyRadiusPx <=
+        group.radiusPx,
+    )
+  }
 })

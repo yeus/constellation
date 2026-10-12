@@ -210,6 +210,8 @@ test('own and followed locations share the same threshold and retain color and s
       zoom,
     ).features
     assert.equal(features.length, 2)
+    assert.equal(features[0]?.properties.isOwn, false)
+    assert.equal(features[1]?.properties.isOwn, true)
     assert.equal(features[0]?.geometry.type, features[1]?.geometry.type)
     for (const feature of features) {
       assert.equal(feature.properties.color, peer.color)

@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test'
+import type * as Vue from 'vue'
+import type { MapLocation } from '../src/location/mapModel.ts'
 import { withTwoSources } from './fixtures/two-sources.ts'
 import { openPeerList, openShareCreator, saveLocationPreview } from './fixtures/peer-navigation.ts'
 
@@ -605,5 +607,201 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       )
     },
     { afterFirstFollow: saveLocationPreview, sourceAccuracyMeters: 8_000_000 },
+  )
+})
+
+test('fills the bottom dock and uses smaller translucent navigation in both themes', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 800 })
+  await page.goto('/')
+  const dock = page.locator('.connection-dock')
+  const button = page.locator('.dock-peers')
+  await expect(button).toBeVisible()
+  const dockBox = await dock.boundingBox()
+  const buttonBox = await button.boundingBox()
+  if (!dockBox || !buttonBox) throw new Error('Expected dock layout')
+  expect(buttonBox.width).toBeCloseTo(dockBox.width - 24, 0)
+  expect(buttonBox.x + buttonBox.width / 2).toBeCloseTo(dockBox.x + dockBox.width / 2, 0)
+  const navigation = page.locator('.maplibregl-ctrl-group')
+  const zoom = navigation.locator('button').first()
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme })
+    await expect(zoom).toHaveCSS('width', '44px')
+    await expect(zoom).toHaveCSS('height', '44px')
+    await expect(navigation).toHaveCSS(
+      'background-color',
+      colorScheme === 'dark' ? 'rgba(22, 29, 39, 0.65)' : 'rgba(255, 255, 255, 0.72)',
+    )
+    await expect(zoom.locator('.maplibregl-ctrl-icon')).toHaveCSS(
+      'filter',
+      colorScheme === 'dark' ? 'invert(1)' : 'none',
+    )
+  }
+})
+
+test('indicates an oversized own area and restores it through recentering', async ({ page }) => {
+  await page.clock.install()
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        watchPosition(success: PositionCallback) {
+          ;(window as typeof window & { deliverPosition: PositionCallback }).deliverPosition =
+            success
+          return 1
+        },
+        clearWatch() {},
+      },
+    })
+  })
+  const mapModule = page.waitForResponse((response) =>
+    response.url().includes('/node_modules/.vite/deps/maplibre-gl.js'),
+  )
+  await page.goto('/')
+  await page.waitForFunction(() => 'deliverPosition' in window)
+  await page.evaluate(
+    async (url) => {
+      const { Map } = await import(/* @vite-ignore */ url)
+      const original = Map.prototype.project
+      Map.prototype.project = function (...args: unknown[]) {
+        ;(window as typeof window & { ownAreaMap: unknown }).ownAreaMap = this
+        return original.apply(this, args)
+      }
+      ;(window as typeof window & { deliverPosition: PositionCallback }).deliverPosition({
+        timestamp: Date.now(),
+        coords: {
+          latitude: 20,
+          longitude: 0,
+          accuracy: 10000,
+          altitude: null,
+          heading: null,
+          speed: null,
+        },
+      } as GeolocationPosition)
+    },
+    (await mapModule).url(),
+  )
+  const recenter = page.locator('.recenter-button')
+  await expect(recenter).toHaveClass(/recenter-button--live/)
+  await page.waitForFunction(() => 'ownAreaMap' in window)
+  await page.evaluate(() => {
+    const map = (
+      window as typeof window & { ownAreaMap: { stop(): void; setZoom(zoom: number): void } }
+    ).ownAreaMap
+    map.stop()
+    map.setZoom(17)
+  })
+  await expect(page.locator('.recenter-button__area-badge')).toBeVisible()
+  await expect(recenter).toHaveAttribute('aria-label', /area is hidden at this zoom/)
+  await recenter.click()
+  await expect(page.locator('.recenter-button__area-badge')).toHaveCount(0)
+  await expect(recenter).toHaveAttribute('aria-label', /Live location/)
+  await page.clock.fastForward(15_001)
+  await expect(recenter).toHaveClass(/recenter-button--muted/)
+  await expect(recenter).toHaveAttribute('aria-label', /Delayed location/)
+  await page.clock.fastForward(45_001)
+  await expect(recenter).toHaveClass(/recenter-button--muted/)
+  await expect(recenter).toHaveAttribute('aria-label', /Last known location/)
+})
+
+test('selects self and peers independently in a group and paints only own point dots', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const resources = performance.getEntriesByType('resource')
+    const vueUrl = resources.find((entry) =>
+      entry.name.includes('/node_modules/.vite/deps/vue.js'),
+    )?.name
+    const mapUrl = resources.find((entry) =>
+      entry.name.includes('/node_modules/.vite/deps/maplibre-gl.js'),
+    )?.name
+    if (!vueUrl || !mapUrl) throw new Error('Browser map modules missing')
+    const { createApp, h, ref } = (await import(/* @vite-ignore */ vueUrl)) as typeof Vue
+    const { Map } = await import(/* @vite-ignore */ mapUrl)
+    const { default: LocationMap } = await import('../src/components/LocationMap.vue')
+    const locations = ref<MapLocation[]>([
+      {
+        id: 'synthetic-self',
+        isOwn: true,
+        latitude: 20,
+        longitude: 0,
+        precision: 'exact',
+        color: '#f78f3b',
+      },
+      { id: 'synthetic-peer', latitude: 20, longitude: 0, precision: 'exact', label: 'River' },
+    ])
+    const container = document.createElement('div')
+    container.id = 'self-group-test'
+    Object.assign(container.style, { position: 'fixed', inset: '0', zIndex: '9999' })
+    document.body.append(container)
+    const selections: string[] = []
+    const original = Map.prototype.project
+    let pointFilter = (): unknown => undefined
+    Map.prototype.project = function (...args: unknown[]) {
+      if (this.getContainer().closest('#self-group-test'))
+        pointFilter = () => this.getFilter('constellation-locations-points')
+      return original.apply(this, args)
+    }
+    const app = createApp({
+      render: () =>
+        h(LocationMap, {
+          locations: locations.value,
+          decluttering: {
+            enabled: true,
+            groupMarkerCollisions: true,
+            groupUncertaintyOverlap: true,
+            uncertaintyOverlapThreshold: 0.9,
+            markerCollisionDistancePx: 18,
+          },
+          onCenterOwn: () => selections.push('self'),
+          onSelect: (id: string) => selections.push(id),
+        }),
+    })
+    app.mount(container)
+    ;(window as typeof window & { selfGroupTest: unknown }).selfGroupTest = {
+      selections,
+      separate: () => {
+        locations.value = locations.value.map((location) =>
+          location.isOwn ? location : { ...location, longitude: 30 },
+        )
+      },
+      pointFilter: () => pointFilter(),
+      dispose: () => {
+        app.unmount()
+        container.remove()
+        Map.prototype.project = original
+      },
+    }
+  })
+  const root = page.locator('#self-group-test')
+  const self = root.getByRole('button', { name: 'Center on my location' })
+  await expect(self).toBeVisible()
+  await expect(self).toHaveText('ME')
+  await expect(self.locator('.peer-avatar')).toHaveCSS('color', 'rgb(247, 143, 59)')
+  await self.click()
+  await root.getByRole('button', { name: 'Show River details' }).click()
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { selfGroupTest: { selections: string[] } }).selfGroupTest
+          .selections,
+    ),
+  ).toEqual(['self', 'synthetic-peer'])
+  expect(
+    await page.evaluate(() =>
+      (
+        window as typeof window & { selfGroupTest: { pointFilter(): unknown } }
+      ).selfGroupTest.pointFilter(),
+    ),
+  ).toEqual(['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'isOwn'], true]])
+  await page.evaluate(() =>
+    (window as typeof window & { selfGroupTest: { separate(): void } }).selfGroupTest.separate(),
+  )
+  await expect(root.locator('.location-map__group')).toHaveCount(0)
+  await expect(root.locator('.location-map__single-avatar')).toHaveCount(1)
+  await page.evaluate(() =>
+    (window as typeof window & { selfGroupTest: { dispose(): void } }).selfGroupTest.dispose(),
   )
 })

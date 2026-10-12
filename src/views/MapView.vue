@@ -12,6 +12,8 @@
         :map-family="mapFamily"
         @select="openFollowDetails"
         @area-overflow="openAreaPeers"
+        @center-own="centerOnOwnLocation"
+        @own-area-hidden="ownAreaHidden = $event"
         @diagnostic="sessionLog.record"
       />
     </div>
@@ -30,10 +32,17 @@
       <button
         class="recenter-button"
         type="button"
-        aria-label="Center on my location"
+        :class="{
+          'recenter-button--live': ownLocationState.status === 'live',
+          'recenter-button--muted':
+            ownLocationState.status === 'delayed' || ownLocationState.status === 'stale',
+        }"
+        :aria-label="recenterLabel"
+        :title="recenterLabel"
         @click="centerOnOwnLocation"
       >
         <LocateFixed aria-hidden="true" />
+        <span v-if="ownAreaHidden" class="recenter-button__area-badge" aria-hidden="true" />
       </button>
     </header>
 
@@ -1108,10 +1117,30 @@ const pendingDeviceComparison = computed(() =>
   ),
 )
 
-const locations = computed(() => {
-  const own = backgroundStatus.value?.shares.length
+const ownAreaHidden = ref(false)
+const ownLocationState = computed(() =>
+  backgroundStatus.value?.shares.length
     ? backgroundStatus.value.location
-    : runtimeState.value.location
+    : runtimeState.value.location,
+)
+const recenterLabel = computed(() => {
+  const status = ownLocationState.value.status
+  const freshness = {
+    live: 'Live location',
+    delayed: 'Delayed location',
+    stale: 'Last known location',
+    acquiring: 'Finding your location',
+    denied: 'Location denied',
+    'permission-required': 'Location off',
+    unavailable: 'Location unavailable',
+    error: 'Location error',
+  }[status]
+  return ownAreaHidden.value
+    ? `${freshness}. Your location area is hidden at this zoom; show your area`
+    : `Center on my location. ${freshness}`
+})
+const locations = computed(() => {
+  const own = ownLocationState.value
   const ownLocations =
     own.status === 'live' || own.status === 'delayed' || own.status === 'stale'
       ? [locationObservationToMapLocation(own.observation, own.status)]
@@ -1157,8 +1186,8 @@ const connectionLabel = computed(
 )
 const ownLocationLabel = computed(() => {
   if (ownObservation.value) return 'Your position ready'
-  if (runtimeState.value.location.status === 'denied') return 'Location denied'
-  if (runtimeState.value.location.status === 'acquiring') return 'Finding your location'
+  if (ownLocationState.value.status === 'denied') return 'Location denied'
+  if (ownLocationState.value.status === 'acquiring') return 'Finding your location'
   return 'Your location off'
 })
 
@@ -1307,9 +1336,7 @@ const updateNetworkPolicy = (network: ShareNetworkPolicy) => {
 }
 
 const ownObservation = computed(() => {
-  const location = backgroundStatus.value?.shares.length
-    ? backgroundStatus.value.location
-    : runtimeState.value.location
+  const location = ownLocationState.value
   return location.status === 'live' || location.status === 'delayed' || location.status === 'stale'
     ? location.observation
     : undefined

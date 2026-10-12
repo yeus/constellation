@@ -33,6 +33,7 @@ export interface MapPresentation {
   readonly height: number
   readonly mapLocations: readonly MapLocation[]
   readonly groups: readonly MapPeerGroup[]
+  readonly ownAreaHidden: boolean
   readonly largePeers: readonly MapLocation[]
 }
 
@@ -195,15 +196,15 @@ export const createMapPresentation = (
   preferences: MapDeclutteringPreferences,
 ): MapPresentation => {
   validateInputs(projectedLocations, viewport, preferences)
-  const largePeers = projectedLocations.filter(
+  const oversized = projectedLocations.filter(
     (entry) =>
-      !entry.location.isOwn &&
       entry.uncertaintyRadiusPx * 2 > Math.min(viewport.width, viewport.height) &&
       intersectsViewport(entry, viewport),
   )
-  const panelIds = new Set(largePeers.map(({ location }) => location.id))
+  const largePeers = oversized.filter(({ location }) => !location.isOwn)
+  const panelIds = new Set(oversized.map(({ location }) => location.id))
   const candidates = preferences.enabled
-    ? projectedLocations.filter(({ location }) => !location.isOwn && !panelIds.has(location.id))
+    ? projectedLocations.filter(({ location }) => !panelIds.has(location.id))
     : []
   const groups = createPeerGroups(
     connectedComponents(candidates, preferences),
@@ -215,6 +216,7 @@ export const createMapPresentation = (
   ])
 
   return {
+    ownAreaHidden: oversized.some(({ location }) => location.isOwn),
     width: viewport.width,
     height: viewport.height,
     mapLocations: projectedLocations

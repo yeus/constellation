@@ -28,10 +28,17 @@
           :key="member.id"
           class="location-map__group-member"
           type="button"
-          :aria-label="`Show ${member.label || 'shared location'} details`"
-          @click.stop="emit('select', member.id)"
+          :aria-label="
+            member.isOwn
+              ? 'Center on my location'
+              : `Show ${member.label || 'shared location'} details`
+          "
+          @click.stop="member.isOwn ? emit('centerOwn') : emit('select', member.id)"
         >
-          <PeerAvatar :name="member.label || 'Shared location'" :color="member.color" />
+          <PeerAvatar
+            :name="member.isOwn ? 'Me' : member.label || 'Shared location'"
+            :color="member.color"
+          />
         </button>
       </div>
       <button
@@ -125,6 +132,8 @@ const props = withDefaults(
 )
 const emit = defineEmits<{
   select: [shareId: string]
+  centerOwn: []
+  ownAreaHidden: [hidden: boolean]
   areaOverflow: [shareIds: string[]]
   diagnostic: [entry: SessionLogInput]
 }>()
@@ -138,6 +147,7 @@ const presentation = ref<MapPresentation>({
   mapLocations: [],
   groups: [],
   largePeers: [],
+  ownAreaHidden: false,
 })
 const maxStackItems = computed(() =>
   Math.max(1, Math.floor(Math.max(0, presentation.value.height - 160) / 49)),
@@ -184,7 +194,7 @@ const addLocationLayers = (target: Map): void => {
     id: `${LOCATION_SOURCE_ID}-points`,
     type: 'circle',
     source: LOCATION_SOURCE_ID,
-    filter: ['==', ['geometry-type'], 'Point'],
+    filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'isOwn'], true]],
     paint: {
       'circle-color': ['coalesce', ['get', 'color'], '#f78f3b'],
       'circle-opacity': ['match', ['get', 'state'], 'stale', 0.45, 'delayed', 0.7, 1],
@@ -291,6 +301,8 @@ const updatePresentation = (): void => {
     { width: clientWidth, height: clientHeight },
     props.decluttering,
   )
+  if (next.ownAreaHidden !== presentation.value.ownAreaHidden)
+    emit('ownAreaHidden', next.ownAreaHidden)
   presentation.value = next
   const visible = new Set(next.mapLocations.map(({ id }) => id))
   individualAvatars.value = projectedLocations
@@ -324,7 +336,7 @@ const schedulePresentation = (): void => {
   if (presentationFrame !== undefined) return
   presentationFrame = window.requestAnimationFrame(() => {
     presentationFrame = undefined
-    updatePresentation()
+    refreshPresentation()
   })
 }
 
@@ -503,11 +515,11 @@ onBeforeUnmount(() => {
 }
 
 :deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group button) {
-  width: 58px;
-  height: 58px;
+  width: 44px;
+  height: 44px;
 }
 :deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group button .maplibregl-ctrl-icon) {
-  background-size: 44px 44px;
+  background-size: 33px 33px;
 }
 
 :deep(.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib) {
@@ -543,5 +555,27 @@ onBeforeUnmount(() => {
   color: var(--error-text);
   font-size: 0.75rem;
   backdrop-filter: blur(18px);
+}
+
+:deep(.maplibregl-ctrl-group) {
+  background: var(--map-navigation-surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 6px var(--sheet-shadow);
+  backdrop-filter: blur(12px);
+}
+:deep(.maplibregl-ctrl-group button + button) {
+  border-top-color: var(--border);
+}
+:deep(.maplibregl-ctrl-group button:hover) {
+  background-color: var(--privacy-fill);
+}
+:deep(.maplibregl-ctrl-group button:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+@media (prefers-color-scheme: dark) {
+  :deep(.maplibregl-ctrl-group button .maplibregl-ctrl-icon) {
+    filter: invert(1);
+  }
 }
 </style>

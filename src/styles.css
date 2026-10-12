@@ -16,6 +16,7 @@
   --text: #202632;
   --surface: rgba(255, 255, 255, 0.92);
   --surface-strong: #ffffff;
+  --map-navigation-surface: rgba(255, 255, 255, 0.72);
   --border: rgba(42, 53, 72, 0.16);
   --muted: #647184;
   --primary: #2a3548;
@@ -51,6 +52,7 @@
     --text: #f3f5f8;
     --surface: rgba(22, 29, 39, 0.92);
     --surface-strong: #161d27;
+    --map-navigation-surface: rgba(22, 29, 39, 0.65);
     --border: rgba(255, 255, 255, 0.12);
     --muted: #9aa6b5;
     --map-background: #0e1116;
@@ -343,6 +345,7 @@ button {
 }
 
 .recenter-button {
+  position: relative;
   display: grid;
   place-items: center;
   width: 2.5rem;
@@ -360,6 +363,24 @@ button {
 .recenter-button svg {
   width: 2.15rem;
   height: 2.15rem;
+}
+
+.recenter-button--live {
+  color: var(--accent);
+}
+.recenter-button--muted {
+  color: var(--muted);
+}
+.recenter-button__area-badge {
+  position: absolute;
+  right: -0.1rem;
+  bottom: -0.1rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  border: 2px dashed currentColor;
+  border-radius: 50%;
+  background: var(--surface);
+  pointer-events: none;
 }
 
 .connection-state__dot {
@@ -419,7 +440,7 @@ button {
 
 .dock-peers {
   display: flex;
-  width: min(23rem, 100%);
+  width: 100%;
   min-height: 2.7rem;
   align-items: center;
   justify-content: center;
