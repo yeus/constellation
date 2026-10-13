@@ -7,7 +7,7 @@ const createNamedShare = async (page: Page, name: string): Promise<string> => {
   await expect(page.getByRole('button', { name: 'Center on my location' })).toBeVisible()
   await openShareCreator(page)
   await page.getByRole('textbox', { name: 'Share a name' }).fill(name)
-  await page.getByRole('button', { name: 'Create private link' }).click()
+  await page.getByRole('button', { name: 'Create location link' }).click()
   const url = await page.getByLabel('Share link').inputValue({ timeout: 30_000 })
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
   return url

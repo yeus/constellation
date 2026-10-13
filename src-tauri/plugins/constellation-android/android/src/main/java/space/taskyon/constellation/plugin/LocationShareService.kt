@@ -39,6 +39,7 @@ class LocationShareService : Service(), LocationListener {
   private lateinit var store: EncryptedShareStore
   private var webView: WebView? = null
   private var runtimeStarting = false
+  private val pendingCommandIds = mutableSetOf<String>()
   private val pendingCommands = mutableListOf<JSONObject>()
   private val pendingCreateIds = mutableSetOf<String>()
   private var runtimeReady = false
@@ -186,10 +187,21 @@ class LocationShareService : Service(), LocationListener {
           startRuntime()
           START_STICKY
         }
+        ShareServiceContract.ACTION_IMPORT_SOURCE_STATE,
+        ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR,
+        ShareServiceContract.ACTION_CLEAR_OLD_PEERS,
+        ShareServiceContract.ACTION_ADOPT_PEER_NAME,
         ShareServiceContract.ACTION_SET_PEER_NAMES -> {
           val request = JSONObject(intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
             ?: throw IllegalArgumentException("Missing name preferences."))
-          queueCommand(request.put("type", "set-peer-names")
+          val commandType = when (intent?.action) {
+            ShareServiceContract.ACTION_IMPORT_SOURCE_STATE -> "import-source-state"
+            ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR -> "set-sharing-behavior"
+            ShareServiceContract.ACTION_CLEAR_OLD_PEERS -> "clear-old-peers"
+            ShareServiceContract.ACTION_ADOPT_PEER_NAME -> "adopt-peer-name"
+            else -> "set-peer-names"
+          }
+          queueCommand(request.put("type", commandType)
             .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)))
           startRuntime()
           START_STICKY
@@ -388,6 +400,7 @@ class LocationShareService : Service(), LocationListener {
         stopWhenIdle()
       }
       "command-complete" -> {
+        pendingCommandIds.remove(parsed.optString("requestId"))
         val result = Intent(ShareServiceContract.ACTION_COMMAND_COMPLETE)
           .setPackage(packageName)
           .putExtra(ShareServiceContract.EXTRA_REQUEST_ID, parsed.optString("requestId"))
@@ -395,6 +408,7 @@ class LocationShareService : Service(), LocationListener {
           result.putExtra(ShareServiceContract.EXTRA_ERROR, "Could not save the return-sharing change.")
         }
         sendBroadcast(result)
+        stopWhenIdle()
       }
       "create-complete" -> {
         pendingCreateIds.remove(parsed.optString("requestId"))
@@ -421,7 +435,7 @@ class LocationShareService : Service(), LocationListener {
         ShareNotification.update(this, notificationBody(shares, viewers), (shares?.length() ?: 0) > 0)
         stopWhenIdle()
       }
-      "idle", "stopped" -> finishStop()
+      "idle", "stopped" -> stopWhenIdle()
       "paused" -> finishPause()
     }
   }
@@ -626,19 +640,26 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun startRuntime() {
-    startForeground(
-      ShareServiceContract.NOTIFICATION_ID,
-      ShareNotification.build(this, foregroundNotificationBody()),
-    )
+    // Android 14+ forbids the location service type without a location grant.
+    // A visible settings-only command can use a short-lived ordinary service.
+    if (locationGrant(this) != "none") {
+      startForeground(
+        ShareServiceContract.NOTIFICATION_ID,
+        ShareNotification.build(this, foregroundNotificationBody()),
+      )
+    }
     if (webView == null && !runtimeStarting) createRuntime()
   }
 
   private fun queueCommand(command: JSONObject) {
+    val requestId = command.optString("requestId")
+    if (requestId.isNotEmpty() && command.optString("type") != "create-share")
+      pendingCommandIds.add(requestId)
     if (runtimeReady) send(command) else pendingCommands.add(command)
   }
 
   private fun stopWhenIdle() {
-    if (!runtimeReady || pendingCreateIds.isNotEmpty()) return
+    if (!runtimeReady || pendingCreateIds.isNotEmpty() || pendingCommandIds.isNotEmpty()) return
     val status = ShareServiceContract.currentStatus?.let { runCatching { JSONObject(it) }.getOrNull() }
       ?: return
     if ((status.optJSONArray("shares")?.length() ?: 0) > 0 ||
@@ -685,8 +706,11 @@ class LocationShareService : Service(), LocationListener {
       .put("shares", org.json.JSONArray())
       .put("location", JSONObject().put("status", "unavailable"))
     ShareServiceContract.currentStatus?.let { current ->
-      runCatching { JSONObject(current).optJSONArray("oldSharing") }.getOrNull()
-        ?.let { stopped.put("oldSharing", it) }
+      val previous = runCatching { JSONObject(current) }.getOrNull()
+      previous?.optJSONObject("sharingBehavior")?.let { stopped.put("sharingBehavior", it) }
+      for (key in listOf("oldSharing", "stoppedViewers", "peerNamePreferences")) {
+        previous?.optJSONArray(key)?.let { stopped.put(key, it) }
+      }
     }
     val stoppedStatus = stopped.toString()
     runCatching { store.saveStatus(if (failure == null) stoppedStatus else redactedStatus(stopped)) }

@@ -111,6 +111,7 @@
             />
           </label>
         </details>
+        <button type="button" @click="openSettings">Settings</button>
         <button type="button" @click="openDeviceComparisons">Compare devices</button>
         <button type="button" @click="openAbout">Privacy and licenses</button>
         <button type="button" @click="copyLogs">Copy logs</button>
@@ -125,6 +126,19 @@
       </section>
     </Transition>
 
+    <SettingsSheet
+      v-if="settingsOpen"
+      :behavior="sharingBehavior"
+      :is-android="isAndroid"
+      :permissions="sharingSetup?.permissions"
+      :review="behaviorReviewRequired"
+      :has-shares="activeShares.length > 0"
+      :busy="settingsBusy"
+      :error="settingsError"
+      @close="settingsOpen = false"
+      @save="saveSharingBehavior"
+      @enable-permissions="enableSharingPermissions"
+    />
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
     <DiagnosticsSheet
       v-if="browserDiagnosticsOpen"
@@ -167,6 +181,13 @@
       </div>
       <div class="intro-note__actions">
         <button type="button" @click="openAbout">How it works</button>
+        <a
+          href="https://github.com/yeus/constellation#how-constellation-protects-your-privacy"
+          target="_blank"
+          rel="noopener noreferrer"
+          @click="isAndroid && ($event.preventDefault(), openProjectLink('project'))"
+          >More information</a
+        >
         <button type="button" @click="dismissIntro">Got it</button>
       </div>
     </section>
@@ -424,10 +445,11 @@
             'the sender'
           : undefined
       "
-      :can-submit="canCreateShare(shareDraft) && !creatingShare"
-      :background-available="Boolean(backgroundSharing)"
+      :can-submit="
+        canCreateShare(shareDraft) && !creatingShare && !settingsBusy && !behaviorReviewRequired
+      "
       :runtime-note="
-        shareDraft.publication === 'background'
+        sharingBehavior.publication === 'background'
           ? 'Android keeps this link active in a protected foreground service and requires all-the-time location permission.'
           : isAndroid
             ? 'This link pauses while Constellation is hidden and resumes when you reopen it.'
@@ -441,9 +463,7 @@
       @require-viewer-approval="shareDraft = setRequireViewerApproval(shareDraft, $event)"
       @acknowledge="updateAcknowledgement"
       @name="updateName"
-      @publication="updatePublication"
-      @battery="updateBatteryPolicy"
-      @network="updateNetworkPolicy"
+      @regenerate-name="regenerateShareName"
     />
 
     <div v-if="followInputOpen" class="sheet-backdrop" @click.self="followInputOpen = false">
@@ -497,9 +517,12 @@
       :viewable-ids="viewableIds"
       :selected-id="selectedFollowId"
       :limited-ids="areaPeerIds"
+      :clear-old-busy="clearingOldPeers"
       :share-back-busy="creatingShare"
       :peer-name-preferences="peerNamePreferences"
+      @clear-old="clearOldPeers"
       @profile="setPeerNamePreferences"
+      @adopt-name="adoptPeerName"
       @close="peerListOpen = false"
       @add-peer="openFollowInput"
       @share-location="openNewShare"
@@ -548,8 +571,8 @@
 </template>
 
 <script setup lang="ts">
+import { protectActivePeerHistory } from '../sharing/peerHistory.ts'
 import type { DeviceComparison } from '../sharing/deviceComparison.ts'
-import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 import {
   LucideLocateFixed as LocateFixed,
   LucideMenu as Menu,
@@ -557,6 +580,9 @@ import {
   LucideShare2 as Share2,
 } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
+import SettingsSheet from '../components/SettingsSheet.vue'
+import { defaultSharingBehavior, type SharingBehavior } from '../sharing/sharingBehavior.ts'
+import type { AndroidSharingSetup } from '../android/backgroundSharing.ts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
@@ -594,21 +620,22 @@ import {
   acknowledgeUntilRevoked,
   canCreateShare,
   createShareDraft,
-  setBatteryPolicy,
   setDuration,
   setName,
-  setNetworkPolicy,
   setPrecision,
-  setPublication,
   setRequireViewerApproval,
   setViewerCapacity,
   type LocationPrecision,
-  type ShareBatteryPolicy,
   type ShareDuration,
-  type ShareNetworkPolicy,
-  type SharePublication,
   type ViewerCapacity,
 } from '../shareDraft.ts'
+import { advertisedPeerName } from '../sharing/peerNames.ts'
+import { suggestedPeerName } from '../identity/peerName.ts'
+import {
+  hasNewShareRecipient,
+  mergeShareSummaries,
+  type ShareContactState,
+} from '../sharing/sharePresentation.ts'
 import { bytesToBase64Url } from '../sharing/encoding.ts'
 import { resolveShareBaseUrl } from '../sharing/shareBaseUrl.ts'
 import { parseShareInvitation, verifyReturnOwner } from '../sharing/shareLink.ts'
@@ -692,17 +719,16 @@ const backgroundSharing = createAndroidBackgroundSharing({
 const migrateAndroidSourceShares = async (): Promise<void> => {
   if (!isAndroid || !backgroundSharing) return
   const saved = await privateStore.load()
-  if (!saved?.shares.length) return
+  if (!saved || (!saved.shares.length && !saved.endedShares?.length)) return
   await backgroundSharing.importSourceState({
     ...saved,
     followed: [],
     viewerLabels: saved.viewerLabels ?? [],
   })
-  const viewerKey = await generateKeyPair('Ed25519')
   await privateStore.save({
     ...saved,
-    privateKey: bytesToBase64Url(privateKeyToProtobuf(viewerKey)),
     shares: [],
+    endedShares: [],
     viewerLabels: [],
   })
 }
@@ -780,6 +806,79 @@ const openProjectLink = async (target: 'project' | 'release'): Promise<void> => 
     localError.value = error instanceof Error ? error.message : 'Could not open external browser.'
   }
 }
+const sharingBehavior = ref<SharingBehavior>(defaultSharingBehavior(isAndroid))
+const sharingSetup = ref<AndroidSharingSetup>()
+const behaviorReviewRequired = ref(isAndroid)
+const settingsOpen = ref(false)
+const settingsBusy = ref(false)
+const settingsError = ref('')
+const openSettings = (): void => {
+  menuOpen.value = false
+  settingsError.value = ''
+  settingsOpen.value = true
+}
+const loadSharingSettings = async (): Promise<void> => {
+  if (backgroundSharing) {
+    const setup = await backgroundSharing.setup()
+    sharingSetup.value = setup
+    sharingBehavior.value = setup.behavior ?? defaultSharingBehavior(true)
+    behaviorReviewRequired.value = !setup.behavior
+    if (behaviorReviewRequired.value) settingsOpen.value = true
+  } else {
+    const saved = await privateStore.load()
+    sharingBehavior.value = saved?.sharingBehavior ?? defaultSharingBehavior(false)
+    if (!saved?.sharingBehavior && saved?.shares.length) {
+      behaviorReviewRequired.value = true
+      settingsOpen.value = true
+    } else if (!saved?.sharingBehavior) await runtime.setSharingBehavior(sharingBehavior.value)
+  }
+}
+const saveSharingBehavior = async (behavior: SharingBehavior): Promise<void> => {
+  if (settingsBusy.value) return
+  settingsBusy.value = true
+  settingsError.value = ''
+  try {
+    if (backgroundSharing) {
+      backgroundStatus.value = await backgroundSharing.setSharingBehavior(behavior)
+      const setup = await backgroundSharing.setup()
+      sharingSetup.value = setup
+      if (!setup.behavior) throw new Error('The settings save could not be confirmed.')
+      sharingBehavior.value = setup.behavior
+    } else {
+      await runtime.setSharingBehavior(behavior)
+      sharingBehavior.value = { ...behavior }
+    }
+    behaviorReviewRequired.value = false
+    settingsOpen.value = false
+    updateLocationOwnership()
+  } catch {
+    if (backgroundSharing) {
+      const current = await backgroundSharing.setup().catch(() => undefined)
+      if (current) {
+        sharingSetup.value = current
+        if (current.behavior) sharingBehavior.value = current.behavior
+      }
+    }
+    settingsError.value =
+      'The settings save could not be confirmed. Reopen Settings to check the current behavior, then retry if needed.'
+  } finally {
+    settingsBusy.value = false
+  }
+}
+const enableSharingPermissions = async (): Promise<void> => {
+  if (!backgroundSharing || settingsBusy.value) return
+  settingsBusy.value = true
+  settingsError.value = ''
+  try {
+    sharingSetup.value = await backgroundSharing.enablePermissions()
+  } catch {
+    settingsError.value =
+      'Permissions could not be enabled. You can use sharing while the app is open, or retry.'
+  } finally {
+    settingsBusy.value = false
+  }
+}
+
 const aboutOpen = ref(false)
 const browserDiagnosticsOpen = ref(false)
 const sharingDiagnosticsOpen = ref(false)
@@ -801,7 +900,7 @@ const canScanQr = Boolean(window.isSecureContext && navigator.mediaDevices)
 const selectedFollowId = ref<string>()
 const pastedLink = ref('')
 const locationMap = ref<InstanceType<typeof LocationMap>>()
-const shareDraft = ref(createShareDraft())
+const shareDraft = ref(createShareDraft(suggestedPeerName(crypto.randomUUID())))
 const creatingShare = ref(false)
 const accepting = ref(false)
 const readyShare = ref<ShareSummary>()
@@ -853,6 +952,20 @@ const offerConnectedReturnShare = (state: SharingRuntimeState): void => {
     })
 }
 
+const closeShareReady = (): void => {
+  readyShare.value = undefined
+  readyShareIsReturn.value = false
+  offerConnectedReturnShare(runtimeState.value)
+}
+
+const dismissReadyShareOnNewRecipient = (
+  previous: ShareContactState,
+  next: ShareContactState,
+): void => {
+  const shareId = readyShare.value?.shareId
+  if (shareId && hasNewShareRecipient(shareId, previous, next)) closeShareReady()
+}
+
 const offerInvitation = (url: string): void => {
   try {
     parseShareInvitation(url)
@@ -893,7 +1006,9 @@ const unsubscribe = runtime.subscribe((next) => {
       state: follow.connected ? 'connected' : 'disconnected',
     })
   }
+  const previous = runtimeState.value
   runtimeState.value = next
+  dismissReadyShareOnNewRecipient(previous, next)
   offerConnectedReturnShare(next)
   const latestNetwork = runtime.networkDiagnostics()
   recordSessionEvents(networkDiagnostics.value, latestNetwork)
@@ -962,7 +1077,9 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   }
   if (next.diagnostics) recordSessionEvents(backgroundStatus.value?.diagnostics, next.diagnostics)
   const previousServiceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
+  const previous = backgroundStatus.value ?? { shares: [] }
   backgroundStatus.value = next
+  dismissReadyShareOnNewRecipient(previous, next)
   if (previousServiceOwnsLocation !== Boolean(next.shares.length)) updateLocationOwnership()
   if (receivingApprovedReturns || changingReturnOffer.value) return
   receivingApprovedReturns = true
@@ -985,18 +1102,43 @@ const refreshBackgroundStatus = async (): Promise<void> => {
 }
 
 const activeShares = computed(() =>
-  [...runtimeState.value.shares, ...(backgroundStatus.value?.shares ?? [])].map((share) => ({
-    ...share,
-    viewers: share.viewers?.map((viewer) => ({
-      ...viewer,
-      localName: runtime.getViewerLabel(share.shareId, viewer.fingerprint) ?? viewer.localName,
-    })),
-  })),
+  mergeShareSummaries(runtimeState.value.shares, backgroundStatus.value?.shares ?? []).map(
+    (share) => ({
+      ...share,
+      viewers: share.viewers?.map((viewer) => ({
+        ...viewer,
+        localName: runtime.getViewerLabel(share.shareId, viewer.fingerprint) ?? viewer.localName,
+        displayName:
+          runtime.getViewerLabel(share.shareId, viewer.fingerprint) ?? viewer.displayName,
+      })),
+    }),
+  ),
 )
 const peerNamePreferences = computed(() => [
   ...(backgroundStatus.value?.peerNamePreferences ?? []),
   ...(runtimeState.value.peerNamePreferences ?? []),
 ])
+const adoptPeerName = async (peerId: string, name: string): Promise<void> => {
+  try {
+    const foreground =
+      advertisedPeerName(
+        runtimeState.value.peerNamePreferences?.find((record) => record.peerId === peerId),
+        runtimeState.value.following.find((entry) => entry.peerId === peerId && entry.sourceName)
+          ?.sourceName,
+      ) === name
+    const background = backgroundStatus.value?.peerNamePreferences?.some(
+      (record) => record.peerId === peerId && record.receivedName === name,
+    )
+    if (!foreground && !background)
+      throw new Error('The advertised name changed. Review it and retry.')
+    if (foreground) await runtime.adoptPeerName(peerId, name)
+    if (background && backgroundSharing)
+      backgroundStatus.value = await backgroundSharing.adoptPeerName(peerId, name)
+  } catch (error) {
+    localError.value =
+      error instanceof Error ? error.message : 'Name could not be adopted. Please retry.'
+  }
+}
 const setPeerNamePreferences = async (
   peerId: string,
   associateNames: boolean,
@@ -1157,7 +1299,7 @@ const locations = computed(() => {
         const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
         return locationObservationToMapLocation(observation, state, {
           id: shareId,
-          label: follow?.localName || follow?.sourceName || 'Shared location',
+          label: follow?.displayName || follow?.localName || 'Shared location',
           color: follow?.color,
         })
       }),
@@ -1304,8 +1446,12 @@ const openAreaPeers = (ids: string[]): void => {
   peerListOpen.value = true
 }
 const openNewShare = (): void => {
+  if (behaviorReviewRequired.value) {
+    openSettings()
+    return
+  }
   peerListOpen.value = false
-  shareDraft.value = createShareDraft()
+  shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
   returnTarget.value = undefined
   shareSheetOpen.value = true
 }
@@ -1322,17 +1468,13 @@ const updateViewerCapacity = (viewerCapacity: ViewerCapacity) => {
 const updateAcknowledgement = (acknowledged: boolean) => {
   shareDraft.value = acknowledgeUntilRevoked(shareDraft.value, acknowledged)
 }
-const updateName = (name: string) => {
+const regenerateShareName = (): void => {
+  let name = suggestedPeerName(crypto.randomUUID())
+  while (name === shareDraft.value.name) name = suggestedPeerName(crypto.randomUUID())
   shareDraft.value = setName(shareDraft.value, name)
 }
-const updatePublication = (publication: SharePublication) => {
-  shareDraft.value = setPublication(shareDraft.value, publication)
-}
-const updateBatteryPolicy = (battery: ShareBatteryPolicy) => {
-  shareDraft.value = setBatteryPolicy(shareDraft.value, battery)
-}
-const updateNetworkPolicy = (network: ShareNetworkPolicy) => {
-  shareDraft.value = setNetworkPolicy(shareDraft.value, network)
+const updateName = (name: string) => {
+  shareDraft.value = setName(shareDraft.value, name)
 }
 
 const ownObservation = computed(() => {
@@ -1411,18 +1553,22 @@ const acceptScannedLink = (url: string): void => {
 }
 
 const createShare = async (): Promise<void> => {
+  if (behaviorReviewRequired.value || settingsBusy.value) {
+    openSettings()
+    return
+  }
   if (creatingShare.value) return
   const shareBackTarget = returnTarget.value
   const returnFollow = shareBackTarget
     ? runtimeState.value.following.find(({ shareId }) => shareId === shareBackTarget)
     : undefined
-  const useBackground = Boolean(
-    backgroundSharing && (!shareBackTarget || shareDraft.value.publication === 'background'),
-  )
+  const useBackground = Boolean(backgroundSharing)
   // A return share always has exactly one recipient regardless of form state.
-  const draft = shareBackTarget
-    ? { ...shareDraft.value, viewerCapacity: 1 as const, requireViewerApproval: true }
-    : shareDraft.value
+  const draft = {
+    ...shareDraft.value,
+    ...sharingBehavior.value,
+    ...(shareBackTarget ? { viewerCapacity: 1 as const, requireViewerApproval: true } : {}),
+  }
   readyShareIsReturn.value = Boolean(shareBackTarget)
   browserLocationDeferred.value = false
   creatingShare.value = true
@@ -1513,7 +1659,7 @@ const createShare = async (): Promise<void> => {
       }
     }
     shareSheetOpen.value = false
-    shareDraft.value = createShareDraft()
+    shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
     collapseActions()
     sessionLog.record({ level: 'info', event: 'sharing.share.create.succeeded' })
   } catch (error) {
@@ -1619,7 +1765,7 @@ const openReturnShare = (): void => {
   if (!target) return
   returnTarget.value = target
   shareBackPrompt.value = undefined
-  shareDraft.value = createShareDraft()
+  shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
   browserLocationDeferred.value = false
   shareSheetOpen.value = true
 }
@@ -1641,7 +1787,7 @@ const shareBackFromFollowing = async (shareId: string): Promise<void> => {
   try {
     await runtime.markReturnPromptSeen(shareId)
     returnTarget.value = shareId
-    shareDraft.value = createShareDraft()
+    shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
     browserLocationDeferred.value = false
     peerListOpen.value = false
     shareSheetOpen.value = true
@@ -1711,12 +1857,6 @@ const acceptReturnOffer = async (): Promise<void> => {
     changingReturnOffer.value = false
     if (backgroundOffer) void refreshBackgroundStatus().catch(() => undefined)
   }
-}
-
-const closeShareReady = (): void => {
-  readyShare.value = undefined
-  readyShareIsReturn.value = false
-  offerConnectedReturnShare(runtimeState.value)
 }
 
 const showExistingShare = (share: ShareSummary): void => {
@@ -1791,6 +1931,22 @@ const stopFollowing = async (shareId: string): Promise<void> => {
   if (selectedFollowId.value === shareId) peerListOpen.value = false
 }
 
+const clearingOldPeers = ref(false)
+const clearOldPeers = async (): Promise<void> => {
+  if (clearingOldPeers.value) return
+  clearingOldPeers.value = true
+  try {
+    const protection = protectActivePeerHistory(activeShares.value, activeFollowing.value)
+    await runtime.clearOldPeers(protection)
+    if (backgroundSharing)
+      backgroundStatus.value = await backgroundSharing.clearOldPeers(protection)
+  } catch {
+    localError.value = 'Could not clear all old peers. Please retry.'
+  } finally {
+    clearingOldPeers.value = false
+  }
+}
+
 const dismissStoppedViewer = async (shareId: string, peerId: string): Promise<void> => {
   try {
     if (
@@ -1819,6 +1975,16 @@ const updateLocationOwnership = (): void => {
   if (serviceOwnsLocation) locationSource.stop()
 }
 const updateVisibility = (): void => {
+  if (document.visibilityState === 'visible' && settingsOpen.value && backgroundSharing)
+    void backgroundSharing
+      .setup()
+      .then((setup) => {
+        sharingSetup.value = setup
+      })
+      .catch(() => {
+        settingsError.value = 'Could not check permissions. Please retry.'
+      })
+
   const visible = document.visibilityState === 'visible'
   updateLocationOwnership()
   void backgroundSharing?.setVisible(visible).catch(() => undefined)
@@ -1837,6 +2003,7 @@ onMounted(() => {
     updateVisibility()
     await migrateAndroidSourceShares()
     await runtime.initialize()
+    await loadSharingSettings()
     if (backgroundSharing) {
       await refreshBackgroundStatus().catch(() => undefined)
       updateVisibility()

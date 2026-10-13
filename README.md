@@ -72,6 +72,68 @@ latest updates. Sharing your own location back is a separate choice.
   closed, subject to Android permissions and power settings.
 - **Open source:** inspect the code, report a problem, or help improve it.
 
+## How Constellation protects your privacy
+
+Constellation sends live location updates over **end-to-end encrypted peer
+connections**. The receiving device can decrypt them; an intermediary forwarding
+the connection cannot read your location. Constellation has no central location
+database and keeps no server-side location history. This protects the contents
+of the connection, while the devices and people at either end still need your
+trust.
+
+### Direct connections and relays
+
+The goal is to connect your devices directly whenever the network allows it.
+Phones and browsers often sit behind routers, firewalls, or mobile networks
+that make incoming connections difficult. A **relay** helps the peers find and
+reach each other. It can also forward encrypted traffic when a direct connection
+cannot be established. Using a relay does not make it a location-storage server
+or give its operator the keys to read your location.
+
+A connection can use a relay for setup and then carry location updates over a
+direct WebRTC connection. If it stays relayed, the location payloads remain
+end-to-end encrypted. The current browser implementation needs a configured
+relay for reachability; direct data transfer does not yet mean the app can start
+or reconnect with no relay available. Reducing relay dependence is a goal,
+not a guarantee of the current version.
+
+Relays can see connection metadata, including network addresses, peer IDs,
+connection times, and traffic volume. Encryption does not hide that metadata.
+A relay operator could record it, or retain encrypted traffic, even though it
+cannot decrypt the location payloads. The app's lack of a central location
+history is not a promise that every network operator keeps no logs.
+
+### What stays on your devices
+
+The app temporarily holds the latest location in memory; it does not save a
+location timeline. Saved links, active-share settings, and chosen peer names
+may remain in protected local storage so you can recover after a restart.
+Private nicknames stay local. Each new share form gets a fresh suggested name,
+which you can change or clear. It is not reused as a device-wide profile.
+
+Treat a sharing link like a password: someone who gets it may request access,
+subject to the link's approval and recipient settings. Names are exchanged
+after contact is established, rather than embedded in the URL. Sharing back is
+an explicit separate permission; it does not reveal other viewers or their
+locations.
+
+### The limits of this protection
+
+- **Recipients:** an authorized viewer can copy, photograph, or disclose what
+  they receive. Stopping or revoking a share prevents future authorized access;
+  it cannot erase information already received.
+- **Devices and app code:** compromised devices or untrusted code can access
+  information before encryption or after decryption. In a browser, the site
+  serving the app controls the code you run.
+- **Maps:** the map host sees requests and the requesting network address.
+  Requests may reveal the area you view, especially after centering on yourself.
+- **Approximate locations:** sharing an area reduces precision but does not
+  guarantee anonymity. Repeated observations, familiar places, or trajectories
+  may still reveal sensitive patterns.
+- **Availability:** encryption cannot keep a connection working through total
+  network loss or networks that block the available transports. Battery and
+  operating-system restrictions can also delay background updates.
+
 ## A few things to know
 
 Keep private links private: recipients can save or forward what they receive.
@@ -105,3 +167,20 @@ Want to build Constellation or contribute code? See the
 Constellation is [MIT licensed](LICENSE). The map credits OpenStreetMap
 contributors, Protomaps, and ESA WorldCover. See
 [third-party notices](THIRD_PARTY_NOTICES.md) for bundled software and map assets.
+
+## Sharing settings (v0.1.3)
+
+The link dialog controls the optional name, precision, duration, viewer limit and
+approval. **Menu → Settings** controls this device's sharing behavior: while the
+app is open or in the background, update frequency, and pausing on metered networks
+or Data Saver. Saving changes applies to all active and future links, including
+share-back, without changing their URLs or access choices.
+
+Android starts with a background-sharing setup that explains location and
+notification permissions. If you decline, choose **Use while app is open**
+explicitly. Browser and desktop sharing works while the app is open; background
+sharing requires the native Android app. Existing installations with legacy
+per-link behavior keep it until you review and save global settings.
+
+Optional per-link behavior overrides are planned for a later release through the
+peer list. They are not available in v0.1.3.

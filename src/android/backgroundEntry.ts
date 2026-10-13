@@ -1,3 +1,5 @@
+import type { SharingBehavior } from '../sharing/sharingBehavior.ts'
+import type { PeerHistoryProtection } from '../sharing/peerHistory.ts'
 import {
   executeBackgroundReturnCommand,
   type BackgroundReturnCommand,
@@ -49,6 +51,23 @@ type ReplaceOwnerCommand = {
 }
 
 type BackgroundCommand =
+  | { readonly type: 'import-source-state'; readonly requestId: string; readonly state: string }
+  | {
+      readonly type: 'set-sharing-behavior'
+      readonly requestId: string
+      readonly behavior: SharingBehavior
+    }
+  | {
+      readonly type: 'clear-old-peers'
+      readonly requestId: string
+      readonly protection: PeerHistoryProtection
+    }
+  | {
+      readonly type: 'adopt-peer-name'
+      readonly requestId: string
+      readonly peerId: string
+      readonly name: string
+    }
   | {
       readonly type: 'device-comparison'
       readonly requestId: string
@@ -320,6 +339,59 @@ const start = (): void => {
           type: 'command-complete',
           requestId: command.requestId,
           error: 'Could not approve this device.',
+        })
+      }
+      return
+    }
+    if (command.type === 'import-source-state') {
+      try {
+        await runtime.importSourceShares(parsePrivateStateJson(command.state))
+        await runtime.initialize()
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not import protected source links.',
+        })
+      }
+      return
+    }
+    if (command.type === 'set-sharing-behavior') {
+      try {
+        await runtime.setSharingBehavior(command.behavior)
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not save sharing behavior.',
+        })
+      }
+      return
+    }
+    if (command.type === 'clear-old-peers') {
+      try {
+        await runtime.clearOldPeers(command.protection)
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not clear old peers.',
+        })
+      }
+      return
+    }
+    if (command.type === 'adopt-peer-name') {
+      try {
+        await runtime.adoptPeerName(command.peerId, command.name)
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Name changed or could not be saved. Review it and retry.',
         })
       }
       return

@@ -1,6 +1,7 @@
 <template>
   <div class="sheet-backdrop share-backdrop" @click.self="emit('close')">
     <section
+      v-show="!privacyOpen"
       class="share-sheet share-sheet--create"
       role="dialog"
       aria-modal="true"
@@ -19,97 +20,32 @@
       <p v-if="returnRecipientName" class="field-help">
         Sharing back to {{ returnRecipientName }}. Only this sender receives the private offer.
       </p>
-      <p class="field-help">
-        End-to-end encrypted P2P. No central location history; relays cannot read your location.
-      </p>
-
-      <label class="share-name">
-        Share a name (optional)
-        <input
-          aria-label="Share a name"
-          type="text"
-          maxlength="32"
-          :value="draft.name"
-          placeholder="What should viewers call you?"
-          @input="emit('name', ($event.target as HTMLInputElement).value)"
-        />
-      </label>
-
-      <fieldset>
-        <legend>When to share</legend>
-        <div class="choice-grid choice-grid--two">
-          <button
-            type="button"
-            class="choice"
-            :class="{ 'choice--selected': draft.publication === 'foreground' }"
-            :aria-pressed="draft.publication === 'foreground'"
-            @click="emit('publication', 'foreground')"
-          >
-            <strong>While app is open</strong>
-            <span>Pause when hidden</span>
-          </button>
-          <button
-            v-if="backgroundAvailable"
-            type="button"
-            class="choice"
-            :class="{ 'choice--selected': draft.publication === 'background' }"
-            :aria-pressed="draft.publication === 'background'"
-            @click="emit('publication', 'background')"
-          >
-            <strong>In background</strong>
-            <span>Android notification</span>
-          </button>
-          <p v-if="draft.publication === 'background'" class="field-help">
-            Background sharing keeps this share active until you stop it or it expires.
-          </p>
-        </div>
-      </fieldset>
-
-      <fieldset v-if="draft.publication === 'background'">
-        <legend>Battery and network</legend>
-        <div class="choice-grid choice-grid--two">
-          <button
-            type="button"
-            class="choice"
-            :class="{ 'choice--selected': draft.battery === 'balanced' }"
-            :aria-pressed="draft.battery === 'balanced'"
-            @click="emit('battery', 'balanced')"
-          >
-            <strong>Balanced</strong>
-            <span>Updates about every 5 s</span>
-          </button>
-          <button
-            type="button"
-            class="choice"
-            :class="{ 'choice--selected': draft.battery === 'saver' }"
-            :aria-pressed="draft.battery === 'saver'"
-            @click="emit('battery', 'saver')"
-          >
-            <strong>Battery saver</strong>
-            <span>Updates about every 30 s</span>
-          </button>
-        </div>
-        <label class="warning">
+      <div class="share-name">
+        <label for="share-name-input">Share a name (optional)</label>
+        <div class="share-name__input">
           <input
-            type="checkbox"
-            :checked="draft.network === 'pause-when-metered'"
-            @change="
-              emit(
-                'network',
-                ($event.target as HTMLInputElement).checked ? 'pause-when-metered' : 'always',
-              )
-            "
+            id="share-name-input"
+            aria-label="Share a name"
+            type="text"
+            maxlength="32"
+            :value="draft.name"
+            placeholder="What should viewers call you?"
+            @input="emit('name', ($event.target as HTMLInputElement).value)"
           />
-          <span
-            >Pause updates on metered networks and Data Saver. The link stays active and resumes
-            automatically.</span
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Generate another name"
+            title="Generate another name"
+            @click="emit('regenerateName')"
           >
-        </label>
-        <p class="field-help">
-          Metered networks, battery saver, Data Saver, or Doze can still delay or block location and
-          network updates.
-        </p>
-      </fieldset>
+            <Dices aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <p class="field-help">
+        Fresh suggestion for this share. Edit it, or clear it to share no name.
+      </p>
 
       <fieldset>
         <legend>Precision</legend>
@@ -121,7 +57,7 @@
             :aria-pressed="draft.precision === 'approximate'"
             @click="emit('precision', 'approximate')"
           >
-            <strong>Approximate</strong>
+            <RadiusIcon aria-hidden="true" /><strong>Approximate</strong>
             <span>1 km radius</span>
           </button>
           <button
@@ -131,7 +67,7 @@
             :aria-pressed="draft.precision === 'very-coarse'"
             @click="emit('precision', 'very-coarse')"
           >
-            <strong>Very coarse</strong>
+            <AreaIcon aria-hidden="true" /><strong>Very coarse</strong>
             <span>{{ VERY_COARSE_RADIUS_METERS / 1_000 }} km radius</span>
           </button>
           <button
@@ -141,7 +77,7 @@
             :aria-pressed="draft.precision === 'exact'"
             @click="emit('precision', 'exact')"
           >
-            <strong>Device accuracy</strong>
+            <LocateIcon aria-hidden="true" /><strong>Device accuracy</strong>
             <span>No added blurring</span>
           </button>
         </div>
@@ -159,7 +95,10 @@
             :aria-pressed="draft.duration === option.value"
             @click="emit('duration', option.value)"
           >
-            <strong>{{ option.label }}</strong>
+            <component
+              :is="option.value === 'until-revoked' ? InfinityIcon : ClockIcon"
+              aria-hidden="true"
+            /><strong>{{ option.label }}</strong>
           </button>
         </div>
       </fieldset>
@@ -174,7 +113,7 @@
       </label>
 
       <fieldset v-if="!returnRecipientName">
-        <legend>Star viewers</legend>
+        <legend>Viewers</legend>
         <div class="viewer-options">
           <button
             v-for="option in viewerOptions"
@@ -187,7 +126,16 @@
             :aria-pressed="draft.viewerCapacity === option.value"
             @click="emit('viewers', option.value)"
           >
-            {{ option.label }}
+            <component
+              :is="
+                option.value === 1
+                  ? PersonIcon
+                  : option.value === 'unlimited'
+                    ? InfinityIcon
+                    : GroupIcon
+              "
+              aria-hidden="true"
+            />{{ option.label }}
           </button>
         </div>
         <p class="field-help">Viewers see you, not each other. Return shares come only to you.</p>
@@ -206,30 +154,46 @@
 
       <p class="runtime-note">{{ runtimeNote }}</p>
       <button class="primary-action" type="button" :disabled="!canSubmit" @click="emit('submit')">
-        Create private link
+        Create location link
+      </button>
+      <p class="share-privacy-caption">
+        <LockIcon aria-hidden="true" /> End-to-end encrypted. No central location storage.
+      </p>
+      <button
+        ref="privacyButton"
+        class="share-privacy-info"
+        type="button"
+        @click="privacyOpen = true"
+      >
+        More info
       </button>
     </section>
+    <SharingPrivacyDialog v-if="privacyOpen" @close="closePrivacy" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref, nextTick } from 'vue'
+import {
+  LucideDices as Dices,
+  LucideRadius as RadiusIcon,
+  LucideCircleDashed as AreaIcon,
+  LucideLocateFixed as LocateIcon,
+  LucideClock as ClockIcon,
+  LucideInfinity as InfinityIcon,
+  LucideUserRound as PersonIcon,
+  LucideUsersRound as GroupIcon,
+  LucideLockKeyhole as LockIcon,
+} from '@lucide/vue'
+import SharingPrivacyDialog from './SharingPrivacyDialog.vue'
 import CloseIcon from './icons/CloseIcon.vue'
-import type {
-  LocationPrecision,
-  ShareBatteryPolicy,
-  ShareDraft,
-  ShareDuration,
-  ShareNetworkPolicy,
-  SharePublication,
-  ViewerCapacity,
-} from '../shareDraft.ts'
+import type { LocationPrecision, ShareDraft, ShareDuration, ViewerCapacity } from '../shareDraft.ts'
 import { VERY_COARSE_RADIUS_METERS } from '../shareDraft.ts'
 
 defineProps<{
   draft: ShareDraft
   canSubmit: boolean
   runtimeNote?: string
-  backgroundAvailable: boolean
   returnRecipientName?: string
 }>()
 
@@ -242,10 +206,16 @@ const emit = defineEmits<{
   requireViewerApproval: [value: boolean]
   acknowledge: [value: boolean]
   name: [value: string]
-  publication: [value: SharePublication]
-  battery: [value: ShareBatteryPolicy]
-  network: [value: ShareNetworkPolicy]
+  regenerateName: []
 }>()
+
+const privacyOpen = ref(false)
+const privacyButton = ref<HTMLButtonElement>()
+const closePrivacy = async (): Promise<void> => {
+  privacyOpen.value = false
+  await nextTick()
+  privacyButton.value?.focus()
+}
 
 const durationOptions: readonly { label: string; value: ShareDuration }[] = [
   { label: '1 hour', value: '1h' },
@@ -270,12 +240,78 @@ const viewerOptions: readonly { label: string; value: ViewerCapacity }[] = [
   font-weight: 680;
 }
 
+.share-name__input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .share-name input {
+  flex: 1;
+  min-width: 0;
   min-height: 2.8rem;
   padding: 0 0.8rem;
   border: 1px solid var(--border);
   border-radius: 0.65rem;
   background: var(--control-fill);
   color: var(--text);
+}
+</style>
+
+<style scoped>
+.choice svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+.choice--selected svg {
+  color: var(--accent);
+}
+.viewer-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+}
+.viewer-option svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.choice--compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+}
+.choice--compact svg {
+  margin: 0;
+}
+.share-privacy-caption {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin: 0.65rem 0 0.25rem;
+  text-align: center;
+}
+.share-privacy-caption svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+}
+.share-privacy-info {
+  display: block;
+  margin: 0 auto;
+  padding: 0.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+  font-size: 0.75rem;
+  cursor: pointer;
 }
 </style>

@@ -145,13 +145,20 @@ test('temporary previews are excluded from the private saved-follow snapshot', (
     {
       url: 'https://example.test/#two',
       localName: 'Forest',
+      sourceName: 'Link label',
       color: '#8a6fc9',
       saved: true,
       followedAt: 2_000,
     },
   ])
   assert.deepEqual(records, [
-    { url: 'https://example.test/#two', localName: 'Forest', color: '#8a6fc9', followedAt: 2_000 },
+    {
+      url: 'https://example.test/#two',
+      localName: 'Forest',
+      sourceName: 'Link label',
+      color: '#8a6fc9',
+      followedAt: 2_000,
+    },
   ])
 })
 
@@ -699,6 +706,361 @@ test('Android background source share adopts the foreground owner proof for retu
   } finally {
     await foreground.stop()
     await background.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('advertised-name adoption is durable while disconnected and rolls back on storage failure', async () => {
+  const key = await generateKeyPair('Ed25519')
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(key)),
+    shares: [],
+    followed: [],
+    peerNamePreferences: [
+      {
+        peerId: 'synthetic-peer',
+        associateNames: false,
+        sharedName: null,
+        receivedName: 'Forest',
+        acceptedName: 'River',
+      },
+    ],
+  }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  let fail = true,
+    saved = initial
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => initial,
+      save: async (value) => {
+        if (fail) throw new Error('Synthetic storage failure')
+        saved = value
+      },
+    },
+  )
+  try {
+    await assert.rejects(runtime.adoptPeerName('synthetic-peer', 'Forest'), /storage failure/)
+    let state!: SharingRuntimeState
+    runtime.subscribe((value) => {
+      state = value
+    })
+    assert.equal(state.peerNamePreferences![0]!.acceptedName, 'River')
+    await assert.rejects(runtime.adoptPeerName('synthetic-peer', 'Outdated name'), /changed/)
+    fail = false
+    await runtime.adoptPeerName('synthetic-peer', 'Forest')
+    assert.equal(state.peerNamePreferences![0]!.acceptedName, 'Forest')
+    assert.equal(saved.peerNamePreferences![0]!.acceptedName, 'Forest')
+    assert.equal(saved.peerNamePreferences![0]!.sharedName, null)
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('clearing old peers hides history durably while retaining delivery ledgers and ended-link protections', async () => {
+  const key = await generateKeyPair('Ed25519')
+  const ended = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source',
+    addresses: [],
+    expiresAt: null,
+  })
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(key)),
+    shares: [],
+    followed: [],
+    oldSharing: [
+      {
+        shareId: 'synthetic-ended-share',
+        peerId: 'synthetic-old-peer',
+        endedAt: 1,
+        reason: 'revoked',
+      },
+    ],
+    oldSeeing: [{ shareId: ended.capability.shareId, endedAt: 1, reason: 'expired' }],
+    stoppedViewers: [
+      {
+        shareId: 'synthetic-stopped-share',
+        peerId: 'synthetic-protected-peer',
+        eventId: 'synthetic-stop-event',
+        recordedAt: 1,
+        dismissed: true,
+      },
+    ],
+    pendingStopNotices: [
+      {
+        shareId: 'synthetic-pending-share',
+        sourcePeerId: 'synthetic-source',
+        viewerPeerId: 'synthetic-viewer',
+        addresses: [],
+        proof: 'A'.repeat(43),
+        eventId: 'synthetic-pending-event',
+        queuedAt: Date.now(),
+      },
+    ],
+  }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  let fail = true,
+    saved = initial
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => initial,
+      save: async (value) => {
+        if (fail) throw new Error('Synthetic storage failure')
+        saved = value
+      },
+    },
+  )
+  try {
+    await assert.rejects(
+      runtime.clearOldPeers({ peerIds: ['synthetic-protected-peer'], shareIds: [] }),
+      /storage failure/,
+    )
+    let state!: SharingRuntimeState
+    runtime.subscribe((value) => {
+      state = value
+    })
+    assert.equal(state.oldSharing.length, 1)
+    fail = false
+    await runtime.clearOldPeers({ peerIds: ['synthetic-protected-peer'], shareIds: [] })
+    assert.deepEqual(state.oldSharing, [])
+    assert.deepEqual(state.oldSeeing, [])
+    assert.equal(state.stoppedViewers.length, 1)
+    assert.equal(saved.oldSharing![0]!.cleared, true)
+    assert.equal(saved.oldSeeing![0]!.cleared, true)
+    assert.deepEqual(saved.pendingStopNotices, initial.pendingStopNotices)
+    await assert.rejects(runtime.acceptShare(ended.url), /ended/)
+    const restored = createSharingRuntime(
+      createBrowserLocationSource({ sourceId: 'synthetic-restored', geolocation: undefined }),
+      'https://example.test/',
+      {
+        load: async () => saved,
+        save: async (value) => {
+          saved = value
+        },
+      },
+    )
+    try {
+      await restored.clearOldPeers({ peerIds: ['synthetic-protected-peer'], shareIds: [] })
+      restored.subscribe((value) => {
+        assert.deepEqual(value.oldSharing, [])
+        assert.deepEqual(value.oldSeeing, [])
+        assert.equal(value.stoppedViewers.length, 1)
+      })
+      await assert.rejects(restored.acceptShare(ended.url), /ended/)
+    } finally {
+      await restored.stop()
+    }
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('global behavior changes active links without replacing capabilities and survives restart with rollback', async () => {
+  const key = await generateKeyPair('Ed25519')
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source',
+    addresses: [],
+    expiresAt: null,
+  })
+  let saved: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(key)),
+    shares: [
+      {
+        url: invitation.url,
+        precision: 'approximate',
+        capacity: 1,
+        publication: 'foreground',
+        approvedPeerId: 'synthetic-recipient',
+      },
+    ],
+    followed: [],
+  }
+  let fail = false
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  const makeRuntime = () =>
+    createSharingRuntime(
+      createBrowserLocationSource({ sourceId: 'synthetic', geolocation: undefined }),
+      'https://example.test/',
+      {
+        load: async () => saved,
+        save: async (value) => {
+          if (fail) throw new Error('Synthetic storage failure')
+          saved = value
+        },
+      },
+    )
+  const runtime = makeRuntime()
+  try {
+    const policy = {
+      publication: 'background' as const,
+      battery: 'saver' as const,
+      network: 'pause-when-metered' as const,
+    }
+    await runtime.setSharingBehavior(policy)
+    assert.deepEqual(saved.sharingBehavior, policy)
+    assert.equal(saved.shares[0]!.url, invitation.url)
+    assert.equal(saved.shares[0]!.approvedPeerId, 'synthetic-recipient')
+    assert.equal(saved.shares[0]!.publication, 'background')
+    assert.equal(saved.shares[0]!.battery, 'saver')
+    fail = true
+    await assert.rejects(
+      runtime.setSharingBehavior({ ...policy, publication: 'foreground' }),
+      /storage failure/,
+    )
+    let latest!: SharingRuntimeState
+    runtime.subscribe((state) => {
+      latest = state
+    })
+    assert.deepEqual(latest.sharingBehavior, policy)
+    assert.equal(latest.shares[0]!.publication, 'background')
+    fail = false
+    const restored = makeRuntime()
+    try {
+      await restored.setSharingBehavior({ ...policy, publication: 'foreground' })
+      assert.equal(saved.shares[0]!.url, invitation.url)
+      assert.equal(saved.shares[0]!.publication, 'foreground')
+      assert.equal(saved.sharingBehavior.battery, 'saver')
+    } finally {
+      await restored.stop()
+    }
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('source import merges independent source identities without replacing the native or viewer identity', async () => {
+  const { peerIdFromPrivateKey } = await import('@libp2p/peer-id')
+  const nativeKey = await generateKeyPair('Ed25519'),
+    viewerKey = await generateKeyPair('Ed25519'),
+    sourceKey = await generateKeyPair('Ed25519')
+  const nativeIdentity = bytesToBase64Url(privateKeyToProtobuf(nativeKey))
+  const sourceIdentity = bytesToBase64Url(privateKeyToProtobuf(sourceKey))
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: peerIdFromPrivateKey(sourceKey).toString(),
+    addresses: [],
+    expiresAt: null,
+    ownerPrivateKey: viewerKey,
+  })
+  let saved: PrivateState = { version: 1, privateKey: nativeIdentity, shares: [], followed: [] }
+  let fail = true
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic-import', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => saved,
+      save: async (value) => {
+        if (fail) throw new Error('Synthetic storage failure')
+        saved = value
+      },
+    },
+  )
+  const incoming: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(viewerKey)),
+    shares: [
+      {
+        url: invitation.url,
+        sourcePrivateKey: sourceIdentity,
+        precision: 'approximate',
+        capacity: 1,
+        publication: 'foreground',
+        approvedPeerId: 'synthetic-recipient',
+      },
+    ],
+    followed: [],
+  }
+  try {
+    await assert.rejects(runtime.importSourceShares(incoming), /storage failure/)
+    fail = false
+    await runtime.importSourceShares(incoming)
+    await runtime.importSourceShares(incoming)
+    assert.equal(saved.privateKey, nativeIdentity)
+    assert.equal(incoming.privateKey, bytesToBase64Url(privateKeyToProtobuf(viewerKey)))
+    assert.equal(saved.shares.length, 1)
+    assert.equal(saved.shares[0]!.sourcePrivateKey, sourceIdentity)
+    assert.equal(saved.shares[0]!.url, invitation.url)
+    assert.equal(saved.shares[0]!.approvedPeerId, 'synthetic-recipient')
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('global policy is not published or applied until its durable save completes', async () => {
+  const key = await generateKeyPair('Ed25519')
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source',
+    addresses: [],
+    expiresAt: null,
+  })
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  let finishSave!: () => void, startedSave!: () => void
+  const saving = new Promise<void>((resolve) => {
+    startedSave = resolve
+  })
+  const runtime = createSharingRuntime(
+    createBrowserLocationSource({ sourceId: 'synthetic-policy', geolocation: undefined }),
+    'https://example.test/',
+    {
+      load: async () => ({
+        version: 1,
+        privateKey: bytesToBase64Url(privateKeyToProtobuf(key)),
+        shares: [
+          { url: invitation.url, precision: 'approximate', capacity: 1, publication: 'foreground' },
+        ],
+        followed: [],
+      }),
+      save: async () => {
+        startedSave()
+        await new Promise<void>((resolve) => {
+          finishSave = resolve
+        })
+      },
+    },
+  )
+  let state!: SharingRuntimeState
+  runtime.subscribe((next) => {
+    state = next
+  })
+  try {
+    const updating = runtime.setSharingBehavior({
+      publication: 'background',
+      battery: 'saver',
+      network: 'always',
+    })
+    await saving
+    assert.equal(state.sharingBehavior, undefined)
+    assert.equal(state.shares[0]!.publication, 'foreground')
+    finishSave()
+    await updating
+    assert.equal(state.sharingBehavior!.publication, 'background')
+    assert.equal(state.shares[0]!.publication, 'background')
+  } finally {
+    await runtime.stop()
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
     else Reflect.deleteProperty(globalThis, 'window')
   }

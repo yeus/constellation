@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const about = fs.readFileSync('src/components/AboutSheet.vue', 'utf8')
 const peers = fs.readFileSync('src/components/PeerListSheet.vue', 'utf8')
+const settings = fs.readFileSync('src/components/SettingsSheet.vue', 'utf8')
 const shareSheet = fs.readFileSync('src/components/ShareSheet.vue', 'utf8')
 const diagnostics = fs.readFileSync('src/components/NetworkDiagnosticsSheet.vue', 'utf8')
 
@@ -18,13 +19,13 @@ test('privacy copy states approximation, revocation and network limits', () => {
 })
 
 test('background sharing explains metered and power-policy limits', () => {
-  assert.match(shareSheet, /metered networks/i)
-  assert.match(shareSheet, /battery saver/i)
-  assert.match(shareSheet, /Data Saver/i)
-  assert.match(shareSheet, /Doze/i)
-  assert.match(shareSheet, /delay\s+or\s+block/i)
-  assert.match(shareSheet, /pause-when-metered/)
-  assert.match(shareSheet, /resumes\s+automatically/i)
+  assert.match(settings, /metered networks/i)
+  assert.match(settings, /battery saver/i)
+  assert.match(settings, /Data Saver/i)
+  assert.match(settings, /Doze/i)
+  assert.match(settings, /delay updates/i)
+  assert.match(settings, /pause-when-metered/)
+  assert.match(settings, /resume automatically/i)
   assert.match(peers, /connection\.share\.paused/)
   assert.match(diagnostics, /pauseReason/)
   assert.match(diagnostics, /sampling/)
@@ -54,4 +55,23 @@ test('0.1 includes field fixes, uniform markers and executable sharing diagnosti
   }
   const mapRow = catalog.split('\n').find((line) => line.startsWith('maplibre-component,'))
   assert.match(mapRow, /own and followed/)
+})
+
+test('README explains direct connections, relays and encryption limits', () => {
+  const readme = fs.readFileSync('README.md', 'utf8')
+  assert.match(readme, /## How Constellation protects your privacy/)
+  assert.match(readme, /end-to-end encrypted peer/)
+  assert.match(readme, /relay for reachability/)
+  assert.match(readme, /record it, or retain encrypted traffic/)
+  assert.match(readme, /compromised devices/i)
+  assert.match(readme, /cannot erase information already received/)
+})
+
+test('sharing separates link options from device behavior and explains encrypted delivery', () => {
+  assert.doesNotMatch(shareSheet, /<legend>When to share|<legend>Update frequency/)
+  assert.match(shareSheet, /Create location link/)
+  assert.match(shareSheet, /End-to-end encrypted\. No central location storage\./)
+  assert.match(shareSheet, /More info/)
+  assert.match(settings, /every active and future link/)
+  assert.match(settings, /Use while app is open/)
 })

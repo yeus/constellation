@@ -1,42 +1,64 @@
 <template>
   <div class="sheet-backdrop" @click.self="emit('close')">
-    <section class="share-sheet peer-list" role="dialog" aria-modal="true" :aria-label="dialogName">
+    <section
+      v-show="!pendingAdoption"
+      class="share-sheet peer-list"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="dialogName"
+    >
       <header class="sheet-header peer-list__header">
         <h2>Peers</h2>
+        <details
+          ref="filterMenu"
+          class="peer-list__filter-menu"
+          @keydown.esc.prevent="closeFilterMenu"
+        >
+          <summary role="button" aria-label="Filter peers" :title="`Filter: ${filter}`">
+            <FilterIcon aria-hidden="true" /><span>{{
+              filters.find((option) => option.value === filter)?.label
+            }}</span>
+          </summary>
+          <div class="peer-list__filter-options">
+            <strong>Show peers</strong>
+            <button
+              v-for="option in filters"
+              :key="option.value"
+              type="button"
+              :aria-pressed="filter === option.value"
+              @click="selectFilter(option.value)"
+            >
+              {{ option.label }}
+            </button>
+            <label class="peer-list__ended-toggle">
+              <input v-model="showEnded" type="checkbox" /> Show ended
+            </label>
+            <button
+              type="button"
+              :disabled="clearOldBusy || !hasClearableHistory"
+              @click="requestClearOld"
+            >
+              {{ clearOldBusy ? 'Clearing…' : 'Clear old' }}
+            </button>
+            <small>Clear inactive history. Pending notices stay protected.</small>
+          </div>
+        </details>
         <button class="icon-button" type="button" aria-label="Close" @click="emit('close')">
           <CloseIcon />
         </button>
       </header>
       <div class="peer-list__create-actions">
-        <button type="button" @click="emit('addPeer')">Add peer</button>
-        <button type="button" @click="emit('shareLocation')">Share location</button>
-      </div>
-
-      <div class="peer-list__filters" role="group" aria-label="Filter peers">
-        <button
-          v-for="option in filters"
-          :key="option.value"
-          type="button"
-          :aria-pressed="filter === option.value"
-          @click="emit('filter', option.value)"
-        >
-          {{ option.label }}
+        <button class="peer-list__share-action" type="button" @click="emit('shareLocation')">
+          <ShareIcon aria-hidden="true" /> Share location
+        </button>
+        <button class="peer-list__add-action" type="button" @click="emit('addPeer')">
+          <AddIcon aria-hidden="true" /> Add peer
         </button>
       </div>
       <p v-if="totalConnectedViewers" class="field-help peer-list__count">
         {{ totalConnectedViewers }} connected across your active links
       </p>
 
-      <label
-        v-if="
-          oldShares.length ||
-          oldFollowing.length ||
-          stoppedViewers.some(({ dismissed }) => dismissed)
-        "
-        class="peer-list__ended-toggle"
-      >
-        <input v-model="showEnded" type="checkbox" /> Show ended
-      </label>
       <p v-if="peers.length === 0" class="field-help">No peers in this list yet.</p>
       <button
         v-if="viewableIds.length > 1 && filter !== 'sharing'"
@@ -110,166 +132,62 @@
               {{ new Date(ended.endedAt).toLocaleString() }}</span
             >
           </div>
-          <div v-if="peer.peerId" class="peer-link-item">
-            <button
-              v-if="editingProfile !== peer.peerId"
-              class="peer-text-action"
-              type="button"
-              @click="editProfile(peer.peerId)"
-            >
-              Name sharing
-            </button>
-            <template v-else>
-              <label
-                ><input v-model="shareProfileName" type="checkbox" /> Share my name with this
-                peer</label
-              >
-              <input
-                v-if="shareProfileName"
-                v-model="profileNameDraft"
-                aria-label="Your name for this peer"
-                type="text"
-                maxlength="32"
-                placeholder="Your chosen name"
-              />
-              <label
-                ><input v-model="associateNames" type="checkbox" /> Reuse my private nickname across
-                reciprocal shares</label
-              >
-              <p class="field-help">
-                Your nickname for them stays private. Name sharing is independent in each direction.
-              </p>
-              <div class="peer-link-item__actions">
-                <button
-                  type="button"
-                  :disabled="shareProfileName && !profileNameDraft.trim()"
-                  @click="saveProfile(peer.peerId)"
-                >
-                  Save name preferences
-                </button>
-                <button type="button" @click="editingProfile = undefined">Cancel</button>
-              </div>
-            </template>
-          </div>
-          <article
-            v-for="connection in peer.shares"
-            :key="`${connection.share.shareId}:${connection.viewer?.fingerprint ?? 'waiting'}`"
-            class="peer-link-item"
+          <button
+            v-if="peer.peerId && advertisedName(peer) && advertisedName(peer) !== peer.name"
+            type="button"
+            class="peer-text-action"
+            :aria-label="`Review advertised name ${advertisedName(peer)}`"
+            @click="pendingAdoption = { peerId: peer.peerId, name: advertisedName(peer)! }"
           >
-            <strong>{{ connection.share.name || 'Private link' }}</strong>
-            <span
-              >{{
-                connection.share.precision === 'very-coarse'
-                  ? 'very coarse'
-                  : connection.share.precision
-              }}
-              · {{ connection.share.publication || 'background' }}
-              <template v-if="connection.share.paused"> · paused</template>
-              ·
-              {{
-                connection.share.expiresAt === null
-                  ? 'until stopped'
-                  : `until ${new Date(connection.share.expiresAt).toLocaleString()}`
-              }}</span
-            >
-            <span v-if="!connection.viewer">
-              {{
-                connection.share.viewerCount
-                  ? `${connection.share.viewerCount} connected · peer details unavailable`
-                  : 'Waiting for a viewer · 0 connected'
-              }}
-            </span>
-            <details v-else class="peer-viewer-details">
-              <summary>Connected viewers ({{ connection.share.viewerCount }})</summary>
-              <div class="peer-viewer-details__content">
-                <span
-                  >{{ connection.viewer.localName || 'Connected peer' }} · seen
-                  {{ new Date(connection.viewer.lastSeenAt).toLocaleTimeString() }}</span
-                >
-                <span class="peer-viewer-details__fingerprint"
-                  >Connection {{ connection.viewer.fingerprint }}</span
-                >
-                <div
-                  v-if="
-                    editingViewer === `${connection.share.shareId}:${connection.viewer.fingerprint}`
-                  "
-                  class="peer-viewer-details__edit"
-                >
-                  <input
-                    v-model="nameDraft"
-                    type="text"
-                    maxlength="32"
-                    aria-label="Device name"
-                    @keyup.enter="saveName(connection.share.shareId, connection.viewer.fingerprint)"
-                    @keyup.esc="editingViewer = undefined"
-                  />
-                  <button
-                    type="button"
-                    @click="saveName(connection.share.shareId, connection.viewer.fingerprint)"
-                  >
-                    Save
-                  </button>
-                </div>
-                <button
-                  v-else
-                  class="peer-text-action"
-                  type="button"
-                  :aria-label="`Edit device name for connection ${connection.viewer.fingerprint}`"
-                  @click="
-                    editName(
-                      connection.share.shareId,
-                      connection.viewer.fingerprint,
-                      connection.viewer.localName || '',
-                    )
-                  "
-                >
-                  <PencilLine aria-hidden="true" /> Edit name
-                </button>
-                <button
-                  class="peer-text-action"
-                  type="button"
-                  :aria-label="`Block device ${connection.viewer.localName || `Connection ${connection.viewer.fingerprint}`}`"
-                  @click="
-                    emit('viewerBlock', connection.share.shareId, connection.viewer.fingerprint)
-                  "
-                >
-                  Block device
-                </button>
-              </div>
-            </details>
-            <div class="peer-link-item__actions">
-              <button type="button" @click="emit('show', connection.share)">Show link / QR</button>
-              <button type="button" @click="emit('revoke', connection.share.shareId)">
-                Revoke link
-              </button>
+            Advertised name: {{ advertisedName(peer) }}
+          </button>
+          <div
+            v-for="connection in peer.shares"
+            :key="`compact:${connection.share.shareId}`"
+            class="peer-list__relationship"
+          >
+            <div>
+              <strong>Sharing with {{ peer.waiting ? 'a new viewer' : peer.name }}</strong>
+              <span
+                >{{ connection.share.precision }} ·
+                {{
+                  connection.share.paused
+                    ? 'Paused'
+                    : connection.viewer
+                      ? 'Connected'
+                      : 'Waiting for a viewer'
+                }}
+                ·
+                {{
+                  connection.share.expiresAt === null
+                    ? 'until stopped'
+                    : remaining(connection.share.expiresAt) + ' left'
+                }}</span
+              >
             </div>
-          </article>
-
-          <article v-for="follow in peer.following" :key="follow.shareId" class="peer-link-item">
-            <strong>{{ follow.sourceName || follow.localName || 'Shared location' }}</strong>
-            <span>{{ statusLabel(follow.status) }} · {{ follow.saved ? 'Saved' : 'Preview' }}</span>
-            <span
-              >Last location:
-              {{
-                follow.lastLocationAt
-                  ? `${new Date(follow.lastLocationAt).toLocaleString()} · ${elapsed(follow.lastLocationAt)} ago`
-                  : 'not received'
-              }}
-              · Updates this session: {{ follow.updatesReceived }}</span
-            >
-            <span
-              >Following since:
-              {{
-                follow.followedAt
-                  ? `${new Date(follow.followedAt).toLocaleString()} · ${elapsed(follow.followedAt)} ago`
-                  : 'unknown'
-              }}
-              · Time left:
-              {{ follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt) }}</span
-            >
+            <button class="peer-text-action" type="button" @click="openDetails($event)">
+              Manage link
+            </button>
+          </div>
+          <div
+            v-for="follow in peer.following"
+            :key="`compact:${follow.shareId}`"
+            class="peer-list__relationship peer-list__relationship--viewing"
+          >
+            <div>
+              <strong>Viewing {{ peer.name }}</strong>
+              <span
+                >{{ statusLabel(follow.status) }} ·
+                {{
+                  follow.lastLocationAt
+                    ? elapsed(follow.lastLocationAt) + ' ago'
+                    : 'No location yet'
+                }}</span
+              >
+            </div>
             <button
               v-if="follow.status !== 'approval-pending' && follow.status !== 'denied'"
-              class="secondary-action"
+              class="peer-text-action"
               type="button"
               :disabled="shareBackBusy"
               :aria-label="`Share back to ${peer.name}`"
@@ -277,73 +195,283 @@
             >
               Share back
             </button>
-            <div v-if="editingFollow === follow.shareId" class="peer-viewer-details__edit">
-              <input
-                v-model="nameDraft"
-                type="text"
-                maxlength="32"
-                aria-label="Your nickname"
-                @keyup.enter="saveFollowName(follow.shareId)"
-                @keyup.esc="editingFollow = undefined"
-              />
-              <button type="button" @click="saveFollowName(follow.shareId)">Save</button>
-              <button type="button" @click="editingFollow = undefined">Cancel</button>
-            </div>
-            <button
-              v-else
-              class="peer-text-action"
-              type="button"
-              :aria-label="`Edit nickname for ${peer.name}`"
-              @click="editFollowName(follow.shareId, follow.localName)"
-            >
-              <PencilLine aria-hidden="true" /> Edit nickname
-            </button>
-            <div class="peer-link-item__colors" aria-label="Location color">
-              <button
-                v-for="color in FOLLOW_COLORS"
-                :key="color"
-                type="button"
-                :style="{ backgroundColor: color }"
-                :aria-label="`Use ${color} color`"
-                :aria-pressed="follow.color === color"
-                @click="emit('color', follow.shareId, color)"
-              />
-            </div>
-            <div class="peer-link-item__actions">
-              <button
-                v-if="viewableIds.includes(follow.shareId)"
-                type="button"
-                @click="emit('focus', follow.shareId)"
+          </div>
+          <details class="peer-list__advanced">
+            <summary>Details</summary>
+            <div class="peer-list__advanced-content">
+              <div v-if="peer.peerId" class="peer-link-item">
+                <button
+                  v-if="editingProfile !== peer.peerId"
+                  class="peer-text-action"
+                  type="button"
+                  @click="editProfile(peer.peerId)"
+                >
+                  Name sharing
+                </button>
+                <template v-else>
+                  <label
+                    ><input v-model="shareProfileName" type="checkbox" /> Share my name with this
+                    peer</label
+                  >
+                  <input
+                    v-if="shareProfileName"
+                    v-model="profileNameDraft"
+                    aria-label="Your name for this peer"
+                    type="text"
+                    maxlength="32"
+                    placeholder="Your chosen name"
+                  />
+                  <label
+                    ><input v-model="associateNames" type="checkbox" /> Reuse my private nickname
+                    across reciprocal shares</label
+                  >
+                  <p class="field-help">
+                    Your nickname for them stays private. Name sharing is independent in each
+                    direction.
+                  </p>
+                  <div class="peer-link-item__actions">
+                    <button
+                      type="button"
+                      :disabled="shareProfileName && !profileNameDraft.trim()"
+                      @click="saveProfile(peer.peerId)"
+                    >
+                      Save name preferences
+                    </button>
+                    <button type="button" @click="editingProfile = undefined">Cancel</button>
+                  </div>
+                </template>
+              </div>
+              <article
+                v-for="connection in peer.shares"
+                :key="`${connection.share.shareId}:${connection.viewer?.fingerprint ?? 'waiting'}`"
+                class="peer-link-item"
               >
-                Show on map
-              </button>
-              <button type="button" @click="emit('unfollow', follow.shareId)">
-                Stop following
-              </button>
-              <button v-if="!follow.saved" type="button" @click="emit('keep', follow.shareId)">
-                Keep following
-              </button>
+                <strong>{{ connection.share.name || 'Private link' }}</strong>
+                <span
+                  >{{
+                    connection.share.precision === 'very-coarse'
+                      ? 'very coarse'
+                      : connection.share.precision
+                  }}
+                  · {{ connection.share.publication || 'background' }}
+                  <template v-if="connection.share.paused"> · paused</template>
+                  ·
+                  {{
+                    connection.share.expiresAt === null
+                      ? 'until stopped'
+                      : `until ${new Date(connection.share.expiresAt).toLocaleString()}`
+                  }}</span
+                >
+                <span v-if="!connection.viewer">
+                  {{
+                    connection.share.viewerCount
+                      ? `${connection.share.viewerCount} connected · peer details unavailable`
+                      : 'Waiting for a viewer · 0 connected'
+                  }}
+                </span>
+                <details v-else class="peer-viewer-details">
+                  <summary>Connected viewers ({{ connection.share.viewerCount }})</summary>
+                  <div class="peer-viewer-details__content">
+                    <span
+                      >{{
+                        connection.viewer.displayName ||
+                        connection.viewer.localName ||
+                        'Connected peer'
+                      }}
+                      · seen {{ new Date(connection.viewer.lastSeenAt).toLocaleTimeString() }}</span
+                    >
+                    <span class="peer-viewer-details__fingerprint"
+                      >Connection {{ connection.viewer.fingerprint }}</span
+                    >
+                    <div
+                      v-if="
+                        editingViewer ===
+                        `${connection.share.shareId}:${connection.viewer.fingerprint}`
+                      "
+                      class="peer-viewer-details__edit"
+                    >
+                      <input
+                        v-model="nameDraft"
+                        type="text"
+                        maxlength="32"
+                        aria-label="Device name"
+                        @keyup.enter="
+                          saveName(connection.share.shareId, connection.viewer.fingerprint)
+                        "
+                        @keyup.esc="editingViewer = undefined"
+                      />
+                      <button
+                        type="button"
+                        @click="saveName(connection.share.shareId, connection.viewer.fingerprint)"
+                      >
+                        Save
+                      </button>
+                    </div>
+                    <button
+                      v-else
+                      class="peer-text-action"
+                      type="button"
+                      :aria-label="`Edit device name for connection ${connection.viewer.fingerprint}`"
+                      @click="
+                        editName(
+                          connection.share.shareId,
+                          connection.viewer.fingerprint,
+                          connection.viewer.localName || '',
+                        )
+                      "
+                    >
+                      <PencilLine aria-hidden="true" /> Edit name
+                    </button>
+                    <button
+                      class="peer-text-action"
+                      type="button"
+                      :aria-label="`Block device ${connection.viewer.localName || `Connection ${connection.viewer.fingerprint}`}`"
+                      @click="
+                        emit('viewerBlock', connection.share.shareId, connection.viewer.fingerprint)
+                      "
+                    >
+                      Block device
+                    </button>
+                  </div>
+                </details>
+                <div class="peer-link-item__actions">
+                  <button type="button" @click="emit('show', connection.share)">
+                    Show link / QR
+                  </button>
+                  <button type="button" @click="emit('revoke', connection.share.shareId)">
+                    Revoke link
+                  </button>
+                </div>
+              </article>
+
+              <article
+                v-for="follow in peer.following"
+                :key="follow.shareId"
+                class="peer-link-item"
+              >
+                <strong>{{ follow.displayName || follow.localName || 'Shared location' }}</strong>
+                <span
+                  >{{ statusLabel(follow.status) }} · {{ follow.saved ? 'Saved' : 'Preview' }}</span
+                >
+                <span
+                  >Last location:
+                  {{
+                    follow.lastLocationAt
+                      ? `${new Date(follow.lastLocationAt).toLocaleString()} · ${elapsed(follow.lastLocationAt)} ago`
+                      : 'not received'
+                  }}
+                  · Updates this session: {{ follow.updatesReceived }}</span
+                >
+                <span
+                  >Following since:
+                  {{
+                    follow.followedAt
+                      ? `${new Date(follow.followedAt).toLocaleString()} · ${elapsed(follow.followedAt)} ago`
+                      : 'unknown'
+                  }}
+                  · Time left:
+                  {{
+                    follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt)
+                  }}</span
+                >
+                <div v-if="editingFollow === follow.shareId" class="peer-viewer-details__edit">
+                  <input
+                    v-model="nameDraft"
+                    type="text"
+                    maxlength="32"
+                    aria-label="Your nickname"
+                    @keyup.enter="saveFollowName(follow.shareId)"
+                    @keyup.esc="editingFollow = undefined"
+                  />
+                  <button type="button" @click="saveFollowName(follow.shareId)">Save</button>
+                  <button type="button" @click="editingFollow = undefined">Cancel</button>
+                </div>
+                <button
+                  v-else
+                  class="peer-text-action"
+                  type="button"
+                  :aria-label="`Edit nickname for ${peer.name}`"
+                  @click="editFollowName(follow.shareId, follow.localName)"
+                >
+                  <PencilLine aria-hidden="true" /> Edit nickname
+                </button>
+                <div class="peer-link-item__colors" aria-label="Location color">
+                  <button
+                    v-for="color in FOLLOW_COLORS"
+                    :key="color"
+                    type="button"
+                    :style="{ backgroundColor: color }"
+                    :aria-label="`Use ${color} color`"
+                    :aria-pressed="follow.color === color"
+                    @click="emit('color', follow.shareId, color)"
+                  />
+                </div>
+                <div class="peer-link-item__actions">
+                  <button
+                    v-if="viewableIds.includes(follow.shareId)"
+                    type="button"
+                    @click="emit('focus', follow.shareId)"
+                  >
+                    Show on map
+                  </button>
+                  <button type="button" @click="emit('unfollow', follow.shareId)">
+                    Stop following
+                  </button>
+                  <button v-if="!follow.saved" type="button" @click="emit('keep', follow.shareId)">
+                    Keep following
+                  </button>
+                </div>
+              </article>
             </div>
-          </article>
+          </details>
         </div>
       </details>
+    </section>
+    <section
+      v-if="pendingAdoption"
+      class="share-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Adopt advertised name"
+      @keydown.esc="pendingAdoption = undefined"
+    >
+      <header class="sheet-header">
+        <h2>Use {{ pendingAdoption.name }}?</h2>
+        <button
+          type="button"
+          class="icon-button"
+          aria-label="Close name confirmation"
+          @click="pendingAdoption = undefined"
+        >
+          <CloseIcon />
+        </button>
+      </header>
+      <p>
+        This peer advertises this name. Adopting it changes your local display name and initials.
+      </p>
+      <button type="button" class="primary-action" @click="adoptAdvertisedName">Adopt name</button>
+      <button type="button" class="secondary-action" @click="pendingAdoption = undefined">
+        Keep current name
+      </button>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { LucideMapPin as MapPin, LucidePencilLine as PencilLine } from '@lucide/vue'
+import {
+  LucideMapPin as MapPin,
+  LucidePencilLine as PencilLine,
+  LucideFunnel as FilterIcon,
+  LucideShare2 as ShareIcon,
+  LucideUserPlus as AddIcon,
+} from '@lucide/vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import PeerAvatar from './PeerAvatar.vue'
-import type { PeerNamePreference } from '../sharing/peerNames.ts'
+import { advertisedPeerName, type PeerNamePreference } from '../sharing/peerNames.ts'
+import { canClearPeerRecord, protectActivePeerHistory } from '../sharing/peerHistory.ts'
 import type { StoppedViewerRecord } from '../sharing/privateStore.ts'
-import {
-  FOLLOW_COLORS,
-  generatedFollowName,
-  type FollowSummary,
-  type ShareSummary,
-} from '../sharing/sharingRuntime.ts'
+import { FOLLOW_COLORS, type FollowSummary, type ShareSummary } from '../sharing/sharingRuntime.ts'
 
 type PeerFilter = 'all' | 'sharing' | 'viewing' | 'both'
 type PeerLink = { share: ShareSummary; viewer?: NonNullable<ShareSummary['viewers']>[number] }
@@ -374,6 +502,7 @@ const props = defineProps<{
   viewableIds: readonly string[]
   limitedIds?: readonly string[]
   selectedId?: string
+  clearOldBusy?: boolean
   shareBackBusy: boolean
   stoppedViewers: readonly StoppedViewerRecord[]
   oldShares: readonly {
@@ -392,6 +521,7 @@ const props = defineProps<{
   }[]
 }>()
 const emit = defineEmits<{
+  clearOld: []
   close: []
   addPeer: []
   shareLocation: []
@@ -409,6 +539,7 @@ const emit = defineEmits<{
   unfollow: [shareId: string]
   keep: [shareId: string]
   shareBack: [shareId: string]
+  adoptName: [peerId: string, name: string]
   profile: [peerId: string, associateNames: boolean, sharedName: string | null]
 }>()
 const filters: readonly { value: PeerFilter; label: string }[] = [
@@ -420,6 +551,37 @@ const filters: readonly { value: PeerFilter; label: string }[] = [
 const dialogName = computed(() =>
   props.filter === 'sharing' ? 'Active shares' : props.filter === 'viewing' ? 'Following' : 'Peers',
 )
+const filterMenu = ref<HTMLDetailsElement>()
+const closeFilterMenu = (): void => {
+  if (!filterMenu.value) return
+  filterMenu.value.open = false
+  filterMenu.value.querySelector('summary')?.focus()
+}
+const requestClearOld = (): void => {
+  emit('clearOld')
+  closeFilterMenu()
+}
+const selectFilter = (filter: PeerFilter): void => {
+  emit('filter', filter)
+  closeFilterMenu()
+}
+const hasClearableHistory = computed(() => {
+  const protection = protectActivePeerHistory(props.shares, props.following)
+  return [...props.oldShares, ...props.oldFollowing, ...props.stoppedViewers].some((record) =>
+    canClearPeerRecord(record, protection),
+  )
+})
+const openDetails = (event: Event): void => {
+  const target = event.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  const details = target
+    .closest('.peer-list__item')
+    ?.querySelector<HTMLDetailsElement>('.peer-list__advanced')
+  if (details) {
+    details.open = true
+    details.querySelector('summary')?.focus()
+  }
+}
 const showEnded = ref(false)
 const totalConnectedViewers = computed(() =>
   props.shares.reduce((count, share) => count + share.viewerCount, 0),
@@ -448,7 +610,10 @@ const peers = computed(() => {
   for (const share of props.shares) {
     const viewers = share.viewers ?? []
     if (viewers.length === 0) {
-      getEntry(`share:${share.shareId}`).shares.push({ share })
+      getEntry(
+        share.recipientPeerId ? `peer:${share.recipientPeerId}` : `share:${share.shareId}`,
+        share.recipientPeerId,
+      ).shares.push({ share })
       continue
     }
     for (const viewer of viewers) {
@@ -497,24 +662,23 @@ const peers = computed(() => {
       const peerPreference = props.peerNamePreferences?.find(
         ({ peerId }) => peerId === entry.peerId,
       )
-      const localFollowName = entry.following.find(
-        (follow) => follow.localName && follow.localName !== generatedFollowName(follow.shareId),
-      )?.localName
       entry.name =
-        localFollowName ||
-        entry.following.find((follow) => follow.sourceName)?.sourceName ||
-        entry.shares.find((connection) => connection.viewer?.localName)?.viewer?.localName ||
-        entry.shares.find((connection) => connection.viewer?.sourceName)?.viewer?.sourceName ||
+        entry.following[0]?.displayName ||
         entry.following[0]?.localName ||
+        entry.shares.find((connection) => connection.viewer?.displayName)?.viewer?.displayName ||
+        entry.shares.find((connection) => connection.viewer?.localName)?.viewer?.localName ||
+        peerPreference?.nickname ||
+        peerPreference?.acceptedName ||
+        entry.shares.find((connection) => connection.viewer?.sourceName)?.viewer?.sourceName ||
         (entry.shares.some((connection) => connection.viewer)
           ? 'Connected peer'
           : entry.peerId
-            ? peerPreference?.nickname ||
-              peerPreference?.receivedName ||
-              (entry.stopped.length ? 'Stopped sharing' : 'Former peer')
-            : entry.stopped.length
+            ? entry.stopped.length
               ? 'Stopped sharing'
-              : entry.ended[0]?.name || 'Waiting for a viewer')
+              : entry.shares.length
+                ? 'Known peer'
+                : 'Former peer'
+            : entry.ended[0]?.name || 'Waiting for a viewer')
       entry.waiting =
         entry.shares.length > 0 &&
         entry.shares.every(({ viewer }) => !viewer) &&
@@ -572,6 +736,19 @@ const peers = computed(() => {
     })
     .sort((left, right) => left.name.localeCompare(right.name))
 })
+
+const pendingAdoption = ref<{ peerId: string; name: string }>()
+const advertisedName = (peer: PeerEntry): string | undefined =>
+  advertisedPeerName(
+    props.peerNamePreferences?.find((preference) => preference.peerId === peer.peerId),
+    peer.following.find((follow) => follow.sourceName)?.sourceName,
+  )
+const adoptAdvertisedName = (): void => {
+  const adoption = pendingAdoption.value
+  if (!adoption) return
+  emit('adoptName', adoption.peerId, adoption.name)
+  pendingAdoption.value = undefined
+}
 
 const peerStatus = (peer: PeerEntry): string => {
   if (peer.waiting) return 'Waiting'
@@ -689,15 +866,16 @@ const remaining = (timestamp: number): string => {
 <style scoped>
 .peer-list__header {
   position: relative;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
 }
 .peer-list__header h2 {
   margin: 0;
+  flex: 1;
   font-size: 1rem;
 }
 .peer-list__header .icon-button {
-  position: absolute;
-  right: 0;
+  position: static;
 }
 .peer-list__create-actions {
   display: grid;
@@ -713,6 +891,117 @@ const remaining = (timestamp: number): string => {
   background: var(--control-fill);
   color: var(--text);
   cursor: pointer;
+}
+.peer-list__create-actions button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 650;
+  font-size: 0.85rem;
+  padding: 0.6rem 0.35rem;
+}
+.peer-list__create-actions .peer-list__share-action {
+  background: var(--accent);
+  color: #182231;
+  border-color: var(--accent);
+}
+.peer-list__create-actions .peer-list__add-action {
+  background: #2a3548;
+  color: #f6f8fc;
+  border-color: #58677f;
+}
+.peer-list__create-actions svg,
+.peer-list__filter-menu svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.peer-list__filter-menu {
+  position: relative;
+}
+.peer-list__filter-menu > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0 0.5rem;
+  height: 2.5rem;
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--control-fill);
+}
+.peer-list__filter-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.peer-list__filter-options {
+  position: absolute;
+  top: 2.8rem;
+  right: 0;
+  z-index: 2;
+  display: grid;
+  gap: 0.4rem;
+  width: min(15rem, 70vw);
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface-strong);
+  box-shadow: 0 0.4rem 1.5rem #0003;
+}
+.peer-list__filter-options button {
+  min-height: 2.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--control-fill);
+  color: var(--text);
+  cursor: pointer;
+}
+.peer-list__filter-options button[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.peer-list__filter-options small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.peer-list__relationship {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.65rem;
+  border-left: 2px solid var(--accent);
+  background: var(--control-fill);
+  border-radius: 0.35rem;
+}
+.peer-list__relationship--viewing {
+  border-left-color: #438ec9;
+}
+.peer-list__relationship > div {
+  display: grid;
+  gap: 0.2rem;
+}
+.peer-list__relationship strong {
+  font-size: 0.85rem;
+}
+.peer-list__relationship span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.peer-list__relationship button {
+  flex-shrink: 0;
+  color: var(--text);
+}
+.peer-list__advanced > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.6rem 0;
+  color: var(--muted);
+}
+.peer-list__advanced-content {
+  display: grid;
+  gap: 0.3rem;
 }
 .peer-list__ended-toggle {
   display: flex;
@@ -735,7 +1024,6 @@ const remaining = (timestamp: number): string => {
   cursor: not-allowed;
   opacity: 0.45;
 }
-.peer-list__filters,
 .peer-link-item__actions,
 .peer-viewer-details__edit {
   display: flex;
@@ -743,7 +1031,6 @@ const remaining = (timestamp: number): string => {
   gap: 0.45rem;
 }
 
-.peer-list__filters button,
 .peer-link-item__actions button,
 .peer-viewer-details__edit button {
   min-height: 2.2rem;
@@ -753,11 +1040,6 @@ const remaining = (timestamp: number): string => {
   background: var(--control-fill);
   color: var(--text);
   cursor: pointer;
-}
-
-.peer-list__filters button[aria-pressed='true'] {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 .peer-list__item,
@@ -770,16 +1052,29 @@ const remaining = (timestamp: number): string => {
 }
 
 .peer-list__summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  grid-template-areas: 'avatar name map' 'avatar status map';
   align-items: center;
-  gap: 0.7rem;
+  column-gap: 0.7rem;
+  row-gap: 0.15rem;
   min-height: 2.7rem;
   cursor: pointer;
   list-style-position: outside;
 }
 
+.peer-list__summary > .peer-avatar {
+  grid-area: avatar;
+}
+.peer-list__summary > small {
+  grid-area: status;
+}
+.peer-list__summary > .peer-list__map-action {
+  grid-area: map;
+}
 .peer-list__summary-name {
-  flex: 1;
+  grid-area: name;
+  overflow-wrap: anywhere;
   font-weight: 650;
 }
 

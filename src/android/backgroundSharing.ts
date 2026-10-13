@@ -1,3 +1,6 @@
+import { z } from 'zod'
+import { SharingBehavior } from '../sharing/sharingBehavior.ts'
+import type { PeerHistoryProtection } from '../sharing/peerHistory.ts'
 import { DeviceComparison } from '../sharing/deviceComparison.ts'
 import type { BrowserLocationState } from '../location/browser.ts'
 import { shareExpiryFor, type ShareDraft, type SharePauseReason } from '../shareDraft.ts'
@@ -8,8 +11,21 @@ import { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import { PeerNamePreference } from '../sharing/peerNames.ts'
 import { parseShareInvitation, verifyReturnOwner } from '../sharing/shareLink.ts'
 
+export const AndroidSharingSetup = z.object({
+  behavior: SharingBehavior.nullable(),
+  hasShares: z.boolean(),
+  permissions: z.object({
+    location: z.boolean(),
+    background: z.boolean(),
+    notifications: z.boolean(),
+    servicesEnabled: z.boolean(),
+  }),
+})
+export type AndroidSharingSetup = z.infer<typeof AndroidSharingSetup>
+
 export interface AndroidBackgroundStatus {
   readonly deviceComparisons?: readonly DeviceComparison[]
+  readonly sharingBehavior?: SharingBehavior
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
   readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
   readonly diagnostics?: NetworkDiagnostics
@@ -82,6 +98,8 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
         typeof share.viewerCount !== 'number',
     ) ||
     typeof candidate.message !== 'string' ||
+    (candidate.sharingBehavior !== undefined &&
+      !SharingBehavior.safeParse(candidate.sharingBehavior).success) ||
     (candidate.peerStatus !== undefined &&
       !['offline', 'connecting', 'online', 'error'].includes(candidate.peerStatus)) ||
     (candidate.pauseReason !== undefined &&
@@ -174,6 +192,11 @@ export const createAndroidBackgroundSharing = (
         name: string,
       ) => Promise<AndroidBackgroundStatus>
       blockViewer: (shareId: string, fingerprint: string) => Promise<AndroidBackgroundStatus>
+      setup: () => Promise<AndroidSharingSetup>
+      enablePermissions: () => Promise<AndroidSharingSetup>
+      setSharingBehavior: (behavior: SharingBehavior) => Promise<AndroidBackgroundStatus>
+      clearOldPeers: (protection: PeerHistoryProtection) => Promise<AndroidBackgroundStatus>
+      adoptPeerName: (peerId: string, name: string) => Promise<AndroidBackgroundStatus>
       setPeerNamePreferences: (
         peerId: string,
         associateNames: boolean,
@@ -296,6 +319,22 @@ export const createAndroidBackgroundSharing = (
       parseStatus(
         await dependencies.invoke('android_block_background_viewer', { shareId, fingerprint }),
       ),
+    setup: async () =>
+      AndroidSharingSetup.parse(await dependencies.invoke('android_sharing_setup')),
+    enablePermissions: async () =>
+      AndroidSharingSetup.parse(await dependencies.invoke('android_enable_sharing_permissions')),
+    setSharingBehavior: async (behavior) => {
+      await dependencies.invoke('android_set_sharing_behavior', { behavior })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
+    },
+    clearOldPeers: async (protection) => {
+      await dependencies.invoke('android_clear_old_peers', { protection })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
+    },
+    adoptPeerName: async (peerId, name) => {
+      await dependencies.invoke('android_adopt_background_peer_name', { peerId, name })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
+    },
     setPeerNamePreferences: async (peerId, associateNames, sharedName) => {
       await dependencies.invoke('android_set_background_peer_names', {
         peerId,

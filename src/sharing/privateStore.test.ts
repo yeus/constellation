@@ -68,11 +68,13 @@ test('restores directional name consent and private association only from encryp
     associateNames: true,
     nickname: 'Mum',
     sharedName: 'Bob',
-    receivedName: 'Alice',
+    receivedName: 'Alicia',
+    acceptedName: 'Alice',
   }
   const snapshot = { ...state, peerNamePreferences: [preference] }
   const encrypted = await encryptPrivateState(snapshot, key)
   assert.equal(JSON.stringify(encrypted).includes('Mum'), false)
+  assert.equal(JSON.stringify(encrypted).includes('Alice'), false)
   assert.equal(JSON.stringify(encrypted).includes('synthetic-peer'), false)
   assert.deepEqual((await decryptPrivateState(encrypted, key)).peerNamePreferences, [preference])
   assert.equal(parsePrivateState(state).peerNamePreferences, undefined)
@@ -226,4 +228,38 @@ test('preserves protected ended-link notification endpoints', () => {
     },
   ]
   assert.deepEqual(parsePrivateState({ ...state, endedShares }).endedShares, endedShares)
+})
+
+test('cleared history flags survive encrypted reload without removing protected records', async () => {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ])
+  const snapshot: PrivateState = {
+    ...state,
+    oldSharing: [
+      {
+        shareId: 'synthetic-ended-share',
+        peerId: 'synthetic-peer',
+        endedAt: 1,
+        reason: 'revoked',
+        cleared: true,
+      },
+    ],
+    oldSeeing: [
+      { shareId: 'synthetic-ended-follow', endedAt: 1, reason: 'expired', cleared: true },
+    ],
+    stoppedViewers: [
+      {
+        shareId: 'synthetic-stopped-share',
+        peerId: 'synthetic-peer',
+        eventId: 'synthetic-stopped-event',
+        recordedAt: 1,
+        cleared: true,
+      },
+    ],
+  }
+  const encrypted = await encryptPrivateState(snapshot, key)
+  assert.equal(JSON.stringify(encrypted).includes('synthetic-peer'), false)
+  assert.deepEqual(await decryptPrivateState(encrypted, key), snapshot)
 })

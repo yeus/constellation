@@ -410,7 +410,9 @@ const selectNativePeerFilter = async (cdp, filter) => {
   await waitFor(
     async () => {
       const state = await cdp.evaluate(`(() => {
-        const button = [...document.querySelectorAll('.peer-list__filters button')]
+        const menu = document.querySelector('.peer-list__filter-menu');
+        if (menu) menu.open = true;
+        const button = [...document.querySelectorAll('.peer-list__filter-options button')]
           .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(filter)});
         if (!button) return 'missing';
         if (button.getAttribute('aria-pressed') !== 'true') {
@@ -430,6 +432,7 @@ const expandNativePeerRows = (cdp) =>
   cdp.evaluate(`(() => {
     const rows = [...document.querySelectorAll('.peer-list__item:not([open]) > .peer-list__summary')];
     rows.forEach((summary) => summary.click());
+    document.querySelectorAll('.peer-list__advanced').forEach((details) => { details.open = true; });
     return rows.length;
   })()`)
 
@@ -553,25 +556,39 @@ const readAndroidShareLink = async (cdp) => {
   return url
 }
 
+const configureAndroidBackgroundSharing = async (cdp) => {
+  const setupOpen = await cdp.evaluate('Boolean(document.querySelector(".settings-sheet"))')
+  if (!setupOpen) {
+    assert.equal(await clickButton(cdp, 'Open menu'), true)
+    assert.equal(await clickButton(cdp, 'Settings'), true)
+  }
+  assert.equal(await clickButton(cdp, 'In background'), true)
+  assert.equal(await clickButton(cdp, 'Save settings'), true)
+  await waitFor(
+    () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
+    'saved global Android background settings',
+  )
+}
+
 const createAndroidStarShare = async (cdp, name) => {
+  await configureAndroidBackgroundSharing(cdp)
   await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await fillAndroidInput(cdp, 'Share a name', name), true)
-  assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, '10'), true)
   assert.equal(
     await cdp.evaluate(`([...document.querySelectorAll('button')].some((button) =>
       button.textContent?.trim() === '10' && button.getAttribute('aria-pressed') === 'true'))`),
     true,
-    'select ten Star viewers on Android',
+    'select ten Viewers on Android',
   )
   await waitFor(
     () =>
       cdp.evaluate(`([...document.querySelectorAll('button')].some((button) =>
-        button.textContent?.includes('Create private link') && !button.disabled))`),
-    'enabled Android Create private link action',
+        button.textContent?.includes('Create location link') && !button.disabled))`),
+    'enabled Android Create location link action',
     30_000,
   )
-  assert.equal(await clickButton(cdp, 'Create private link'), true)
+  assert.equal(await clickButton(cdp, 'Create location link'), true)
   let url
   try {
     url = await readAndroidShareLink(cdp)
@@ -580,7 +597,7 @@ const createAndroidStarShare = async (cdp, name) => {
       const invoke = window.__TAURI_INTERNALS__?.invoke;
       const nativeStatus = invoke ? await invoke('android_background_share_status').catch((error) => ({ error: String(error) })) : undefined;
       const createButton = [...document.querySelectorAll('button')].find((button) =>
-        button.textContent?.includes('Create private link'));
+        button.textContent?.includes('Create location link'));
       return {
         foregroundOnline: document.body?.innerText?.includes('P2P online') === true,
         shareDialog: Boolean(document.querySelector('[aria-labelledby="share-title"]')),
@@ -605,10 +622,10 @@ const createAndroidStarShare = async (cdp, name) => {
 
 const createBackgroundShareForSmoke = async (cdp) => {
   await waitForNativeApp(cdp, 'Android app startup')
+  await configureAndroidBackgroundSharing(cdp)
   await clickNativePeerAction(cdp, 'All', 'Share location')
-  assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, 'Device accuracy'), true)
-  assert.equal(await clickButton(cdp, 'Create private link'), true)
+  assert.equal(await clickButton(cdp, 'Create location link'), true)
   const url = await readAndroidShareLink(cdp)
   await closeAndroidDialog(cdp)
   return url
@@ -795,9 +812,23 @@ const runPermissionDenialSmoke = async () => {
     adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
     cdp = await connectCdp()
     await waitForNativeApp(cdp, 'Android app startup')
+    await waitFor(
+      () => cdp.evaluate('Boolean(document.querySelector(".settings-sheet"))'),
+      'first-run sharing setup',
+    )
+    assert.equal(
+      await cdp.evaluate(
+        `([...document.querySelectorAll('.settings-sheet button')].find(button => button.textContent?.includes('In background'))?.disabled)`,
+      ),
+      true,
+    )
+    assert.equal(await clickButton(cdp, 'Use while app is open'), true)
+    await waitFor(
+      () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
+      'explicit foreground choice',
+    )
     await clickNativePeerAction(cdp, 'All', 'Share location')
-    assert.equal(await clickButton(cdp, 'In background'), true)
-    assert.equal(await clickButton(cdp, 'Create private link'), true)
+    assert.equal(await clickButton(cdp, 'Create location link'), true)
     await waitFor(
       () => androidTextIncludes(cdp, 'Location permission denied'),
       'location denial guidance',
@@ -1953,7 +1984,7 @@ const createBrowserStarShare = async (page, name) => {
   await peers.getByRole('button', { name: 'Share location', exact: true }).click()
   await page.getByRole('textbox', { name: 'Share a name' }).fill(name)
   await page.getByRole('dialog').getByRole('button', { name: '10', exact: true }).click()
-  await page.getByRole('button', { name: 'Create private link' }).click()
+  await page.getByRole('button', { name: 'Create location link' }).click()
   const url = await page.getByLabel('Share link').inputValue()
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
   return url
@@ -2722,7 +2753,7 @@ const runCaptiveTransportSmoke = async () => {
     adb(['reverse', 'tcp:9111', 'tcp:9112'])
     cdp = await setupNativeBackgroundSmoke()
     await clickNativePeerAction(cdp, 'All', 'Share location')
-    assert.equal(await clickButton(cdp, 'Create private link'), true)
+    assert.equal(await clickButton(cdp, 'Create location link'), true)
     let blocked
     try {
       await waitFor(
@@ -3061,7 +3092,55 @@ const runMeteredPolicySmoke = async () => {
     )
     setWifiMetered(false)
 
-    console.log('[android-test] per-link metered policy paused only the opted-in link.')
+    console.log('[android-test] legacy per-link policy compatibility passed before global review.')
+    const identities = (await readPolicyStatus(cdp)).shares.map(({ shareId, url }) => ({
+      shareId,
+      url,
+    }))
+    await cdp.evaluate(`window.__TAURI_INTERNALS__.invoke('android_set_sharing_behavior', {
+      behavior: { publication: 'background', battery: 'saver', network: 'pause-when-metered' }
+    })`)
+    await waitForShare(
+      'global behavior replaces all legacy policies',
+      (status) =>
+        status.shares.length === 2 &&
+        status.shares.every(
+          (share) =>
+            share.publication === 'background' &&
+            share.battery === 'saver' &&
+            share.network === 'pause-when-metered',
+        ),
+    )
+    assert.deepEqual(
+      (await readPolicyStatus(cdp)).shares.map(({ shareId, url }) => ({ shareId, url })),
+      identities,
+    )
+    setWifiMetered(true)
+    await waitForShare('global metered policy pauses every active link', (status) =>
+      status.shares.every((share) => share.paused === 'metered'),
+    )
+    setWifiMetered(false)
+    await waitForShare(
+      'global metered policy resumes every active link',
+      (status) =>
+        status.shares.every((share) => share.paused === null) && status.sampling === 'saver',
+    )
+    await cdp.evaluate(`window.__TAURI_INTERNALS__.invoke('android_set_sharing_behavior', {
+      behavior: { publication: 'foreground', battery: 'saver', network: 'pause-when-metered' }
+    })`)
+    await waitForShare(
+      'explicit foreground behavior normalizes all active source policies',
+      (status) =>
+        status.shares.every(
+          (share) =>
+            share.publication === 'foreground' &&
+            share.battery === 'balanced' &&
+            share.network === 'always',
+        ),
+    )
+    console.log(
+      '[android-test] global behavior replaced legacy policies while preserving link identities.',
+    )
   } finally {
     try {
       adb(['shell', 'cmd', 'netpolicy', 'set', 'restrict-background', 'false'])
@@ -3293,13 +3372,13 @@ const createBrowserReturnShare = async (page) => {
   await invitation.getByRole('button', { name: 'Share back' }).click()
   const form = page.getByRole('dialog', { name: 'Share your location' })
   await expect(form).toContainText('Only this sender receives the private offer')
-  await expect(form.getByText('Star viewers')).toHaveCount(0)
+  await expect(form.getByText('Viewers')).toHaveCount(0)
   await expect(form.getByRole('button', { name: 'Approximate' })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
   await expect(form.getByRole('button', { name: '1 hour' })).toHaveAttribute('aria-pressed', 'true')
-  await form.getByRole('button', { name: 'Create private link' }).click()
+  await form.getByRole('button', { name: 'Create location link' }).click()
   await expect(form).toHaveCount(0, { timeout: 30_000 })
 }
 
@@ -3356,17 +3435,17 @@ const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
 const runShareFlow = async (cdp, browser, options = {}) => {
   console.log('[android-test] creating background share')
   await waitForNativeApp(cdp, 'Android sharing controls')
+  await configureAndroidBackgroundSharing(cdp)
   await clickNativePeerAction(cdp, 'All', 'Share location')
-  assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, '10'), true)
   await waitFor(
     () =>
       cdp.evaluate(`([...document.querySelectorAll('button')].some(button =>
-      button.textContent?.trim() === 'Create private link' && !button.disabled))`),
-    'enabled Android Create private link action',
+      button.textContent?.trim() === 'Create location link' && !button.disabled))`),
+    'enabled Android Create location link action',
     30_000,
   )
-  assert.equal(await clickButton(cdp, 'Create private link'), true)
+  assert.equal(await clickButton(cdp, 'Create location link'), true)
   let shareUrl
   try {
     await waitFor(
@@ -3383,7 +3462,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     await wait(1_000)
     const state = await cdp.evaluate(`(() => {
       const buttons = [...document.querySelectorAll('button')];
-      const createButton = buttons.find((button) => button.textContent && button.textContent.includes('Create private link'));
+      const createButton = buttons.find((button) => button.textContent && button.textContent.includes('Create location link'));
       return {
         backgroundSelected: buttons
           .some((button) => button.textContent && button.textContent.includes('In background') && button.getAttribute('aria-pressed') === 'true'),

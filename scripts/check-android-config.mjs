@@ -223,4 +223,49 @@ assert.doesNotMatch(
 assert.match(locationService, /remove\("returnOffers"\)/)
 assert.match(backgroundStatus, /returnOffers: state\?\.returnOffers/)
 
+assert.match(tauriCommands, /android_adopt_background_peer_name/)
+assert.match(mobileBridge, /run_mobile_plugin_async\(\s*"adoptBackgroundPeerName"/)
+assert.match(androidPlugin, /fun adoptBackgroundPeerName\(invoke: Invoke\)/)
+assert.match(androidPlugin, /ACTION_ADOPT_PEER_NAME/)
+assert.match(shareNotification, /ACTION_ADOPT_PEER_NAME/)
+assert.match(locationService, /ACTION_ADOPT_PEER_NAME -> "adopt-peer-name"/)
+assert.match(backgroundEntry, /await runtime\.adoptPeerName\(command\.peerId, command\.name\)/)
+
+assert.match(tauriCommands, /android_clear_old_peers/)
+assert.match(mobileBridge, /run_mobile_plugin_async\(\s*"clearOldPeers"/)
+assert.match(androidPlugin, /fun clearOldPeers\(invoke: Invoke\)/)
+assert.match(backgroundEntry, /await runtime\.clearOldPeers\(command\.protection\)/)
+assert.match(locationService, /pendingCommandIds\.isNotEmpty\(\)/)
+assert.match(locationService, /"idle", "stopped" -> stopWhenIdle\(\)/)
+
+assert.match(locationService, /listOf\("oldSharing", "stoppedViewers", "peerNamePreferences"\)/)
+
+for (const command of [
+  'android_sharing_setup',
+  'android_enable_sharing_permissions',
+  'android_set_sharing_behavior',
+]) {
+  assert.ok(tauriCommands.includes(command), `${command} must be registered`)
+}
+assert.match(androidPlugin, /requestPermissionForAlias\("backgroundLocation"/)
+assert.match(androidPlugin, /requestPermissionForAlias\("notifications"/)
+assert.match(androidPlugin, /ACTION_SET_SHARING_BEHAVIOR && locationGrant\(activity\) == "none"/)
+assert.match(androidPlugin, /activity\.startService\(intent\)/)
+assert.match(locationService, /if \(locationGrant\(this\) != "none"\)/)
+assert.match(backgroundEntry, /await runtime\.setSharingBehavior\(command\.behavior\)/)
+assert.match(
+  backgroundEntry,
+  /await runtime\.importSourceShares\(parsePrivateStateJson\(command\.state\)\)/,
+)
+assert.match(mobileBridge, /"sharingSetup"/)
+assert.match(mobileBridge, /"enableSharingPermissions"/)
+assert.match(mobileBridge, /"setSharingBehavior"/)
+assert.doesNotMatch(
+  mapView.slice(
+    mapView.indexOf('const migrateAndroidSourceShares'),
+    mapView.indexOf('const backgroundStatus'),
+  ),
+  /generateKeyPair/,
+)
+
 console.log('Android configuration checks passed.')

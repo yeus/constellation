@@ -106,3 +106,12 @@ test('until-revoked sharing requires explicit acknowledgement every time', () =>
   assert.equal(indefiniteAgain.untilRevokedAcknowledged, false)
   assert.equal(canCreateShare(indefiniteAgain), false)
 })
+
+test('share suggestions belong only to the current draft', () => {
+  const first = createShareDraft('Amber Otter')
+  assert.equal(first.name, 'Amber Otter')
+  assert.equal(createShareDraft('Silver Robin').name, 'Silver Robin')
+  assert.equal(createShareDraft().name, '')
+  assert.equal(setName(first, '').name, '')
+  assert.equal(first.name, 'Amber Otter')
+})

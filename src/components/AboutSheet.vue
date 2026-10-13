@@ -60,6 +60,19 @@
         outbound transport.
       </p>
       <p>
+        Direct connections are the goal. A relay can help establish a direct connection or forward
+        encrypted traffic when direct connectivity fails; reducing relay dependence remains a goal.
+        Encryption protects location content, not connection metadata or compromised endpoints.
+      </p>
+      <p>
+        <a
+          href="https://github.com/yeus/constellation#how-constellation-protects-your-privacy"
+          target="_blank"
+          rel="noopener noreferrer"
+          >More information about Constellation privacy</a
+        >.
+      </p>
+      <p>
         Learn more about
         <a href="https://libp2p.io/docs/circuit-relay/" target="_blank" rel="noopener noreferrer"
           >libp2p circuit relays</a

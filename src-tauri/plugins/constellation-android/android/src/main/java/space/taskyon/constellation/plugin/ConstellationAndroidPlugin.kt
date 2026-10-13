@@ -59,6 +59,22 @@ class ReturnApprovalArgs {
 }
 
 @InvokeArg
+class SharingBehaviorArgs {
+  lateinit var behavior: JSObject
+}
+
+@InvokeArg
+class ClearOldPeersArgs {
+  lateinit var protection: JSObject
+}
+
+@InvokeArg
+class AdoptPeerNameArgs {
+  var peerId: String = ""
+  var name: String = ""
+}
+
+@InvokeArg
 class PeerNameArgs {
   var peerId: String = ""
   var associateNames: Boolean = false
@@ -108,7 +124,8 @@ class ProjectLinkArgs {
 @TauriPlugin(permissions = [Permission(
   strings = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION],
   alias = "location",
-)])
+), Permission(strings = [Manifest.permission.ACCESS_BACKGROUND_LOCATION], alias = "backgroundLocation"),
+Permission(strings = [Manifest.permission.POST_NOTIFICATIONS], alias = "notifications")])
 class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activity) {
   private val locationManager by lazy { activity.getSystemService(LocationManager::class.java) }
   private val locationHandler = Handler(Looper.getMainLooper())
@@ -129,6 +146,86 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   private fun locationPermissionResult(): JSObject = JSObject()
     .put("grant", locationGrant(activity))
     .put("servicesEnabled", locationManager.isLocationEnabled)
+
+  private fun sharingSetupResult(): JSObject {
+    val saved = store.loadPrivateState()?.let(::JSONObject)
+    return JSObject().put("behavior", saved?.optJSONObject("sharingBehavior") ?: JSONObject.NULL)
+      .put("hasShares", (saved?.optJSONArray("shares")?.length() ?: 0) > 0)
+      .put("permissions", JSONObject()
+        .put("location", locationGrant(activity) != "none")
+        .put("background", Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+          ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED)
+        .put("notifications", Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+          ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+        .put("servicesEnabled", locationManager.isLocationEnabled))
+  }
+
+  @Command
+  fun sharingSetup(invoke: Invoke) {
+    try { invoke.resolve(sharingSetupResult()) }
+    catch (_: Exception) { invoke.reject("Could not read protected sharing settings.") }
+  }
+
+  @Command
+  fun enableSharingPermissions(invoke: Invoke) {
+    if (locationGrant(activity) == "none")
+      requestPermissionForAlias("location", invoke, "sharingLocationPermissionCallback")
+    else requestSharingNotifications(invoke)
+  }
+
+  @PermissionCallback
+  private fun sharingLocationPermissionCallback(invoke: Invoke) {
+    if (locationGrant(activity) == "none") invoke.resolve(sharingSetupResult())
+    else requestSharingNotifications(invoke)
+  }
+
+  private fun requestSharingNotifications(invoke: Invoke) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+      requestPermissionForAlias("notifications", invoke, "sharingNotificationsPermissionCallback")
+    else requestSharingBackground(invoke)
+  }
+
+  @PermissionCallback
+  private fun sharingNotificationsPermissionCallback(invoke: Invoke) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+      invoke.resolve(sharingSetupResult())
+    else requestSharingBackground(invoke)
+  }
+
+  private fun requestSharingBackground(invoke: Invoke) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+      ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+      if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+        requestPermissionForAlias("backgroundLocation", invoke, "sharingBackgroundPermissionCallback")
+        return
+      }
+      activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}")))
+    }
+    invoke.resolve(sharingSetupResult())
+  }
+
+  @PermissionCallback
+  private fun sharingBackgroundPermissionCallback(invoke: Invoke) { invoke.resolve(sharingSetupResult()) }
+
+  @Command
+  fun setSharingBehavior(invoke: Invoke) {
+    try {
+      val behavior = invoke.parseArgs(SharingBehaviorArgs::class.java).behavior
+      check(behavior.optString("publication") in setOf("foreground", "background")) { "Invalid publication." }
+      check(behavior.optString("battery") in setOf("balanced", "saver")) { "Invalid battery policy." }
+      check(behavior.optString("network") in setOf("always", "pause-when-metered")) { "Invalid network policy." }
+      if (behavior.optString("publication") == "background") {
+        val permissions = sharingSetupResult().getJSONObject("permissions")
+        check(listOf("location", "background", "notifications", "servicesEnabled").all { permissions.getBoolean(it) }) {
+          "Enable location, background location and notifications before background sharing."
+        }
+      }
+      val request = JSONObject().put("behavior", behavior)
+      runReturnCommand(invoke, ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR, "", request = request.toString())
+    } catch (_: Exception) { invoke.reject("Sharing settings could not be saved. Check permissions and retry.") }
+  }
 
   @Command
   fun openProjectLink(invoke: Invoke) {
@@ -321,7 +418,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       val args = invoke.parseArgs(BackgroundShareArgs::class.java)
       val request = validateRequest(args.request)
       requireLocationPermission(request.optString("publication") == "background")
-      requireNotificationPermission()
+      if (request.optString("publication") == "background") requireNotificationPermission()
       val running = serviceRunning()
       val initial = if (running) {
         JSONObject(ShareServiceContract.currentStatus ?: store.loadStatus() ?: STARTING_STATUS)
@@ -392,6 +489,8 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
 
   private fun statusWithPolicy(json: String): JSObject {
     val status = runCatching { JSONObject(json) }.getOrNull() ?: JSONObject()
+    store.loadPrivateState()?.let { JSONObject(it).optJSONObject("sharingBehavior") }
+      ?.let { status.put("sharingBehavior", it) }
     if (!status.has("state")) status.put("state", "error")
     if (status.optString("state") !in setOf("starting", "sharing", "paused", "stopped", "error")) {
       status.put("state", "error")
@@ -455,11 +554,12 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun importSourceState(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(PrivateStateArgs::class.java)
-      importSourceState(args.state)
-      invoke.resolve(JSObject())
-    } catch (error: Exception) {
-      invoke.reject(error.message ?: "Could not move Android source links to protected storage.")
-    }
+      val state = args.state
+      check(state.isNotEmpty()) { "Missing source state." }
+      check(state.length <= 131_072) { "Source state is too large." }
+      val request = JSONObject().put("state", state)
+      runReturnCommand(invoke, ShareServiceContract.ACTION_IMPORT_SOURCE_STATE, "", request = request.toString())
+    } catch (_: Exception) { invoke.reject("Protected source links could not be imported.") }
   }
 
   @Command
@@ -608,6 +708,40 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   @Command
+  fun clearOldPeers(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(ClearOldPeersArgs::class.java)
+      for (key in listOf("peerIds", "shareIds")) {
+        val ids = args.protection.getJSONArray(key)
+        check(ids.length() <= 1024) { "Too many protected identities." }
+        for (index in 0 until ids.length()) {
+          val id = ids.getString(index)
+          check(if (key == "peerIds") id.length in 1..256
+            else id.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid protected identity." }
+        }
+      }
+      val request = JSONObject().put("protection", args.protection)
+      runReturnCommand(invoke, ShareServiceContract.ACTION_CLEAR_OLD_PEERS, "", request = request.toString())
+    } catch (_: Exception) {
+      invoke.reject("Could not clear old peers.")
+    }
+  }
+
+  @Command
+  fun adoptBackgroundPeerName(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(AdoptPeerNameArgs::class.java)
+      check(args.peerId.length in 1..256 && args.name.trim().length in 1..32) {
+        "Invalid name adoption."
+      }
+      val request = JSONObject().put("peerId", args.peerId).put("name", args.name.trim())
+      runReturnCommand(invoke, ShareServiceContract.ACTION_ADOPT_PEER_NAME, "", request = request.toString())
+    } catch (_: Exception) {
+      invoke.reject("Could not adopt the advertised name.")
+    }
+  }
+
+  @Command
   fun setBackgroundPeerNames(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(PeerNameArgs::class.java)
@@ -686,28 +820,10 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     peerId?.let { intent.putExtra(ShareServiceContract.EXTRA_PEER_ID, it) }
     name?.let { intent.putExtra(ShareServiceContract.EXTRA_NAME, it) }
     visible?.let { intent.putExtra(ShareServiceContract.EXTRA_VISIBLE, it) }
-    ContextCompat.startForegroundService(activity, intent)
-  }
-
-  private fun importSourceState(encoded: String) {
-    require(encoded.isNotBlank() && encoded.length <= 131_072) { "Protected source state is invalid." }
-    val incoming = JSONObject(encoded)
-    require(incoming.optInt("version") == 1) { "Protected source state version is unsupported." }
-    require(incoming.optString("privateKey").length in 40..1_024) {
-      "Protected source identity is invalid."
-    }
-    val incomingShares = incoming.optJSONArray("shares")
-      ?: throw IllegalArgumentException("Protected source links are invalid.")
-    require(incomingShares.length() <= 128) { "Too many source links to migrate." }
-    val existing = store.loadPrivateState()?.let(::JSONObject)
-    val existingShares = existing?.optJSONArray("shares")?.length() ?: 0
-    if (existingShares > 0) {
-      check(existing?.optString("privateKey") == incoming.optString("privateKey")) {
-        "Android source links already use a different protected identity."
-      }
-      return
-    }
-    store.savePrivateState(incoming.toString())
+    // First-run foreground-only settings must be savable before location is granted.
+    if (action == ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR && locationGrant(activity) == "none")
+      activity.startService(intent)
+    else ContextCompat.startForegroundService(activity, intent)
   }
 
   private fun requireLocationPermission(background: Boolean) {

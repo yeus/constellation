@@ -11,6 +11,7 @@ export const backgroundRuntimeStatus = (
   const shares = state?.shares ?? []
   const endNotificationCount = state?.endNotifications.length ?? 0
   return {
+    sharingBehavior: state?.sharingBehavior,
     state:
       failureMessage !== undefined
         ? 'error'

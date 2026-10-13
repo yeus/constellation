@@ -19,13 +19,13 @@ export interface ShareDraft {
   readonly network: ShareNetworkPolicy
 }
 
-export const createShareDraft = (): ShareDraft => ({
+export const createShareDraft = (name = ''): ShareDraft => ({
   precision: 'approximate',
   duration: '1h',
   viewerCapacity: 1,
   requireViewerApproval: true,
   untilRevokedAcknowledged: false,
-  name: '',
+  name,
   publication: 'foreground',
   battery: 'balanced',
   network: 'always',

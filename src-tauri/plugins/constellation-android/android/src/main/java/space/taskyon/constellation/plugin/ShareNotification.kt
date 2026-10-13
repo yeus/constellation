@@ -10,6 +10,10 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 
 internal object ShareServiceContract {
+  const val ACTION_IMPORT_SOURCE_STATE = "space.taskyon.constellation.IMPORT_SOURCE_STATE"
+  const val ACTION_SET_SHARING_BEHAVIOR = "space.taskyon.constellation.SET_SHARING_BEHAVIOR"
+  const val ACTION_CLEAR_OLD_PEERS = "space.taskyon.constellation.CLEAR_OLD_PEERS"
+  const val ACTION_ADOPT_PEER_NAME = "space.taskyon.constellation.ADOPT_PEER_NAME"
   const val ACTION_SET_PEER_NAMES = "space.taskyon.constellation.SET_PEER_NAMES"
   @Volatile var currentStatus: String? = null
   @Volatile var serviceRunning: Boolean = false

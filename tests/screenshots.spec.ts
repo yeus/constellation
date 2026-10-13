@@ -34,7 +34,7 @@ test('capture welcome, sharing choices, and two fictional followed locations', a
   await capture(page, 'welcome')
   await page.getByRole('button', { name: 'Got it' }).click()
   await openShareCreator(page)
-  await expect(page.getByRole('button', { name: 'Create private link' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Create location link' })).toBeVisible()
   await capture(page, 'share')
 
   await withTwoSources(

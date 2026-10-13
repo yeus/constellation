@@ -528,3 +528,61 @@ test('Android comparison forwards only explicit confirmation/cancellation and va
   })!
   await assert.rejects(invalid.status(), /Invalid background sharing status/)
 })
+
+test('Android awaits durable advertised-name adoption before refreshing presence', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return command === 'android_adopt_background_peer_name' ? {} : readyStatus
+    },
+  })
+  assert.ok(controller)
+  assert.deepEqual(await controller.adoptPeerName('synthetic-peer', 'Forest'), readyStatus)
+  assert.deepEqual(calls, [
+    {
+      command: 'android_adopt_background_peer_name',
+      args: { peerId: 'synthetic-peer', name: 'Forest' },
+    },
+    { command: 'android_background_share_status', args: undefined },
+  ])
+})
+
+test('Android clears old history with the shared active-peer protection and awaits persistence', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const protection = { peerIds: ['synthetic-active-peer'], shareIds: ['synthetic-active-share'] }
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return command === 'android_clear_old_peers' ? {} : readyStatus
+    },
+  })
+  assert.ok(controller)
+  assert.deepEqual(await controller.clearOldPeers(protection), readyStatus)
+  assert.deepEqual(calls, [
+    { command: 'android_clear_old_peers', args: { protection } },
+    { command: 'android_background_share_status', args: undefined },
+  ])
+})
+
+test('global Android behavior waits for native acknowledgement before reading status', async () => {
+  const calls: string[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 1,
+    invoke: async (command) => {
+      calls.push(command)
+      return command === 'android_background_share_status' ? readyStatus : {}
+    },
+  })!
+  await controller.setSharingBehavior({
+    publication: 'foreground',
+    battery: 'saver',
+    network: 'always',
+  })
+  assert.deepEqual(calls, ['android_set_sharing_behavior', 'android_background_share_status'])
+})

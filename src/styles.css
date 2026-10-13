@@ -233,11 +233,16 @@ button {
 
 .intro-note__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
 }
 
-.intro-note__actions button {
+.intro-note__actions :is(button, a) {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
   min-height: 2.2rem;
   padding: 0 0.6rem;
   border: 0;

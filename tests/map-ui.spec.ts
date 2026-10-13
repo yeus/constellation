@@ -576,7 +576,7 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
     async ({ viewer }) => {
       await saveLocationPreview(viewer)
       await openShareCreator(viewer)
-      await viewer.getByRole('button', { name: 'Create private link' }).click()
+      await viewer.getByRole('button', { name: 'Create location link' }).click()
       await expect(viewer.getByLabel('Share link')).toBeVisible({ timeout: 30_000 })
       await viewer.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
       const allPeers = await openPeerList(viewer)
@@ -601,6 +601,7 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       await areaPeers.getByRole('button', { name: 'Close' }).click()
       const restored = await openPeerList(viewer)
       await expect(restored.locator('details.peer-list__item')).toHaveCount(3)
+      await restored.locator('.peer-list__filter-menu > summary').click()
       await expect(restored.getByRole('button', { name: 'All', exact: true })).toHaveAttribute(
         'aria-pressed',
         'true',

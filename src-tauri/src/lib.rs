@@ -281,6 +281,67 @@ async fn android_dismiss_background_return_offer(
 }
 
 #[tauri::command]
+async fn android_sharing_setup(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().sharing_setup().await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    { let _ = app; Err("Android sharing is unavailable.".into()) }
+}
+
+#[tauri::command]
+async fn android_enable_sharing_permissions(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().enable_sharing_permissions().await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    { let _ = app; Err("Android sharing is unavailable.".into()) }
+}
+
+#[tauri::command]
+async fn android_set_sharing_behavior(app: tauri::AppHandle, behavior: serde_json::Value) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().set_sharing_behavior(behavior).await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    { let _ = (app, behavior); Err("Android sharing is unavailable.".into()) }
+}
+
+#[tauri::command]
+async fn android_clear_old_peers(
+    app: tauri::AppHandle,
+    protection: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .clear_old_peers(protection)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, protection);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_adopt_background_peer_name(
+    app: tauri::AppHandle,
+    peer_id: String,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .adopt_peer_name(&peer_id, &name)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, peer_id, name);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_set_background_peer_names(
     app: tauri::AppHandle,
     peer_id: String,
@@ -464,6 +525,11 @@ pub fn run() {
             android_dismiss_background_stopped_viewer,
             android_set_background_viewer_name,
             android_set_background_peer_names,
+            android_sharing_setup,
+            android_enable_sharing_permissions,
+            android_set_sharing_behavior,
+            android_clear_old_peers,
+            android_adopt_background_peer_name,
             android_block_background_viewer,
             android_take_shared_text,
             android_open_project_link,

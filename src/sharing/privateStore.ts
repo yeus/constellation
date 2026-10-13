@@ -1,3 +1,4 @@
+import { SharingBehavior } from './sharingBehavior.ts'
 import { MAX_END_NOTIFICATIONS } from './shareLifecycle.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
@@ -35,6 +36,7 @@ const ShareRecord = z.object({
 const FollowRecord = z.object({
   url: z.string().url().max(4_096),
   localName: z.string().max(32),
+  sourceName: z.string().max(32).optional(),
   usesPrivateName: z.boolean().optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
   followedAt: z.number().int().positive().optional(),
@@ -51,6 +53,7 @@ const ViewerLabelRecord = z.object({
 })
 
 const LifecycleRecord = z.object({
+  cleared: z.boolean().optional(),
   shareId: z.string().min(16).max(64),
   peerId: z.string().min(1).max(256).optional(),
   name: z.string().max(32).optional(),
@@ -59,6 +62,7 @@ const LifecycleRecord = z.object({
 })
 
 export const StoppedViewerRecord = z.object({
+  cleared: z.boolean().optional(),
   shareId: z.string().min(16).max(64),
   peerId: z.string().min(1).max(256),
   eventId: z.string().min(16).max(64),
@@ -100,6 +104,7 @@ const ReturnOfferRecord = z.object({
 })
 
 const PrivateStateSchema = z.object({
+  sharingBehavior: SharingBehavior.optional(),
   version: z.literal(1),
   deviceComparisons: z.array(DeviceComparison).max(256).optional(),
   comparisonBudgets: z.array(ComparisonBudget).max(256).optional(),

@@ -168,6 +168,33 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub async fn sharing_setup(&self) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("sharingSetup", json!({})).await.map_err(Into::into)
+    }
+    pub async fn enable_sharing_permissions(&self) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("enableSharingPermissions", json!({})).await.map_err(Into::into)
+    }
+    pub async fn set_sharing_behavior(&self, behavior: Value) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("setSharingBehavior", json!({ "behavior": behavior })).await.map_err(Into::into)
+    }
+
+    pub async fn clear_old_peers(&self, protection: Value) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async("clearOldPeers", json!({ "protection": protection }))
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn adopt_peer_name(&self, peer_id: &str, name: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async(
+                "adoptBackgroundPeerName",
+                json!({ "peerId": peer_id, "name": name }),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn set_peer_names(&self, peer_id: &str, associate_names: bool, shared_name: Option<&str>) -> crate::Result<Value> {
         self.0.run_mobile_plugin_async("setBackgroundPeerNames",
             json!({ "peerId": peer_id, "associateNames": associate_names, "sharedName": shared_name }))
