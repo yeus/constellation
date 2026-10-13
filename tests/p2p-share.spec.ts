@@ -400,6 +400,122 @@ test('single-recipient links wait for source approval before revealing a locatio
   }
 })
 
+test('share-back preserves its sender and options through cancellation and a failed creation retry', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(120_000)
+  if (!baseURL) throw new Error('The test requires a configured base URL.')
+  await withTwoSources(
+    browser,
+    baseURL,
+    { viewport: testInfo.project.use.viewport },
+    async ({ first, second, viewer }) => {
+      await saveLocationPreview(viewer)
+      const openReturnForm = async () => {
+        const list = await openPeerFilter(viewer, 'Viewing')
+        const peer = list.locator('.peer-list__item').filter({ hasText: 'River' })
+        await expandPeerDetails(peer)
+        await peer.getByRole('button', { name: 'Share back to River', exact: true }).click()
+        return viewer.getByRole('dialog', { name: 'Share your location' })
+      }
+      const form = await openReturnForm()
+      await expect(form).toContainText('Sharing back to River')
+      await form.getByRole('button', { name: 'Close', exact: true }).click()
+      const readShareCount = () =>
+        viewer.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          return (await createBrowserPrivateStore().load())?.shares.length ?? 0
+        })
+      expect(await readShareCount()).toBe(0)
+      await expect(first.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
+
+      await openReturnForm()
+      await form.getByLabel('Share a name', { exact: true }).fill('Synthetic Return')
+      await form.getByRole('button', { name: /Very coarse/ }).click()
+      await form.getByRole('button', { name: 'Until stopped', exact: true }).click()
+      await expect(form.getByRole('button', { name: 'Create location link' })).toBeDisabled()
+      await form.getByRole('button', { name: '8 hours', exact: true }).click()
+      await viewer.evaluate(() => {
+        const original = Reflect.get(IDBObjectStore.prototype, 'put')
+        IDBObjectStore.prototype.put = function (value, key) {
+          if (this.name === 'secrets' && key === 'state') {
+            IDBObjectStore.prototype.put = original
+            throw new Error('Synthetic share creation storage failure')
+          }
+          return original.call(this, value, key)
+        }
+      })
+      await form.getByRole('button', { name: 'Create location link' }).click()
+      await expect(viewer.locator('.toast')).toContainText(
+        'Synthetic share creation storage failure',
+      )
+      await expect(form).toContainText('Sharing back to River')
+      await expect(form.getByText('Viewers', { exact: true })).toHaveCount(0)
+      await expect(form.getByLabel('Share a name', { exact: true })).toHaveValue('Synthetic Return')
+      await expect(form.getByRole('button', { name: /Very coarse/ })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+      await expect(form.getByRole('button', { name: '8 hours', exact: true })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+      expect(await readShareCount()).toBe(0)
+      await expect(first.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
+
+      const confirmedAt = Date.now()
+      await form.getByRole('button', { name: 'Create location link' }).click()
+      await expect(form).toHaveCount(0)
+      await expect(first.getByRole('region', { name: 'Return location offered' })).toBeVisible({
+        timeout: 30_000,
+      })
+      await expect(second.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
+      await expect(viewer.getByRole('img', { name: 'Location share QR code' })).toHaveCount(0)
+      const result = await viewer.evaluate(async () => {
+        const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+        const { parseShareInvitation } = await import('../src/sharing/shareLink.ts')
+        const saved = (await createBrowserPrivateStore().load())!
+        const share = saved.shares[0]!
+        const original = saved.followed.find((follow) => follow.sourceName === 'River')!
+        return {
+          count: saved.shares.length,
+          name: share.name,
+          precision: share.precision,
+          capacity: share.capacity,
+          recipientMatches: share.approvedPeerId === parseShareInvitation(original.url).ownerPeerId,
+          publication: share.publication,
+          globalPublication: saved.sharingBehavior?.publication,
+          expiresAt: parseShareInvitation(share.url).expiresAt,
+        }
+      })
+      expect(result).toMatchObject({
+        count: 1,
+        name: 'Synthetic Return',
+        precision: 'very-coarse',
+        capacity: 1,
+        recipientMatches: true,
+        publication: 'foreground',
+        globalPublication: 'foreground',
+      })
+      expect(result.expiresAt).toBeGreaterThanOrEqual(confirmedAt + 8 * 60 * 60 * 1_000)
+      expect(result.expiresAt).toBeLessThan(Date.now() + 8 * 60 * 60 * 1_000)
+      await openReturnForm()
+      const originalPeers = await openPeerFilter(first, 'Sharing')
+      const originalPeer = originalPeers.locator('.peer-list__item').first()
+      await expandPeerDetails(originalPeer)
+      await originalPeer.getByRole('button', { name: 'Revoke link', exact: true }).click()
+      await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1', { timeout: 30_000 })
+      await form.getByRole('button', { name: 'Create location link' }).click()
+      await expect(viewer.locator('.toast')).toContainText('no longer available for sharing back')
+      await expect(form).toContainText('Only this sender receives the private offer')
+      expect(await readShareCount()).toBe(1)
+      await form.getByRole('button', { name: 'Close', exact: true }).click()
+    },
+    { afterFirstFollow: saveLocationPreview },
+  )
+})
+
 test('return consent applies to every viewer of the same original link', async ({
   browser,
   baseURL,

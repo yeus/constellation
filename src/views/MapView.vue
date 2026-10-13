@@ -1575,10 +1575,17 @@ const createShare = async (): Promise<void> => {
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.share.create.started' })
   try {
+    if (
+      shareBackTarget &&
+      (!returnFollow ||
+        ['approval-pending', 'denied', 'revoked', 'expired'].includes(returnFollow.status))
+    ) {
+      throw new Error('This location is no longer available for sharing back.')
+    }
+    if (shareBackTarget && !returnFollow?.peerId) {
+      throw new Error('The original sender has no verified device identity.')
+    }
     if (useBackground && backgroundSharing) {
-      if (shareBackTarget && !returnFollow?.peerId) {
-        throw new Error('The original sender has no verified device identity.')
-      }
       await refreshBackgroundStatus()
       let deadline = Date.now() + 30_000
       while (backgroundStatus.value?.state === 'starting' && Date.now() < deadline) {
@@ -1659,17 +1666,14 @@ const createShare = async (): Promise<void> => {
       }
     }
     shareSheetOpen.value = false
+    if (returnTarget.value === shareBackTarget) returnTarget.value = undefined
     shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
     collapseActions()
     sessionLog.record({ level: 'info', event: 'sharing.share.create.succeeded' })
   } catch (error) {
     sessionLog.record({ level: 'error', event: 'sharing.share.create.failed' })
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'
-    if (shareBackTarget && returnFollow) {
-      shareBackPrompt.value = { shareId: shareBackTarget, name: returnFollow.localName }
-    }
   } finally {
-    if (returnTarget.value === shareBackTarget) returnTarget.value = undefined
     creatingShare.value = false
     if (backgroundSharing) updateLocationOwnership()
   }
