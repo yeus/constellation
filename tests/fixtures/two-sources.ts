@@ -4,7 +4,7 @@ import { openPeerList, openShareCreator } from './peer-navigation.ts'
 
 const createNamedShare = async (page: Page, name: string): Promise<string> => {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: 'Center on my location' })).toBeVisible()
+  await expect(page.locator('button.recenter-button')).toBeVisible()
   await openShareCreator(page)
   await page.getByRole('textbox', { name: 'Share a name' }).fill(name)
   await page.getByRole('button', { name: 'Create location link' }).click()

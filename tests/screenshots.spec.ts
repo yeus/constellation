@@ -51,7 +51,7 @@ test('capture welcome, sharing choices, and two fictional followed locations', a
       const following = await openPeerFilter(viewer, 'Viewing')
       const peers = following.locator('details.peer-list__item')
       await expect(peers).toHaveCount(2)
-      for (const peer of await peers.all()) await peer.locator('summary').click()
+      for (const peer of await peers.all()) await peer.locator('.peer-list__summary').click()
       await expect(following.getByText(/Last location: not received/)).toHaveCount(0, {
         timeout: 30_000,
       })
@@ -60,7 +60,7 @@ test('capture welcome, sharing choices, and two fictional followed locations', a
           following.locator('.peer-list__summary-name').filter({ hasText: name }),
         ).toBeVisible()
       }
-      await peers.nth(0).locator('summary').click()
+      await peers.nth(0).locator('.peer-list__summary').click()
       await capture(viewer, 'following')
     },
   )

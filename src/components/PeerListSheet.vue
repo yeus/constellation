@@ -6,12 +6,14 @@
       role="dialog"
       aria-modal="true"
       :aria-label="dialogName"
+      @scroll.passive="positionFilterOptions"
     >
       <header class="sheet-header peer-list__header">
         <h2>Peers</h2>
         <details
           ref="filterMenu"
           class="peer-list__filter-menu"
+          @toggle="positionFilterOptions"
           @keydown.esc.prevent="closeFilterMenu"
         >
           <summary role="button" aria-label="Filter peers" :title="`Filter: ${filter}`">
@@ -19,7 +21,7 @@
               filters.find((option) => option.value === filter)?.label
             }}</span>
           </summary>
-          <div class="peer-list__filter-options">
+          <div ref="filterOptions" class="peer-list__filter-options" :style="filterOptionsStyle">
             <strong>Show peers</strong>
             <button
               v-for="option in filters"
@@ -458,7 +460,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   LucideMapPin as MapPin,
   LucidePencilLine as PencilLine,
@@ -552,6 +554,54 @@ const dialogName = computed(() =>
   props.filter === 'sharing' ? 'Active shares' : props.filter === 'viewing' ? 'Following' : 'Peers',
 )
 const filterMenu = ref<HTMLDetailsElement>()
+const filterOptions = ref<HTMLElement>()
+const filterOptionsStyle = ref<Record<string, string>>({})
+const positionFilterOptions = (): void => {
+  const menu = filterMenu.value
+  const summary = menu?.querySelector('summary')
+  const options = filterOptions.value
+  if (!menu?.open || !summary || !options) return
+  const button = summary.getBoundingClientRect()
+  const margin = 8
+  const width =
+    options.getBoundingClientRect().width || Math.min(240, window.innerWidth - margin * 2)
+  const height = options.scrollHeight
+  const left = Math.min(
+    Math.max(margin, button.right - width),
+    Math.max(margin, window.innerWidth - width - margin),
+  )
+  const spaceBelow = window.innerHeight - button.bottom - margin
+  const spaceAbove = button.top - margin
+  const openAbove = spaceBelow < height && spaceAbove > spaceBelow
+  filterOptionsStyle.value = openAbove
+    ? {
+        left: `${left}px`,
+        top: 'auto',
+        bottom: `${window.innerHeight - button.top + margin}px`,
+        maxHeight: `${Math.max(0, spaceAbove)}px`,
+      }
+    : {
+        left: `${left}px`,
+        top: `${button.bottom + margin}px`,
+        bottom: 'auto',
+        maxHeight: `${Math.max(0, spaceBelow)}px`,
+      }
+}
+let filterAnchorObserver: ResizeObserver | undefined
+const observeFilterAnchor = (): void => {
+  const dialog = filterMenu.value?.closest('.peer-list')
+  if (!dialog || filterAnchorObserver || typeof ResizeObserver === 'undefined') return
+  filterAnchorObserver = new ResizeObserver(positionFilterOptions)
+  filterAnchorObserver.observe(dialog)
+}
+onMounted(() => {
+  window.addEventListener('resize', positionFilterOptions)
+  observeFilterAnchor()
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', positionFilterOptions)
+  filterAnchorObserver?.disconnect()
+})
 const closeFilterMenu = (): void => {
   if (!filterMenu.value) return
   filterMenu.value.open = false
@@ -936,13 +986,13 @@ const remaining = (timestamp: number): string => {
   display: none;
 }
 .peer-list__filter-options {
-  position: absolute;
-  top: 2.8rem;
-  right: 0;
-  z-index: 2;
+  position: fixed;
+  z-index: 20;
   display: grid;
   gap: 0.4rem;
   width: min(15rem, 70vw);
+  max-height: calc(100dvh - 1rem);
+  overflow-y: auto;
   padding: 0.75rem;
   border: 1px solid var(--border);
   border-radius: 0.75rem;

@@ -550,6 +550,49 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   await page.screenshot({ path: test.info().outputPath('peer-list-layout.png') })
 })
 
+test('filter menu floats above an empty peer list instead of being clipped', async ({ page }) => {
+  await page.goto('/')
+  const list = await openPeerList(page)
+  await expect(list.getByText('No peers in this list yet.')).toBeVisible()
+  await list.getByRole('button', { name: 'Filter peers', exact: true }).click()
+  const options = list.locator('.peer-list__filter-options')
+  await expect(options).toBeVisible()
+  const filterButton = list.getByRole('button', { name: 'Filter peers', exact: true })
+  await expect
+    .poll(async () => {
+      const optionsBox = await options.boundingBox()
+      const buttonBox = await filterButton.boundingBox()
+      if (!optionsBox || !buttonBox) return false
+      const anchoredBelow = Math.abs(optionsBox.y - (buttonBox.y + buttonBox.height + 8)) <= 2
+      const anchoredAbove = Math.abs(optionsBox.y + optionsBox.height - (buttonBox.y - 8)) <= 2
+      return anchoredBelow || anchoredAbove
+    })
+    .toBe(true)
+  const dialogBox = await list.boundingBox()
+  const optionsBox = await options.boundingBox()
+  const clearOld = options.getByRole('button', { name: 'Clear old', exact: true })
+  const clearOldBox = await clearOld.boundingBox()
+  expect(dialogBox).not.toBeNull()
+  expect(optionsBox).not.toBeNull()
+  expect(clearOldBox).not.toBeNull()
+  expect(
+    optionsBox!.y < dialogBox!.y ||
+      optionsBox!.y + optionsBox!.height > dialogBox!.y + dialogBox!.height,
+  ).toBe(true)
+  const point = {
+    x: clearOldBox!.x + clearOldBox!.width / 2,
+    y: clearOldBox!.y + clearOldBox!.height / 2,
+  }
+  expect(point.y).toBeGreaterThan(0)
+  expect(point.y).toBeLessThan(page.viewportSize()!.height)
+  const insideMenu = await page.evaluate(({ x, y }): boolean => {
+    const hit = document.elementFromPoint(x, y)
+    return hit !== null && hit.closest('.peer-list__filter-options') !== null
+  }, point)
+  expect(insideMenu).toBe(true)
+  await page.screenshot({ path: test.info().outputPath('peer-list-filter-menu.png') })
+})
+
 test('Android setup requires permissions or an explicit foreground choice', async ({ page }) => {
   await page.goto('/')
   await page.evaluate(async () => {
