@@ -68,14 +68,14 @@
     "@tauri-apps/plugin-deep-link": "2.4.10",
     "@tauri-apps/plugin-geolocation": "2.3.3",
     "fflate": "0.8.3",
-    "jsqr": "^1.4.0",
     "maplibre-gl": "6.4.1",
     "multiformats": "14.0.5",
     "pmtiles": "4.4.1",
     "qrcode": "1.5.4",
     "vue": "3.5.22",
     "vue-router": "4.0.12",
-    "zod": "4.1.8"
+    "zod": "4.1.8",
+    "zxing-wasm": "3.1.5"
   },
   "devDependencies": {
     "@eslint/js": "9.17.0",

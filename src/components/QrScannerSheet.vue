@@ -24,10 +24,25 @@
 </template>
 
 <script setup lang="ts">
-import jsQR from 'jsqr'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader'
+import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
 
 import CloseIcon from './icons/CloseIcon.vue'
+
+interface NativeBarcodeDetector {
+  detect(source: CanvasImageSource): Promise<readonly { rawValue: string }[]>
+}
+
+interface NativeBarcodeDetectorConstructor {
+  new (options: { formats: readonly string[] }): NativeBarcodeDetector
+  getSupportedFormats?: () => Promise<readonly string[]>
+}
+
+const NATIVE_SCAN_INTERVAL_MS = 100
+const FALLBACK_SCAN_INTERVAL_MS = 180
+const FALLBACK_SCAN_WIDTH = 1280
+const MAX_NATIVE_FAILURES = 3
 
 const emit = defineEmits<{ close: []; scan: [url: string] }>()
 const video = ref<HTMLVideoElement>()
@@ -35,8 +50,103 @@ const error = ref('')
 let stream: MediaStream | undefined
 let frame = 0
 let scanning = true
+let reading = false
 let lastScanAt = 0
 let canvas: HTMLCanvasElement | undefined
+let nativeDetector: NativeBarcodeDetector | undefined
+let nativeFailures = 0
+let wasmReady: Promise<unknown> | undefined
+
+const nativeBarcodeDetector = (): NativeBarcodeDetectorConstructor | undefined =>
+  (globalThis as typeof globalThis & { BarcodeDetector?: NativeBarcodeDetectorConstructor })
+    .BarcodeDetector
+
+const createNativeDetector = async (): Promise<NativeBarcodeDetector | undefined> => {
+  const Detector = nativeBarcodeDetector()
+  if (!Detector) return undefined
+  try {
+    const formats =
+      typeof Detector.getSupportedFormats === 'function'
+        ? await Detector.getSupportedFormats()
+        : undefined
+    if (formats && !formats.includes('qr_code')) return undefined
+    return new Detector({ formats: ['qr_code'] })
+  } catch {
+    return undefined
+  }
+}
+
+const ensureZXing = (): Promise<unknown> => {
+  wasmReady ??= prepareZXingModule({
+    overrides: { locateFile: () => zxingReaderWasmUrl },
+    fireImmediately: true,
+  })
+  return wasmReady
+}
+
+const finish = (url: string): void => {
+  if (!url || !scanning) return
+  scanning = false
+  emit('scan', url)
+  emit('close')
+}
+
+const scanNative = (element: HTMLVideoElement, now: number): void => {
+  if (!nativeDetector || reading || now - lastScanAt < NATIVE_SCAN_INTERVAL_MS) return
+  lastScanAt = now
+  reading = true
+  nativeDetector
+    .detect(element)
+    .then((results) => {
+      const result = results.find((candidate) => candidate.rawValue)
+      if (result) finish(result.rawValue)
+      nativeFailures = 0
+    })
+    .catch(() => {
+      nativeFailures += 1
+      if (nativeFailures >= MAX_NATIVE_FAILURES) nativeDetector = undefined
+    })
+    .finally(() => {
+      reading = false
+    })
+}
+
+const scanFallback = (element: HTMLVideoElement, now: number): void => {
+  if (reading || now - lastScanAt < FALLBACK_SCAN_INTERVAL_MS) return
+  const scale = Math.min(1, FALLBACK_SCAN_WIDTH / element.videoWidth)
+  const width = Math.round(element.videoWidth * scale)
+  const height = Math.round(element.videoHeight * scale)
+  canvas ??= document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return
+  lastScanAt = now
+  reading = true
+  context.drawImage(element, 0, 0, width, height)
+  const imageData = context.getImageData(0, 0, width, height)
+  void ensureZXing()
+    .then(() =>
+      readBarcodes(imageData, {
+        formats: ['QRCode'],
+        maxNumberOfSymbols: 1,
+        tryHarder: true,
+        tryRotate: true,
+        tryInvert: true,
+        tryDownscale: true,
+      }),
+    )
+    .then((results) => {
+      const result = results.find((candidate) => candidate.text)
+      if (result) finish(result.text)
+    })
+    .catch(() => {
+      // A failed frame is retried on the next tick.
+    })
+    .finally(() => {
+      reading = false
+    })
+}
 
 const scanFrame = (now: number): void => {
   if (!scanning) return
@@ -46,29 +156,12 @@ const scanFrame = (now: number): void => {
     !element ||
     element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
     element.videoWidth === 0 ||
-    element.videoHeight === 0 ||
-    now - lastScanAt < 180
+    element.videoHeight === 0
   ) {
     return
   }
-  lastScanAt = now
-  const scale = Math.min(1, 1280 / element.videoWidth)
-  const width = Math.round(element.videoWidth * scale)
-  const height = Math.round(element.videoHeight * scale)
-  canvas ??= document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const context = canvas.getContext('2d', { willReadFrequently: true })
-  if (!context) return
-  context.drawImage(element, 0, 0, width, height)
-  const result = jsQR(context.getImageData(0, 0, width, height).data, width, height, {
-    inversionAttempts: 'attemptBoth',
-  })
-  if (result?.data) {
-    scanning = false
-    emit('scan', result.data)
-    emit('close')
-  }
+  if (nativeDetector) scanNative(element, now)
+  else scanFallback(element, now)
 }
 
 onMounted(async () => {
@@ -86,6 +179,8 @@ onMounted(async () => {
       return
     }
     video.value.srcObject = stream
+    nativeDetector = await createNativeDetector()
+    if (!nativeDetector) void ensureZXing()
     frame = requestAnimationFrame(scanFrame)
   } catch {
     error.value = 'Camera access is unavailable. Paste the share link instead.'

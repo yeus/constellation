@@ -2270,6 +2270,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/emscripten@npm:^1.41.6":
+  version: 1.41.6
+  resolution: "@types/emscripten@npm:1.41.6"
+  checksum: 10c0/b51a730b6cb2848ac5e3f0536707bf656b6887be21f20e96b01e74a59ed52319dd0942f49b1072b1ca6d38df19e2d633f540df54d6ba1f7216be14af7373a41f
+  languageName: node
+  linkType: hard
+
 "@types/esrecurse@npm:^4.3.1":
   version: 4.3.1
   resolution: "@types/esrecurse@npm:4.3.1"
@@ -3031,7 +3038,6 @@ __metadata:
     eslint-plugin-vue: "npm:10.4.0"
     fflate: "npm:0.8.3"
     globals: "npm:16.4.0"
-    jsqr: "npm:^1.4.0"
     maplibre-gl: "npm:6.4.1"
     multiformats: "npm:14.0.5"
     pmtiles: "npm:4.4.1"
@@ -3044,6 +3050,7 @@ __metadata:
     vue-router: "npm:4.0.12"
     vue-tsc: "npm:3.0.7"
     zod: "npm:4.1.8"
+    zxing-wasm: "npm:3.1.5"
   languageName: unknown
   linkType: soft
 
@@ -4329,13 +4336,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jsqr@npm:^1.4.0":
-  version: 1.4.0
-  resolution: "jsqr@npm:1.4.0"
-  checksum: 10c0/69fbfe4c866a04c97b377901a166544a583bfc76b838c275efa9af058d64e5612267079b1e96ea7b6434385803571b1c6a97a43c85f4373e8afa4f4034fc916c
-  languageName: node
-  linkType: hard
-
 "kdbush@npm:^4.1.0":
   version: 4.1.0
   resolution: "kdbush@npm:4.1.0"
@@ -5570,6 +5570,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"tagged-tag@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "tagged-tag@npm:1.0.0"
+  checksum: 10c0/91d25c9ffb86a91f20522cefb2cbec9b64caa1febe27ad0df52f08993ff60888022d771e868e6416cf2e72dab68449d2139e8709ba009b74c6c7ecd4000048d1
+  languageName: node
+  linkType: hard
+
 "tar@npm:^7.5.4":
   version: 7.5.22
   resolution: "tar@npm:7.5.22"
@@ -5762,6 +5769,15 @@ __metadata:
   dependencies:
     prelude-ls: "npm:^1.2.1"
   checksum: 10c0/7b3fd0ed43891e2080bf0c5c504b418fbb3e5c7b9708d3d015037ba2e6323a28152ec163bcb65212741fa5d2022e3075ac3c76440dbd344c9035f818e8ecee58
+  languageName: node
+  linkType: hard
+
+"type-fest@npm:^5.10.0":
+  version: 5.10.0
+  resolution: "type-fest@npm:5.10.0"
+  dependencies:
+    tagged-tag: "npm:^1.0.0"
+  checksum: 10c0/313c5d0e37a3f1cc82e942f3228f897623c8b54a63a8a95532d0c2c21ab200793caa70bd8904a83fd713eb28d87ba32468b09b345ef6efa25cecb345b467226f
   languageName: node
   linkType: hard
 
@@ -6240,5 +6256,17 @@ __metadata:
   version: 4.1.8
   resolution: "zod@npm:4.1.8"
   checksum: 10c0/5eae39da09d7bd0564a30dfd2348811e4e2e7dd15955d8f3444f8e196f35e5422b1482eda234b722fafb0738f4a8b718adb042b860936bfdd2cc19cdbdac8a9a
+  languageName: node
+  linkType: hard
+
+"zxing-wasm@npm:3.1.5":
+  version: 3.1.5
+  resolution: "zxing-wasm@npm:3.1.5"
+  dependencies:
+    "@types/emscripten": "npm:^1.41.6"
+    type-fest: "npm:^5.10.0"
+  peerDependencies:
+    "@types/emscripten": ">=1.39.6"
+  checksum: 10c0/860426ec50a3384a17287132d8e70858814fd87cf886d930709e8fc2108b311f69126168d7a142575ffaabc156945ac50161365a19bb06bbbc95ff4359a11791
   languageName: node
   linkType: hard

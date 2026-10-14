@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
 import QRCode from 'qrcode'
-import jsQR from 'jsqr'
+import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader'
 
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
 import {
@@ -12,6 +13,20 @@ import {
   saveLocationPreview,
 } from './fixtures/peer-navigation.ts'
 import { withTwoSources } from './fixtures/two-sources.ts'
+
+const decodeQrPixels = async (pixels: number[], width: number, height: number) => {
+  const wasm = readFileSync('node_modules/zxing-wasm/dist/reader/zxing_reader.wasm')
+  prepareZXingModule({
+    overrides: {
+      wasmBinary: wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength),
+    },
+  })
+  const results = await readBarcodes(
+    { data: new Uint8ClampedArray(pixels), width, height } as unknown as ImageData,
+    { formats: ['QRCode'], maxNumberOfSymbols: 1 },
+  )
+  return results[0]?.text
+}
 
 test('synchronizes opted-in names independently and keeps reciprocal nicknames private', async ({
   page,
@@ -696,9 +711,9 @@ test('scans a QR share through the normal browser preview flow', async ({
       }
     })
     expect(displayedQr.width).toBeGreaterThanOrEqual(500)
-    expect(
-      jsQR(new Uint8ClampedArray(displayedQr.pixels), displayedQr.width, displayedQr.height)?.data,
-    ).toBe(url)
+    expect(await decodeQrPixels(displayedQr.pixels, displayedQr.width, displayedQr.height)).toBe(
+      url,
+    )
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
     const modules = Array.from(QRCode.create(url).modules.data)
     await viewerContext.addInitScript((qrModules) => {
@@ -778,6 +793,101 @@ test('scans a QR share through the normal browser preview flow', async ({
       ),
     ).toEqual([1280, 720])
     expect(await viewer.evaluate(() => location.hash)).toBe('')
+  } finally {
+    await viewerContext.close()
+    await sourceContext.close()
+  }
+})
+
+test('prefers the native barcode detector before the JS fallback', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(90_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  const viewerContext = await browser.newContext({ baseURL })
+  try {
+    const source = await sourceContext.newPage()
+    const viewer = await viewerContext.newPage()
+    await source.goto('/')
+    await openShareCreator(source)
+    await source.getByRole('button', { name: 'Create location link' }).click()
+    const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+    await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+    await viewerContext.addInitScript((shareUrl) => {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia: async () => new MediaStream() },
+      })
+      Object.defineProperty(HTMLMediaElement.prototype, 'readyState', {
+        configurable: true,
+        get: () => HTMLMediaElement.HAVE_CURRENT_DATA,
+      })
+      Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', {
+        configurable: true,
+        get: () => 1920,
+      })
+      Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', {
+        configurable: true,
+        get: () => 1080,
+      })
+      const state = {
+        detections: 0,
+        sourceTag: '',
+        formats: [] as string[],
+        supportedFormats: [] as string[],
+      }
+      ;(window as typeof window & { nativeScannerState: typeof state }).nativeScannerState = state
+      class SyntheticBarcodeDetector {
+        constructor(options: { formats?: string[] }) {
+          state.formats = options.formats ?? []
+        }
+        static async getSupportedFormats() {
+          state.supportedFormats = ['qr_code']
+          return ['qr_code'] as const
+        }
+        async detect(source: HTMLVideoElement) {
+          state.detections += 1
+          state.sourceTag = source.tagName
+          return [{ rawValue: shareUrl, format: 'qr_code' }]
+        }
+      }
+      Object.defineProperty(window, 'BarcodeDetector', {
+        configurable: true,
+        value: SyntheticBarcodeDetector,
+      })
+    }, url)
+
+    await viewer.goto('/')
+    const peerList = await openPeerList(viewer)
+    await peerList.getByRole('button', { name: 'Add peer' }).click()
+    await viewer.getByRole('button', { name: 'Scan QR code' }).click()
+    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+      timeout: 30_000,
+    })
+    const nativeState = await viewer.evaluate(
+      () =>
+        (
+          window as typeof window & {
+            nativeScannerState: {
+              detections: number
+              sourceTag: string
+              formats: string[]
+              supportedFormats: string[]
+            }
+          }
+        ).nativeScannerState,
+    )
+    expect(nativeState.supportedFormats).toEqual(['qr_code'])
+    expect(nativeState.formats).toEqual(['qr_code'])
+    expect(nativeState.sourceTag).toBe('VIDEO')
+    expect(nativeState.detections).toBeGreaterThan(0)
   } finally {
     await viewerContext.close()
     await sourceContext.close()
