@@ -94,6 +94,7 @@ test('starts deterministic software-rendered emulators', () => {
     'swiftshader_indirect',
     '-no-audio',
     '-no-metrics',
+    '-no-snapshot-load',
     '-no-snapshot-save',
     '-no-window',
   ])

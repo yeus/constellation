@@ -29,6 +29,7 @@ import app.tauri.plugin.Channel
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import org.json.JSONArray
 import org.json.JSONObject
 
 @InvokeArg
@@ -59,13 +60,26 @@ class ReturnApprovalArgs {
 }
 
 @InvokeArg
+class SharingBehaviorPayload {
+  var publication: String = ""
+  var battery: String = ""
+  var network: String = ""
+}
+
+@InvokeArg
 class SharingBehaviorArgs {
-  lateinit var behavior: JSObject
+  lateinit var behavior: SharingBehaviorPayload
+}
+
+@InvokeArg
+class PeerHistoryProtection {
+  var peerIds: List<String> = emptyList()
+  var shareIds: List<String> = emptyList()
 }
 
 @InvokeArg
 class ClearOldPeersArgs {
-  lateinit var protection: JSObject
+  lateinit var protection: PeerHistoryProtection
 }
 
 @InvokeArg
@@ -213,16 +227,22 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun setSharingBehavior(invoke: Invoke) {
     try {
       val behavior = invoke.parseArgs(SharingBehaviorArgs::class.java).behavior
-      check(behavior.optString("publication") in setOf("foreground", "background")) { "Invalid publication." }
-      check(behavior.optString("battery") in setOf("balanced", "saver")) { "Invalid battery policy." }
-      check(behavior.optString("network") in setOf("always", "pause-when-metered")) { "Invalid network policy." }
-      if (behavior.optString("publication") == "background") {
+      check(behavior.publication in setOf("foreground", "background")) { "Invalid publication." }
+      check(behavior.battery in setOf("balanced", "saver")) { "Invalid battery policy." }
+      check(behavior.network in setOf("always", "pause-when-metered")) { "Invalid network policy." }
+      if (behavior.publication == "background") {
         val permissions = sharingSetupResult().getJSONObject("permissions")
         check(listOf("location", "background", "notifications", "servicesEnabled").all { permissions.getBoolean(it) }) {
           "Enable location, background location and notifications before background sharing."
         }
       }
-      val request = JSONObject().put("behavior", behavior)
+      val request = JSONObject().put(
+        "behavior",
+        JSONObject()
+          .put("publication", behavior.publication)
+          .put("battery", behavior.battery)
+          .put("network", behavior.network),
+      )
       runReturnCommand(invoke, ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR, "", request = request.toString())
     } catch (_: Exception) { invoke.reject("Sharing settings could not be saved. Check permissions and retry.") }
   }
@@ -710,17 +730,22 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   @Command
   fun clearOldPeers(invoke: Invoke) {
     try {
-      val args = invoke.parseArgs(ClearOldPeersArgs::class.java)
-      for (key in listOf("peerIds", "shareIds")) {
-        val ids = args.protection.getJSONArray(key)
-        check(ids.length() <= 1024) { "Too many protected identities." }
-        for (index in 0 until ids.length()) {
-          val id = ids.getString(index)
-          check(if (key == "peerIds") id.length in 1..256
-            else id.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid protected identity." }
-        }
+      val protection = invoke.parseArgs(ClearOldPeersArgs::class.java).protection
+      check(protection.peerIds.size <= 1024 && protection.shareIds.size <= 1024) {
+        "Too many protected identities."
       }
-      val request = JSONObject().put("protection", args.protection)
+      for (id in protection.peerIds) {
+        check(id.length in 1..256) { "Invalid protected identity." }
+      }
+      for (id in protection.shareIds) {
+        check(id.matches(Regex("[A-Za-z0-9_-]{16,64}"))) { "Invalid protected identity." }
+      }
+      val request = JSONObject().put(
+        "protection",
+        JSONObject()
+          .put("peerIds", JSONArray(protection.peerIds))
+          .put("shareIds", JSONArray(protection.shareIds)),
+      )
       runReturnCommand(invoke, ShareServiceContract.ACTION_CLEAR_OLD_PEERS, "", request = request.toString())
     } catch (_: Exception) {
       invoke.reject("Could not clear old peers.")

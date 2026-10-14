@@ -141,19 +141,32 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
   try {
     run(adbPath, ['start-server'], { env: adbEnvironment })
     run(adbPath, ['-s', device.serial, 'install', '-r', selectedApk], { env: adbEnvironment })
-    run(process.execPath, ['scripts/test-android.mjs', ...testArgs], {
-      env: {
-        ...adbEnvironment,
-        ANDROID_SERIAL: device.serial,
-        ...(testArgs.some((argument) =>
-          ['--local-share-flow', '--direct-transport-smoke', '--stop-notice-smoke'].includes(
-            argument,
-          ),
-        )
-          ? { VITE_CONSTELLATION_RELAY_ADDRS: localRelayAddress }
-          : {}),
-      },
-    })
+    try {
+      run(process.execPath, ['scripts/test-android.mjs', ...testArgs], {
+        env: {
+          ...adbEnvironment,
+          ANDROID_SERIAL: device.serial,
+          ...(testArgs.some((argument) =>
+            ['--local-share-flow', '--direct-transport-smoke', '--stop-notice-smoke'].includes(
+              argument,
+            ),
+          )
+            ? { VITE_CONSTELLATION_RELAY_ADDRS: localRelayAddress }
+            : {}),
+        },
+      })
+    } catch (error) {
+      const outcomes = adb(['-s', device.serial, 'logcat', '-d', '-s', 'ConstellationRuntime:E'], {
+        env: adbEnvironment,
+      })
+        .split(/\r?\n/)
+        .flatMap((line) => line.match(/private-state-(?:load|save)-failed:[A-Za-z]+/g) ?? [])
+      if (!outcomes.length) throw error
+      throw new Error(
+        `${error instanceof Error ? error.message : 'Android smoke failed.'} Safe protected-state diagnostics: ${[...new Set(outcomes)].join(', ')}.`,
+        { cause: error },
+      )
+    }
   } finally {
     await stopEmulator(device.child, device.serial)
   }

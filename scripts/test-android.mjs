@@ -27,6 +27,13 @@ const backgroundRuntimeCreations = (serial) =>
   adbFor(serial, ['logcat', '-d', '-s', 'ConstellationRuntime:I', '*:S'])
     .split('\n')
     .filter((line) => line.includes('background-runtime-created')).length
+const backgroundRuntimeLogs = (serial) =>
+  adbFor(serial, ['logcat', '-d', '-s', 'ConstellationRuntime:V', '*:S'])
+    .split('\n')
+    .filter((line) =>
+      /background-runtime-created|runtime-error|private-state-(?:load|save)-failed/.test(line),
+    )
+    .slice(-20)
 const grantIfSupported = (permission) => {
   try {
     adb(['shell', 'pm', 'grant', packageName, permission])
@@ -48,6 +55,20 @@ const waitFor = async (check, label, timeout = 60_000) => {
   throw new Error(`Timed out waiting for ${label}.`)
 }
 
+const stopChild = async (child) => {
+  if (!child) return
+  try {
+    if (process.platform === 'win32') child.kill('SIGTERM')
+    else process.kill(-child.pid, 'SIGTERM')
+  } catch {
+    child.kill('SIGTERM')
+  }
+  await new Promise((resolve) => {
+    if (child.exitCode !== null) resolve()
+    else child.once('exit', resolve)
+  })
+}
+
 const startWebServer = async (mode = 'dev') => {
   const command =
     mode === 'preview'
@@ -57,15 +78,26 @@ const startWebServer = async (mode = 'dev') => {
     cwd: process.cwd(),
     env: process.env,
     stdio: 'ignore',
+    detached: process.platform !== 'win32',
   })
-  await waitFor(async () => {
-    try {
-      return (await fetch('http://127.0.0.1:4173/')).ok
-    } catch {
-      return false
-    }
-  }, 'the local Constellation server')
-  return child
+  try {
+    await waitFor(
+      async () => {
+        if (child.exitCode !== null) throw new Error('The local Constellation server exited.')
+        try {
+          return (await fetch('http://127.0.0.1:4173/')).ok
+        } catch {
+          return false
+        }
+      },
+      'the local Constellation server',
+      180_000,
+    )
+    return child
+  } catch (error) {
+    await stopChild(child)
+    throw error
+  }
 }
 
 const startLocalRelay = async () => {
@@ -369,6 +401,7 @@ const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, se
     },
     reload: () => command('Page.reload', { ignoreCache: true }),
     close: () => socket.close(),
+    serial,
   }
 }
 
@@ -478,10 +511,12 @@ const restartAndroidApp = async (cdp, expectedText = 'Sharing 1') => {
 const tapAndroidButton = async (cdp, label, attempts = 16) => {
   let previous
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const center = await cdp.evaluate(`(() => {
+    const center = await cdp.evaluate(`(async () => {
       const button = [...document.querySelectorAll('button')]
         .find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(label)});
       if (!button) return null;
+      button.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const rect = button.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
@@ -502,6 +537,31 @@ const tapAndroidButton = async (cdp, label, attempts = 16) => {
     await wait(200)
   }
   return false
+}
+
+const dismissAndroidSettingsSheet = async (cdp) => {
+  await waitFor(
+    async () => {
+      if (await cdp.evaluate(`Boolean(document.querySelector('.settings-sheet'))`)) return true
+      const behavior = await cdp.evaluate(
+        `window.__TAURI_INTERNALS__?.invoke('android_sharing_setup').then((setup) => setup?.behavior ?? null)`,
+      )
+      return Boolean(behavior)
+    },
+    'Android first-run sharing settings decision',
+    10_000,
+  )
+  if (!(await cdp.evaluate(`Boolean(document.querySelector('.settings-sheet'))`))) return
+  assert.equal(await clickAriaButton(cdp, 'Close settings'), true)
+  await waitFor(
+    () => cdp.evaluate(`!document.querySelector('.settings-sheet')`),
+    'closed Android sharing settings',
+  )
+}
+
+const openAndroidMenu = async (cdp) => {
+  if (await cdp.evaluate(`Boolean(document.querySelector('.app-menu'))`)) return true
+  return clickAriaButton(cdp, 'Open menu')
 }
 
 const clickAriaButton = (cdp, label) =>
@@ -556,7 +616,56 @@ const readAndroidShareLink = async (cdp) => {
   return url
 }
 
+const readAndroidSettingsDiagnostic = async (cdp) => {
+  const ui = await cdp.evaluate(`(async () => {
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    const [setup, status] = invoke ? await Promise.all([
+      invoke('android_sharing_setup').catch((error) => ({ error: String(error) })),
+      invoke('android_background_share_status').catch((error) => ({ error: String(error) })),
+    ]) : [];
+    const sheet = document.querySelector('.settings-sheet');
+    const background = [...(sheet?.querySelectorAll('button') ?? [])].find((button) =>
+      button.textContent?.includes('In background'));
+    const save = [...(sheet?.querySelectorAll('button') ?? [])].find((button) =>
+      button.textContent?.includes('Save settings'));
+    return {
+      settingsOpen: Boolean(sheet),
+      backgroundDisabled: background?.disabled,
+      backgroundSelected: background?.getAttribute('aria-pressed'),
+      saveDisabled: save?.disabled,
+      settingsError: sheet?.querySelector('.settings-error')?.textContent?.trim() || '',
+      nativeSetup: setup,
+      nativeStatus: status && {
+        state: status.state,
+        peerStatus: status.peerStatus,
+        shareCount: status.shares?.length,
+        message: status.message,
+      },
+    };
+  })()`)
+  const services = await Promise.resolve()
+    .then(() => adb(['shell', 'dumpsys', 'activity', 'services', packageName]))
+    .catch(() => '')
+  return {
+    ...ui,
+    locationServiceRunning: services.includes('LocationShareService'),
+    backgroundRuntimeCreations: backgroundRuntimeCreations(process.env.ANDROID_SERIAL),
+    backgroundRuntimeLogs: backgroundRuntimeLogs(process.env.ANDROID_SERIAL),
+    webViewIpcMarkers: cdp.ipcTrace(),
+  }
+}
+
 const configureAndroidBackgroundSharing = async (cdp) => {
+  const initialSetup = await cdp.evaluate(
+    `window.__TAURI_INTERNALS__?.invoke('android_sharing_setup')`,
+  )
+  const hasSavedBehavior = Boolean(initialSetup?.behavior)
+  if (!hasSavedBehavior) {
+    await waitFor(
+      () => cdp.evaluate('Boolean(document.querySelector(".settings-sheet"))'),
+      'first-run Android sharing settings',
+    )
+  }
   const setupOpen = await cdp.evaluate('Boolean(document.querySelector(".settings-sheet"))')
   if (!setupOpen) {
     assert.equal(await clickButton(cdp, 'Open menu'), true)
@@ -564,14 +673,23 @@ const configureAndroidBackgroundSharing = async (cdp) => {
   }
   assert.equal(await clickButton(cdp, 'In background'), true)
   assert.equal(await clickButton(cdp, 'Save settings'), true)
-  await waitFor(
-    () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
-    'saved global Android background settings',
-  )
+  try {
+    await waitFor(
+      () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
+      'saved global Android background settings',
+    )
+  } catch (error) {
+    const state = await readAndroidSettingsDiagnostic(cdp)
+    throw new Error(`Android background settings did not save: ${JSON.stringify(state)}`, {
+      cause: error,
+    })
+  }
 }
 
 const createAndroidStarShare = async (cdp, name) => {
   await configureAndroidBackgroundSharing(cdp)
+  // The first-run settings save uses its own short-lived background runtime.
+  adbFor(cdp.serial, ['logcat', '-c'])
   await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await fillAndroidInput(cdp, 'Share a name', name), true)
   assert.equal(await clickButton(cdp, '10'), true)
@@ -756,6 +874,11 @@ const runNotificationStopSmoke = async () => {
     const cdp = await connectCdp()
     try {
       await createBackgroundShareForSmoke(cdp)
+      const cleared =
+        await cdp.evaluate(`window.__TAURI_INTERNALS__.invoke('android_clear_old_peers', {
+        protection: { peerIds: [], shareIds: [] },
+      }).then(() => 'accepted').catch((error) => String(error))`)
+      assert.equal(cleared, 'accepted', 'Android native clear-old command')
     } finally {
       cdp.close()
     }
@@ -823,10 +946,17 @@ const runPermissionDenialSmoke = async () => {
       true,
     )
     assert.equal(await clickButton(cdp, 'Use while app is open'), true)
-    await waitFor(
-      () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
-      'explicit foreground choice',
-    )
+    try {
+      await waitFor(
+        () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
+        'explicit foreground choice',
+      )
+    } catch (error) {
+      const state = await readAndroidSettingsDiagnostic(cdp)
+      throw new Error(`Android foreground-only settings did not save: ${JSON.stringify(state)}`, {
+        cause: error,
+      })
+    }
     await clickNativePeerAction(cdp, 'All', 'Share location')
     assert.equal(await clickButton(cdp, 'Create location link'), true)
     await waitFor(
@@ -1091,6 +1221,7 @@ const readPolicyStatus = async (cdp) => {
         shareId: share.shareId,
         battery: share.battery ?? '',
         network: share.network ?? '',
+        publication: share.publication ?? '',
         paused: share.paused ?? null,
         lastUpdateAt: share.lastUpdateAt ?? null,
         expiresAt: share.expiresAt ?? null,
@@ -1877,6 +2008,19 @@ const followOnAndroid = async (
       focused: document.hasFocus(),
       ipcPresent: typeof window.__TAURI_INTERNALS__?.ipc === 'function',
       pendingCallbacks: window.__TAURI_INTERNALS__?.callbacks?.size ?? -1,
+      toast: document.querySelector('.toast')?.textContent?.trim() ?? '',
+      saveButton: (() => {
+        const button = [...document.querySelectorAll('button')]
+          .find((candidate) => candidate.textContent?.trim() === 'Save location');
+        if (!button) return null;
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return {
+          disabled: button.disabled,
+          rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+          hit: hit ? hit.tagName + '.' + (hit.className || '') : null,
+        };
+      })(),
     }))()`)
     const nativeTrace = adbFor(serial, ['logcat', '-d', '-s', 'ConstellationPersist:I', '*:S'])
       .split('\n')
@@ -1972,8 +2116,14 @@ const openBrowserPeerList = async (page) => {
   return peers
 }
 
+const openBrowserFilterMenu = async (peers) => {
+  const menu = peers.locator('.peer-list__filter-menu')
+  if (!(await menu.evaluate((element) => element.open))) await menu.locator('summary').click()
+  return peers
+}
+
 const openBrowserPeerFilter = async (page, filter) => {
-  const peers = await openBrowserPeerList(page)
+  const peers = await openBrowserFilterMenu(await openBrowserPeerList(page))
   const button = peers.getByRole('button', { name: filter, exact: true })
   if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
   return peers
@@ -2546,7 +2696,7 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
     first?.close()
     second?.close()
     await browser?.close()
-    server?.kill('SIGTERM')
+    await stopChild(server)
     relay?.kill('SIGTERM')
     for (const serial of [firstSerial, secondSerial]) {
       try {
@@ -3360,6 +3510,7 @@ const verifyBrowserRevocation = async (viewer, cdp) => {
     await openSheet.getByRole('button', { name: 'Close', exact: true }).click()
   }
   const history = await openBrowserPeerFilter(viewer, 'Viewing')
+  await openBrowserFilterMenu(history)
   const showEnded = history.getByLabel('Show ended')
   if (!(await showEnded.isChecked())) await showEnded.check()
   await expect(history.locator('.peer-list__item')).toHaveCount(1)
@@ -3874,6 +4025,7 @@ const runProjectLinksSmoke = async () => {
     await waitForNativeApp(cdp, 'Android project-link smoke startup')
     if (await androidTextIncludes(cdp, 'Got it'))
       assert.equal(await clickButton(cdp, 'Got it'), true)
+    await dismissAndroidSettingsSheet(cdp)
 
     const rejected = await cdp.evaluate(`(async () => {
       try {
@@ -3890,8 +4042,8 @@ const runProjectLinksSmoke = async () => {
     assert.equal(await cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`), true)
 
     if (handlers.length) {
-      assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
-      assert.equal(await tapAndroidButton(cdp, 'GitHub project'), true)
+      assert.equal(await openAndroidMenu(cdp), true)
+      assert.equal(await clickButton(cdp, 'GitHub project'), true)
       await waitFor(
         () => handlers.some((handler) => resumedActivityIncludes(`${handler}/`)),
         'an external browser activity for the allowlisted project link',
@@ -3928,8 +4080,8 @@ const runProjectLinksSmoke = async () => {
         10_000,
       )
     }
-    assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
-    assert.equal(await tapAndroidButton(cdp, 'GitHub project'), true)
+    assert.equal(await openAndroidMenu(cdp), true)
+    assert.equal(await clickButton(cdp, 'GitHub project'), true)
     await waitFor(
       () => androidTextIncludes(cdp, 'Could not open external browser.'),
       'the safe missing-browser failure notice',
@@ -4358,6 +4510,7 @@ const main = async () => {
       assert.match(about, /network that blocks every available outbound transport/i)
       assert.equal(await closeAndroidDialog(cdp), true)
       assert.equal(await clickButton(cdp, 'Got it'), true)
+      await dismissAndroidSettingsSheet(cdp)
       assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
       assert.equal(await tapAndroidButton(cdp, 'Copy logs'), true)
       await waitFor(

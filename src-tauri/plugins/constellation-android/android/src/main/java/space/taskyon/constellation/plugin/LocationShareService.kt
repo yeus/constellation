@@ -382,7 +382,11 @@ class LocationShareService : Service(), LocationListener {
           }
           else -> throw IllegalArgumentException("Unsupported protected-state operation.")
         }
-      } catch (_: Exception) {
+      } catch (error: Exception) {
+        Log.e(
+          "ConstellationRuntime",
+          "private-state-${request.optString("action")}-failed:${error.javaClass.simpleName}",
+        )
         response.put("error", "Protected source state could not be opened or saved.")
       }
       send(response)

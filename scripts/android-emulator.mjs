@@ -107,6 +107,7 @@ export const emulatorArguments = (selected, extraArguments = []) => [
   'swiftshader_indirect',
   '-no-audio',
   '-no-metrics',
+  '-no-snapshot-load',
   '-no-snapshot-save',
   ...extraArguments,
 ]
