@@ -20,6 +20,7 @@ const draft: ShareDraft = {
 
 const readyStatus: AndroidBackgroundStatus = {
   state: 'sharing',
+  paused: false,
   peerStatus: 'online',
   shares: [
     {
@@ -91,6 +92,29 @@ test('Android start request contains policy but no location', async () => {
     },
   ])
   assert.equal(JSON.stringify(calls).includes('latitude'), false)
+})
+
+test('Android pause and resume are acknowledged before the status is read back', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: Date.now,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return {
+        ...readyStatus,
+        paused: true,
+        shares: readyStatus.shares.map((share) => ({ ...share, paused: 'user' as const })),
+      }
+    },
+  })
+  const paused = await controller?.setPaused(true)
+  assert.equal(paused?.paused, true)
+  assert.equal(paused?.shares[0]?.paused, 'user')
+  assert.deepEqual(calls, [
+    { command: 'android_set_background_paused', args: { paused: true } },
+    { command: 'android_background_share_status', args: undefined },
+  ])
 })
 
 test('return owner handoff sends only the proof, never the foreground private key', async () => {

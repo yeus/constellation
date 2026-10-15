@@ -88,6 +88,7 @@ type BackgroundCommand =
   | { readonly type: 'location-error'; readonly code: number }
   | { readonly type: 'stop-share'; readonly shareId: string }
   | { readonly type: 'stop-all' }
+  | { readonly type: 'set-paused'; readonly requestId: string; readonly paused: boolean }
   | { readonly type: 'stop-foreground-only' }
   | { readonly type: 'network-state'; readonly state: 'unmetered' | 'metered' | 'data-saver' }
   | { readonly type: 'set-visible'; readonly visible: boolean }
@@ -280,6 +281,19 @@ const start = (): void => {
     if (command.type === 'set-visible') {
       runtime.setVisible(command.visible, command.visible)
       if (!command.visible) await pauseForegroundOnly()
+      return
+    }
+    if (command.type === 'set-paused') {
+      try {
+        await runtime.setPaused(command.paused)
+        post({ type: 'command-complete', requestId: command.requestId })
+      } catch {
+        post({
+          type: 'command-complete',
+          requestId: command.requestId,
+          error: 'Could not save the sharing pause. Try again.',
+        })
+      }
       return
     }
     if (command.type === 'network-state') {

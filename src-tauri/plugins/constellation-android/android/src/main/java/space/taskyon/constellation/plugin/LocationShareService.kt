@@ -47,6 +47,7 @@ class LocationShareService : Service(), LocationListener {
   private var lastPersistedStatus: String? = null
   private var lastShares: JSONArray? = null
   private var lastViewerCount = 0
+  private var lastPaused = false
   private var watchRequested = false
   private var appliedSampling: String? = null
   private var networkRestriction: String? = null
@@ -105,6 +106,16 @@ class LocationShareService : Service(), LocationListener {
             JSONObject()
               .put("type", "stop-share")
               .put("shareId", intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID)),
+          )
+          startRuntime()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_SET_PAUSED -> {
+          queueCommand(
+            JSONObject()
+              .put("type", "set-paused")
+              .put("paused", intent?.getBooleanExtra(ShareServiceContract.EXTRA_PAUSED, false) ?: false)
+              .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)),
           )
           startRuntime()
           START_STICKY
@@ -435,8 +446,14 @@ class LocationShareService : Service(), LocationListener {
         }
         lastShares = shares
         lastViewerCount = viewers
+        lastPaused = status.optBoolean("paused", false)
         updatePolicyState()
-        ShareNotification.update(this, notificationBody(shares, viewers), (shares?.length() ?: 0) > 0)
+        ShareNotification.update(
+          this,
+          notificationBody(shares, viewers),
+          (shares?.length() ?: 0) > 0,
+          lastPaused,
+        )
         stopWhenIdle()
       }
       "idle", "stopped" -> stopWhenIdle()
@@ -477,7 +494,7 @@ class LocationShareService : Service(), LocationListener {
       pausedCount == count -> when (networkRestriction) {
         "metered" -> "All links paused on metered network"
         "data-saver" -> "All links paused by Data Saver"
-        else -> "All links paused"
+        else -> "Sharing paused"
       }
       else -> {
         val reason = when (networkRestriction) {
@@ -587,7 +604,12 @@ class LocationShareService : Service(), LocationListener {
       stopLocationUpdates()
       startLocationUpdates()
     }
-    ShareNotification.update(this, notificationBody(shares, lastViewerCount), (shares?.length() ?: 0) > 0)
+    ShareNotification.update(
+      this,
+      notificationBody(shares, lastViewerCount),
+      (shares?.length() ?: 0) > 0,
+      lastPaused,
+    )
   }
 
   private fun clearRefresh() {
@@ -649,7 +671,7 @@ class LocationShareService : Service(), LocationListener {
     if (locationGrant(this) != "none") {
       startForeground(
         ShareServiceContract.NOTIFICATION_ID,
-        ShareNotification.build(this, foregroundNotificationBody()),
+        ShareNotification.build(this, foregroundNotificationBody(), true, lastPaused),
       )
     }
     if (webView == null && !runtimeStarting) createRuntime()
@@ -704,6 +726,7 @@ class LocationShareService : Service(), LocationListener {
     watchRequested = false
     lastShares = null
     lastViewerCount = 0
+    lastPaused = false
     networkRestriction = null
     ShareServiceContract.networkRestriction = null
     val stopped = JSONObject(failure?.toString() ?: STOPPED_STATUS)
@@ -731,6 +754,7 @@ class LocationShareService : Service(), LocationListener {
     watchRequested = false
     lastShares = null
     lastViewerCount = 0
+    lastPaused = false
     networkRestriction = null
     ShareServiceContract.networkRestriction = null
     val status = "{\"state\":\"paused\",\"shares\":[],\"location\":{\"status\":\"unavailable\"},\"message\":\"Foreground-only links are paused until Constellation is reopened.\"}"

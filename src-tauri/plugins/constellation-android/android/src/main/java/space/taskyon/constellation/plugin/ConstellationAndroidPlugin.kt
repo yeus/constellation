@@ -108,6 +108,11 @@ class VisibilityArgs {
 }
 
 @InvokeArg
+class SetPausedArgs {
+  var paused: Boolean = false
+}
+
+@InvokeArg
 class AndroidPositionOptions {
   var enableHighAccuracy: Boolean = true
   var timeout: Long = 20_000
@@ -517,6 +522,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     }
     if (!status.has("shares") || status.isNull("shares")) status.put("shares", org.json.JSONArray())
     if (status.opt("shares") !is org.json.JSONArray) status.put("shares", org.json.JSONArray())
+    if (status.opt("paused") !is Boolean) status.put("paused", false)
     if (!status.has("message") || status.isNull("message")) status.put("message", "")
     if (status.opt("message") !is String) status.put("message", "")
     val location = status.optJSONObject("location")
@@ -547,6 +553,23 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       invoke.resolve(statusWithPolicy(ShareServiceContract.currentStatus ?: STARTING_STATUS))
     } catch (error: Exception) {
       invoke.reject(error.message ?: "Could not revoke this location link.")
+    }
+  }
+
+  @Command
+  fun setBackgroundPaused(invoke: Invoke) {
+    try {
+      val paused = invoke.parseArgs(SetPausedArgs::class.java).paused
+      val request = JSONObject().put("paused", paused)
+      runReturnCommand(
+        invoke,
+        ShareServiceContract.ACTION_SET_PAUSED,
+        "",
+        request = request.toString(),
+        timeoutMessage = "The sharing pause was not confirmed. Try again.",
+      )
+    } catch (_: Exception) {
+      invoke.reject("Sharing pause could not be saved. Try again.")
     }
   }
 
@@ -788,6 +811,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     fingerprint: String? = null,
     peerId: String? = null,
     request: String? = null,
+    timeoutMessage: String = "The return-sharing change was not confirmed. Try again.",
   ) {
     val requestId = UUID.randomUUID().toString()
     val context = activity.applicationContext
@@ -807,7 +831,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         finish(intent.getStringExtra(ShareServiceContract.EXTRA_ERROR))
       }
     }
-    timeout = Runnable { finish("The return-sharing change was not confirmed. Try again.") }
+    timeout = Runnable { finish(timeoutMessage) }
     ContextCompat.registerReceiver(
       context, receiver, IntentFilter(ShareServiceContract.ACTION_COMMAND_COMPLETE),
       ContextCompat.RECEIVER_NOT_EXPORTED,

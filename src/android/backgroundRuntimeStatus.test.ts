@@ -6,6 +6,7 @@ import type { SharingRuntimeState } from '../sharing/sharingRuntime.ts'
 test('failed creation retains the revocation work and history that keep the service alive', () => {
   const state: SharingRuntimeState = {
     peerStatus: 'online',
+    paused: false,
     location: { status: 'unavailable' },
     shares: [],
     received: [],
@@ -46,6 +47,51 @@ test('failure before runtime initialization has a valid idle error status', () =
     'Synthetic restore failure',
   )
   assert.equal(status.state, 'error')
+  assert.equal(status.paused, false)
   assert.equal(status.endNotificationCount, 0)
   assert.deepEqual(status.shares, [])
+})
+
+test('projects a user pause while keeping every share and its grant', () => {
+  const state: SharingRuntimeState = {
+    peerStatus: 'online',
+    paused: true,
+    location: { status: 'unavailable' },
+    shares: [
+      {
+        shareId: 'synthetic-paused-link',
+        url: 'https://example.test/#share=synthetic-paused-link',
+        precision: 'approximate',
+        battery: 'balanced',
+        network: 'always',
+        paused: 'user',
+        expiresAt: null,
+        viewerCount: 1,
+      },
+    ],
+    received: [],
+    following: [],
+    returnOffers: [],
+    approvedReturnLinks: [],
+    pendingViewerApprovals: [],
+    oldSharing: [],
+    oldSeeing: [],
+    stoppedViewers: [],
+    endNotifications: [],
+    message: '',
+    canSave: true,
+  }
+  const status = backgroundRuntimeStatus(
+    state,
+    {
+      peerStatus: state.peerStatus,
+      connections: [],
+      sessionEvents: [],
+    },
+    state.location,
+  )
+  assert.equal(status.state, 'sharing')
+  assert.equal(status.paused, true)
+  assert.equal(status.shares[0]?.paused, 'user')
+  assert.equal(status.shares[0]?.viewerCount, 1)
 })

@@ -26,6 +26,7 @@ export type AndroidSharingSetup = z.infer<typeof AndroidSharingSetup>
 export interface AndroidBackgroundStatus {
   readonly deviceComparisons?: readonly DeviceComparison[]
   readonly sharingBehavior?: SharingBehavior
+  readonly paused: boolean
   readonly state: 'starting' | 'sharing' | 'paused' | 'stopped' | 'error'
   readonly peerStatus?: 'offline' | 'connecting' | 'online' | 'error'
   readonly diagnostics?: NetworkDiagnostics
@@ -86,6 +87,7 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
   const candidate = value as Partial<AndroidBackgroundStatus>
   if (
     !['starting', 'sharing', 'paused', 'stopped', 'error'].includes(String(candidate.state)) ||
+    (candidate.paused !== undefined && typeof candidate.paused !== 'boolean') ||
     !isLocationState(candidate.location) ||
     !Array.isArray(candidate.shares) ||
     candidate.shares.some(
@@ -152,7 +154,7 @@ const parseStatus = (value: unknown): AndroidBackgroundStatus => {
   ) {
     throw new Error('Invalid background name preferences.')
   }
-  return candidate as AndroidBackgroundStatus
+  return { ...candidate, paused: candidate.paused === true } as AndroidBackgroundStatus
 }
 
 export const createAndroidBackgroundSharing = (
@@ -167,6 +169,7 @@ export const createAndroidBackgroundSharing = (
       status: () => Promise<AndroidBackgroundStatus>
       stop: (shareId: string) => Promise<AndroidBackgroundStatus>
       setVisible: (visible: boolean) => Promise<void>
+      setPaused: (paused: boolean) => Promise<AndroidBackgroundStatus>
       approveReturnLink: (shareId: string) => Promise<void>
       deviceComparison: (
         shareId: string,
@@ -242,6 +245,10 @@ export const createAndroidBackgroundSharing = (
       parseStatus(await dependencies.invoke('android_stop_background_share', { shareId })),
     setVisible: async (visible) => {
       await dependencies.invoke('android_set_background_visibility', { visible })
+    },
+    setPaused: async (paused) => {
+      await dependencies.invoke('android_set_background_paused', { paused })
+      return parseStatus(await dependencies.invoke('android_background_share_status'))
     },
     approveReturnLink: async (shareId) => {
       await dependencies.invoke('android_approve_background_return_link', { shareId })

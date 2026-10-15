@@ -749,20 +749,20 @@ const createBackgroundShareForSmoke = async (cdp) => {
   return url
 }
 
-const assertNotificationStopAction = async () => {
+const assertNotificationPauseAction = async () => {
   await waitFor(() => {
     const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
     return (
       dump.includes('pkg=space.taskyon.constellation') &&
       dump.includes('id=4107') &&
       dump.includes('actions=1') &&
-      dump.includes('"Stop sharing"') &&
+      dump.includes('"Pause sharing"') &&
       dump.includes('startService') &&
       dump.includes('1 link') &&
       dump.includes('exact') &&
       dump.includes('next ends in')
     )
-  }, 'Android notification sharing summary and Stop sharing PendingIntent')
+  }, 'Android notification sharing summary and Pause sharing PendingIntent')
 }
 
 const sharingNotificationPresent = () =>
@@ -773,11 +773,7 @@ const sharingNotificationPresent = () =>
       return owner === packageName && id === '4107'
     })
 
-const notificationStopActionCenter = async (sharing = true) => {
-  const actionLabel = sharing ? 'Stop sharing' : 'Stop notices'
-  const titleLabel = sharing
-    ? 'Constellation is sharing your location'
-    : 'Constellation is sending ended-link notices'
+const notificationActionCenter = async (actionLabel, titleLabel) => {
   adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
   adb(['shell', 'wm', 'dismiss-keyguard'])
   await wait(500)
@@ -860,7 +856,12 @@ const setPermissionFlags = (permission, operation) => {
   }
 }
 
-const runNotificationStopSmoke = async () => {
+const clickNotificationAction = async (actionLabel, titleLabel) => {
+  const { x, y } = await notificationActionCenter(actionLabel, titleLabel)
+  adb(['shell', 'input', 'tap', String(Math.round(x)), String(Math.round(y))])
+}
+
+const runNotificationPauseSmoke = async () => {
   try {
     adb(['shell', 'pm', 'clear', packageName])
     adb(['shell', 'am', 'force-stop', packageName])
@@ -892,20 +893,40 @@ const runNotificationStopSmoke = async () => {
         ),
       'the Android foreground sharing service',
     )
-    await assertNotificationStopAction()
-    const { x, y } = await notificationStopActionCenter()
-    adb(['shell', 'input', 'tap', String(Math.round(x)), String(Math.round(y))])
+    await assertNotificationPauseAction()
+    await clickNotificationAction('Pause sharing', 'Constellation is sharing your location')
     await waitFor(
-      () =>
-        !adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
-          'LocationShareService',
-        ),
-      'notification Stop sharing action to stop the service',
+      () => {
+        const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
+        return (
+          dump.includes('"Resume sharing"') &&
+          dump.includes('Sharing paused') &&
+          dump.includes('1 link') &&
+          dump.includes('next ends in')
+        )
+      },
+      'notification Pause sharing action to pause the link and offer Resume sharing',
       20_000,
     )
     await waitFor(
-      () => !sharingNotificationPresent(),
-      'notification Stop sharing action to remove the foreground notification',
+      () =>
+        adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+          'LocationShareService',
+        ),
+      'the foreground service to keep running while sharing is paused',
+      20_000,
+    )
+    await clickNotificationAction('Resume sharing', 'Constellation sharing is paused')
+    await waitFor(
+      () => {
+        const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
+        return (
+          dump.includes('"Pause sharing"') &&
+          dump.includes('1 link') &&
+          !dump.includes('Sharing paused')
+        )
+      },
+      'notification Resume sharing action to resume the same link',
       20_000,
     )
   } finally {
@@ -1271,7 +1292,10 @@ const verifyEndedNotices = async (cdp, reasons) => {
     ended.capturedAt,
     'ended-link notices must not keep collecting locations',
   )
-  const { x, y } = await notificationStopActionCenter(false)
+  const { x, y } = await notificationActionCenter(
+    'Stop notices',
+    'Constellation is sending ended-link notices',
+  )
   adb(['shell', 'input', 'tap', String(Math.round(x)), String(Math.round(y))])
   await waitFor(
     () =>
@@ -4261,9 +4285,9 @@ const main = async () => {
     )
   }
 
-  if (process.argv.includes('--notification-stop-smoke')) {
-    await runNotificationStopSmoke()
-    console.log('Android notification Stop sharing action stopped the foreground service.')
+  if (process.argv.includes('--notification-pause-smoke')) {
+    await runNotificationPauseSmoke()
+    console.log('Android notification Pause/Resume actions preserved the same active link.')
     return
   }
   if (process.argv.includes('--permission-denial-smoke')) {

@@ -316,8 +316,8 @@ const main = async () => {
   if (!process.argv.includes('--skip-build')) {
     run('yarn', ['build:android:debug:x86_64-emulator'])
   }
-  if (process.argv.includes('--notification-stop-smoke')) {
-    await runProfile('modern', undefined, ['--notification-stop-smoke'])
+  if (process.argv.includes('--notification-pause-smoke')) {
+    await runProfile('modern', undefined, ['--notification-pause-smoke'])
     return
   }
   if (process.argv.includes('--permission-denial-smoke')) {
@@ -434,7 +434,7 @@ const main = async () => {
   await runProfile('modern')
   await runProfile('compat')
   await runProfile('aosp', undefined, ['--no-gms-flow'])
-  await runProfile('modern', undefined, ['--notification-stop-smoke'])
+  await runProfile('modern', undefined, ['--notification-pause-smoke'])
   await runProfile('modern', undefined, ['--permission-denial-smoke'])
   await runProfile('modern', undefined, ['--expiry-smoke'])
   await runProfile('modern', undefined, ['--foreground-only-smoke'])
