@@ -465,6 +465,17 @@ remain, and collection resumes automatically once the network is unmetered or
 Data Saver is cleared. The pause reason appears in the map status, active-share
 sheet, Android notification, and diagnostics.
 
+Active links can also be paused from the Android notification or from the
+Pause sharing button in the peer list. A user pause stops new fixes for every
+link without revoking the grant, closing viewers or changing expiry. No pause
+message is sent, so viewers keep their last observation and see it age as
+though the source lost its connection. The pause is stored in protected state
+and clears when the last active link ends. The active-sharing notification has
+a single Pause sharing or Resume sharing action and no destructive action;
+tapping it opens the app. Ending links requires Revoke link or the confirmed
+Revoke all action in the peer list. The managed `--notification-pause-smoke`
+fixture pauses and resumes the same link while the service stays alive.
+
 Android also declares a `text/plain` share target: sharing a Constellation link
 from a messenger opens a one-time in-app approval before the recipient connects.
 An external camera app can handle QR codes through the same HTTPS link. Android
