@@ -432,7 +432,8 @@
       </div>
       <button class="dock-peers" type="button" @click="openPeerList">
         <Share2 aria-hidden="true" />
-        Sharing {{ activeShares.length }} · Seeing {{ activeFollowing.length }}
+        {{ sharingPaused && activeShares.length ? 'Paused' : 'Sharing' }}
+        {{ activeShares.length }} · Seeing {{ activeFollowing.length }}
       </button>
     </footer>
 
@@ -519,6 +520,9 @@
       :limited-ids="areaPeerIds"
       :clear-old-busy="clearingOldPeers"
       :share-back-busy="creatingShare"
+      :paused="sharingPaused"
+      :pause-busy="changingSharingPause"
+      :revoke-all-busy="revokingAllShares"
       :peer-name-preferences="peerNamePreferences"
       @clear-old="clearOldPeers"
       @profile="setPeerNamePreferences"
@@ -530,6 +534,8 @@
       @filter="peerListFilter = $event"
       @show="showExistingShare"
       @revoke="revokeShare"
+      @toggle-pause="toggleSharingPause"
+      @revoke-all="revokeAllShares"
       @viewer-name="setViewerName"
       @viewer-block="blockViewer"
       @name="runtime.setFollowName"
@@ -736,6 +742,7 @@ const backgroundStatus = ref<AndroidBackgroundStatus>()
 const dismissedBackgroundOffers = ref(new Map<string, string>())
 const runtimeState = ref<SharingRuntimeState>({
   peerStatus: 'offline',
+  paused: false,
   location: locationSource.getState(),
   shares: [],
   received: [],
@@ -1118,6 +1125,9 @@ const peerNamePreferences = computed(() => [
   ...(backgroundStatus.value?.peerNamePreferences ?? []),
   ...(runtimeState.value.peerNamePreferences ?? []),
 ])
+const sharingPaused = computed(() =>
+  backgroundStatus.value?.shares.length ? backgroundStatus.value.paused : runtimeState.value.paused,
+)
 const adoptPeerName = async (peerId: string, name: string): Promise<void> => {
   try {
     const foreground =
@@ -1929,6 +1939,46 @@ const revokeShare = async (shareId: string): Promise<void> => {
     await runtime.stopShare(shareId)
   }
   if (readyShare.value?.shareId === shareId) closeShareReady()
+}
+const changingSharingPause = ref(false)
+const toggleSharingPause = async (): Promise<void> => {
+  if (changingSharingPause.value) return
+  changingSharingPause.value = true
+  try {
+    if (backgroundStatus.value?.shares.length) {
+      if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+      backgroundStatus.value = await backgroundSharing.setPaused(!backgroundStatus.value.paused)
+    } else {
+      await runtime.setPaused(!runtimeState.value.paused)
+    }
+  } catch (error) {
+    localError.value =
+      error instanceof Error ? error.message : 'Could not change the sharing pause.'
+  } finally {
+    changingSharingPause.value = false
+  }
+}
+const revokingAllShares = ref(false)
+const revokeAllShares = async (): Promise<void> => {
+  if (revokingAllShares.value) return
+  revokingAllShares.value = true
+  try {
+    const nativeShareIds = (backgroundStatus.value?.shares ?? []).map(({ shareId }) => shareId)
+    const localShareIds = runtimeState.value.shares.map(({ shareId }) => shareId)
+    if (nativeShareIds.length && backgroundSharing) {
+      for (const shareId of nativeShareIds) {
+        backgroundStatus.value = await backgroundSharing.stop(shareId)
+      }
+      updateLocationOwnership()
+    }
+    for (const shareId of localShareIds) await runtime.stopShare(shareId)
+    if (readyShare.value) closeShareReady()
+  } catch (error) {
+    localError.value =
+      error instanceof Error ? error.message : 'Could not revoke all location links.'
+  } finally {
+    revokingAllShares.value = false
+  }
 }
 const stopFollowing = async (shareId: string): Promise<void> => {
   await runtime.stopFollowing(shareId)

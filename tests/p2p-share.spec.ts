@@ -1910,3 +1910,110 @@ for (const mode of ['first-device', 'multi-viewer'] as const) {
     }
   })
 }
+
+test('pausing sharing preserves the link and survives reload until resumed', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(90_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  try {
+    const source = await sourceContext.newPage()
+    await source.goto('/')
+    await openShareCreator(source)
+    await source.getByRole('button', { name: 'Create location link' }).click()
+    await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+    await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+    await expect(source.locator('.dock-peers')).toContainText('Sharing 1')
+
+    await openPeerList(source)
+    await source.getByRole('button', { name: 'Pause sharing' }).click()
+    await expect(source.getByRole('button', { name: 'Resume sharing' })).toBeVisible()
+    await expect(source.locator('.dock-peers')).toContainText('Paused 1')
+    await expect
+      .poll(() =>
+        source.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          const state = await createBrowserPrivateStore().load()
+          return {
+            paused: state?.paused,
+            shares: state?.shares.length,
+            ended: state?.endedShares?.length,
+          }
+        }),
+      )
+      .toEqual({ paused: true, shares: 1, ended: 0 })
+
+    await source.reload()
+    await expect(source.locator('.dock-peers')).toContainText('Paused 1', { timeout: 30_000 })
+    await openPeerList(source)
+    await source.getByRole('button', { name: 'Resume sharing' }).click()
+    await expect(source.getByRole('button', { name: 'Pause sharing' })).toBeVisible()
+    await expect(source.locator('.dock-peers')).toContainText('Sharing 1')
+    await expect
+      .poll(() =>
+        source.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          const state = await createBrowserPrivateStore().load()
+          return { paused: state?.paused, shares: state?.shares.length }
+        }),
+      )
+      .toEqual({ paused: undefined, shares: 1 })
+  } finally {
+    await sourceContext.close()
+  }
+})
+
+test('revoke all requires confirmation and ends every active link', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(120_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  try {
+    const source = await sourceContext.newPage()
+    await source.goto('/')
+    const createLink = async (): Promise<void> => {
+      await openShareCreator(source)
+      await source.getByRole('button', { name: 'Create location link' }).click()
+      await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+      await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+    }
+    await createLink()
+    await createLink()
+    await expect(source.locator('.dock-peers')).toContainText('Sharing 2')
+
+    await openPeerList(source)
+    await source.getByRole('button', { name: 'Revoke all' }).click()
+    await expect(source.getByText('Revoke all links?')).toBeVisible()
+    await expect(source.locator('.dock-peers')).toContainText('Sharing 2')
+    await source.getByRole('button', { name: 'Revoke all' }).click()
+    await expect(source.locator('.dock-peers')).toContainText('Sharing 0')
+    await expect
+      .poll(() =>
+        source.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          const state = await createBrowserPrivateStore().load()
+          return {
+            shares: state?.shares.length,
+            revoked: state?.oldSharing?.filter((record) => record.reason === 'revoked').length,
+          }
+        }),
+      )
+      .toEqual({ shares: 0, revoked: 2 })
+  } finally {
+    await sourceContext.close()
+  }
+})

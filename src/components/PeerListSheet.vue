@@ -57,6 +57,21 @@
           <AddIcon aria-hidden="true" /> Add peer
         </button>
       </div>
+      <div v-if="shares.length" class="peer-list__sharing-actions">
+        <button type="button" :disabled="pauseBusy" @click="emit('togglePause')">
+          <PauseIcon v-if="!paused" aria-hidden="true" />
+          <PlayIcon v-else aria-hidden="true" />
+          {{ paused ? 'Resume sharing' : 'Pause sharing' }}
+        </button>
+        <template v-if="revokeAllConfirming">
+          <span class="peer-list__revoke-confirm" role="status">Revoke all links?</span>
+          <button type="button" @click="revokeAllConfirming = false">Cancel</button>
+          <button type="button" :disabled="revokeAllBusy" @click="confirmRevokeAll">
+            {{ revokeAllBusy ? 'Revoking…' : 'Revoke all' }}
+          </button>
+        </template>
+        <button v-else type="button" @click="revokeAllConfirming = true">Revoke all</button>
+      </div>
       <p v-if="totalConnectedViewers" class="field-help peer-list__count">
         {{ totalConnectedViewers }} connected across your active links
       </p>
@@ -463,7 +478,9 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   LucideMapPin as MapPin,
+  LucidePause as PauseIcon,
   LucidePencilLine as PencilLine,
+  LucidePlay as PlayIcon,
   LucideFunnel as FilterIcon,
   LucideShare2 as ShareIcon,
   LucideUserPlus as AddIcon,
@@ -506,6 +523,9 @@ const props = defineProps<{
   selectedId?: string
   clearOldBusy?: boolean
   shareBackBusy: boolean
+  paused: boolean
+  pauseBusy?: boolean
+  revokeAllBusy?: boolean
   stoppedViewers: readonly StoppedViewerRecord[]
   oldShares: readonly {
     shareId: string
@@ -527,6 +547,8 @@ const emit = defineEmits<{
   close: []
   addPeer: []
   shareLocation: []
+  togglePause: []
+  revokeAll: []
   focusPeer: [shareIds: string[]]
   filter: [filter: PeerFilter]
   dismissStopped: [shareId: string, peerId: string]
@@ -554,6 +576,11 @@ const dialogName = computed(() =>
   props.filter === 'sharing' ? 'Active shares' : props.filter === 'viewing' ? 'Following' : 'Peers',
 )
 const filterMenu = ref<HTMLDetailsElement>()
+const revokeAllConfirming = ref(false)
+const confirmRevokeAll = (): void => {
+  revokeAllConfirming.value = false
+  emit('revokeAll')
+}
 const filterOptions = ref<HTMLElement>()
 const filterOptionsStyle = ref<Record<string, string>>({})
 const positionFilterOptions = (): void => {
@@ -965,6 +992,38 @@ const remaining = (timestamp: number): string => {
 .peer-list__filter-menu svg {
   width: 1.1rem;
   height: 1.1rem;
+}
+.peer-list__sharing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.peer-list__sharing-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.2rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--control-fill);
+  color: var(--text);
+  font-weight: 650;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.peer-list__sharing-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.peer-list__sharing-actions svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.peer-list__revoke-confirm {
+  font-size: 0.85rem;
 }
 .peer-list__filter-menu {
   position: relative;
