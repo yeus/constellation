@@ -67,6 +67,7 @@ import {
 import {
   backgroundSharePolicy,
   sharePauseReason,
+  sharePauseState,
   type NetworkRestriction,
   type SharePauseState,
 } from './sharePolicy.ts'
@@ -199,6 +200,7 @@ export const FOLLOW_COLORS = ['#438ec9', '#8a6fc9', '#289a82', '#c0709a'] as con
 
 export interface SharingRuntimeState {
   readonly sharingBehavior?: SharingBehavior
+  readonly paused: boolean
   readonly deviceComparisons?: readonly DeviceComparison[]
   readonly peerStatus: PeerStatus
   readonly location: BrowserLocationState
@@ -492,6 +494,7 @@ export interface SharingRuntime {
   setFollowName: (shareId: string, name: string) => void
   setFollowColor: (shareId: string, color: string) => void
   setVisible: (visible: boolean, acquireLocation?: boolean) => void
+  setPaused: (paused: boolean) => Promise<void>
   stopShare: (shareId: string) => Promise<void>
   stopEndNotifications: () => Promise<void>
   stop: () => Promise<void>
@@ -717,6 +720,7 @@ export const createSharingRuntime = (
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
   let visible = true
+  let paused = false
   let privateKey: PrivateKey | undefined
   let preparation: Promise<void> | undefined
   let persistence = Promise.resolve()
@@ -728,6 +732,7 @@ export const createSharingRuntime = (
   let networkRestriction: NetworkRestriction | undefined
   let state: SharingRuntimeState = {
     peerStatus: 'offline',
+    paused: false,
     location: locationSource.getState(),
     shares: [],
     received: [],
@@ -759,6 +764,7 @@ export const createSharingRuntime = (
       ...state,
       ...patch,
       sharingBehavior,
+      paused,
       peerNamePreferences: [...peerNamePreferences.values()],
       shares: [...shares.values()].map((share) => ({
         shareId: share.capability.shareId,
@@ -787,8 +793,8 @@ export const createSharingRuntime = (
         publication: share.publication,
         battery: share.battery,
         network: share.network,
-        ...(sharePauseReason(share, networkRestriction)
-          ? { paused: sharePauseReason(share, networkRestriction) }
+        ...(sharePauseState(share, networkRestriction, paused)
+          ? { paused: sharePauseState(share, networkRestriction, paused) }
           : {}),
         ...(share.latest ? { lastUpdateAt: share.latest.capturedAt } : {}),
       })),
@@ -865,6 +871,7 @@ export const createSharingRuntime = (
     const behavior = pendingSharingBehavior ?? sharingBehavior
     return {
       ...(behavior ? { sharingBehavior: behavior } : {}),
+      ...(paused ? { paused: true } : {}),
       version: 1,
       deviceComparisons: [...deviceComparisons.values()].filter(
         (entry) => entry.confirmedAt !== undefined && comparisonIsCurrent(entry),
@@ -1022,6 +1029,7 @@ export const createSharingRuntime = (
           }
         }
         const retained = retainedEndNotifications(saved?.endedShares ?? [])
+        paused = (saved?.paused ?? false) && shares.size > 0
         changedProtectedState ||= retained.length !== (saved?.endedShares?.length ?? 0)
         for (const record of retained) {
           try {
@@ -1179,7 +1187,7 @@ export const createSharingRuntime = (
     share: SourceShare,
     subscriptionId: string,
   ): Promise<ConstellationMessage | undefined> => {
-    if (sharePauseReason(share, networkRestriction)) return undefined
+    if (paused || sharePauseReason(share, networkRestriction)) return undefined
     if (!share.latest) return undefined
     const observation = share.latest
     const payload = await encryptLocationPayload(
@@ -1564,6 +1572,7 @@ export const createSharingRuntime = (
             if (initial) session.send(initial)
             if (
               (visible || share.publication === 'background') &&
+              !paused &&
               !sharePauseReason(share, networkRestriction)
             ) {
               locationSource.refresh()
@@ -1818,7 +1827,7 @@ export const createSharingRuntime = (
   }
 
   const updateShareLocation = (share: SourceShare, exact: LocationObservationV1): boolean => {
-    if (sharePauseReason(share, networkRestriction)) return false
+    if (paused || sharePauseReason(share, networkRestriction)) return false
     if (share.precision === 'exact') {
       share.latest = exact
       return false
@@ -1959,7 +1968,10 @@ export const createSharingRuntime = (
         shares.delete(share.capability.shareId)
         rememberEndNotification(share, 'expired', endedAt)
         const prunedEndIds = pruneEndNotifications()
-        if (!shares.size) locationSource.stop()
+        if (!shares.size) {
+          paused = false
+          locationSource.stop()
+        }
         approvedReturnLinks.delete(share.capability.shareId)
         for (const key of returnOffers.keys()) {
           if (key.startsWith(`${share.capability.shareId}:`)) returnOffers.delete(key)
@@ -2259,7 +2271,7 @@ export const createSharingRuntime = (
       if (next.publication === 'foreground' && !visible) {
         for (const share of shares.values()) share.latest = undefined
         locationSource.stop()
-      } else if (shares.size) locationSource.start()
+      } else if (shares.size && !paused) locationSource.start()
       publish()
     },
     clearOldPeers: async (protection) => {
@@ -2755,6 +2767,7 @@ export const createSharingRuntime = (
             .map((share) => startSourcePeer(share)),
         )
         if (
+          !paused &&
           shares.size &&
           (visible || [...shares.values()].some((share) => share.publication === 'background'))
         ) {
@@ -2849,7 +2862,7 @@ export const createSharingRuntime = (
         await stopSourcePeer(share.capability.shareId)
         throw error
       }
-      if (visible || draft.publication === 'background') locationSource.start()
+      if (!paused && (visible || draft.publication === 'background')) locationSource.start()
       publish()
       return state.shares.find(({ shareId }) => shareId === share.capability.shareId)!
     },
@@ -3370,6 +3383,21 @@ export const createSharingRuntime = (
       }
       publish()
     },
+    setPaused: async (nextPaused) => {
+      await prepareState()
+      if (paused === nextPaused) return
+      if (nextPaused && !shares.size) return
+      const previous = paused
+      paused = nextPaused
+      try {
+        await persist()
+      } catch (error) {
+        paused = previous
+        publish({ message: 'Sharing pause could not be saved.' })
+        throw error
+      }
+      publish()
+    },
     stopShare: async (shareId) => {
       const share = shares.get(shareId)
       if (!share) return
@@ -3385,6 +3413,7 @@ export const createSharingRuntime = (
         ([, offer]) => offer.shareId === shareId,
       )
       const previousEndNotifications = new Map(endedShares)
+      const previousPaused = paused
       pendingRevocations.add(shareId)
       rememberEndNotification(share, 'revoked', oldRecord.endedAt)
       const prunedEndIds = pruneEndNotifications()
@@ -3400,6 +3429,7 @@ export const createSharingRuntime = (
       )
       approvedReturnLinks.delete(shareId)
       removedOffers.forEach(([key]) => returnOffers.delete(key))
+      if (!shares.size) paused = false
       try {
         await persist()
         pendingRevocations.delete(shareId)
@@ -3410,6 +3440,7 @@ export const createSharingRuntime = (
         previousEndNotifications.forEach((record, id) => endedShares.set(id, record))
         oldSharing.clear()
         previousOldRecords.forEach((record, key) => oldSharing.set(key, record))
+        paused = previousPaused
         if (wasReturnLinkApproved) approvedReturnLinks.add(shareId)
         removedOffers.forEach(([key, offer]) => returnOffers.set(key, offer))
         throw error

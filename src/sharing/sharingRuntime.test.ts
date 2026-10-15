@@ -5,7 +5,7 @@ import { bytesToBase64Url } from './encoding.ts'
 import { createShareInvitation, returnOwnerMessage } from './shareLink.ts'
 import type { PrivateState } from './privateStore.ts'
 
-import { createBrowserLocationSource } from '../location/browser.ts'
+import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
 import {
   acceptReturnShare,
   appendSessionEvent,
@@ -1059,6 +1059,102 @@ test('global policy is not published or applied until its durable save completes
     await updating
     assert.equal(state.sharingBehavior!.publication, 'background')
     assert.equal(state.shares[0]!.publication, 'background')
+  } finally {
+    await runtime.stop()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('a user pause stops observations durably without revoking the grant and resumes on request', async () => {
+  const key = await generateKeyPair('Ed25519')
+  const invitation = await createShareInvitation({
+    baseUrl: 'https://example.test/',
+    sourcePeerId: 'synthetic-source',
+    addresses: [],
+    expiresAt: null,
+  })
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: bytesToBase64Url(privateKeyToProtobuf(key)),
+    shares: [
+      { url: invitation.url, precision: 'approximate', capacity: 1, publication: 'foreground' },
+    ],
+    followed: [],
+  }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  let saved: PrivateState = structuredClone(initial)
+  let fail = false
+  let deliver: ((position: BrowserPosition) => void) | undefined
+  const source = createBrowserLocationSource({
+    sourceId: 'synthetic-pause',
+    geolocation: {
+      watchPosition: (success) => {
+        deliver = success
+        return 7
+      },
+      clearWatch: () => undefined,
+      getCurrentPosition: () => undefined,
+    },
+    now: () => 5_000,
+    liveWindowMs: 5_000,
+    observationTtlMs: 60_000,
+    setTimer: () => 1,
+    clearTimer: () => undefined,
+  })
+  const runtime = createSharingRuntime(source, 'https://example.test/', {
+    load: async () => saved,
+    save: async (value) => {
+      if (fail) throw new Error('Synthetic storage failure')
+      saved = structuredClone(value)
+    },
+  })
+  let state!: SharingRuntimeState
+  runtime.subscribe((value) => {
+    state = value
+  })
+  const position = (latitude: number, timestamp: number): BrowserPosition => ({
+    timestamp,
+    coords: {
+      latitude,
+      longitude: -70,
+      accuracy: 8,
+      altitude: null,
+      heading: null,
+      speed: null,
+    },
+  })
+  try {
+    await runtime.setPaused(true)
+    assert.equal(state.paused, true)
+    assert.equal(state.shares[0]!.paused, 'user')
+    assert.equal(saved.paused, true)
+    assert.equal(saved.shares.length, 1)
+    assert.equal(saved.endedShares?.length, 0)
+    runtime.setVisible(true, true)
+    deliver?.(position(40, 10_000))
+    assert.equal(state.shares[0]!.lastUpdateAt, undefined)
+    deliver?.(position(41, 15_000))
+    assert.equal(state.shares[0]!.lastUpdateAt, undefined)
+    fail = true
+    await assert.rejects(runtime.setPaused(false), /storage failure/)
+    assert.equal(state.paused, true)
+    assert.equal(state.shares[0]!.paused, 'user')
+    fail = false
+    await runtime.setPaused(false)
+    assert.equal(state.paused, false)
+    assert.equal(state.shares[0]!.paused, undefined)
+    assert.equal(saved.paused, undefined)
+    assert.equal(saved.shares.length, 1)
+    deliver?.(position(42, 20_000))
+    assert.equal(state.shares[0]!.lastUpdateAt, 20_000)
+    await runtime.setPaused(true)
+    assert.equal(state.paused, true)
+    await runtime.stopShare(invitation.capability.shareId)
+    assert.equal(state.shares.length, 0)
+    assert.equal(state.paused, false)
+    assert.equal(saved.paused, undefined)
   } finally {
     await runtime.stop()
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)

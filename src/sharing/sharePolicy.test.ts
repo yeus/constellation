@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { backgroundSharePolicy, sharePauseReason } from './sharePolicy.ts'
+import { backgroundSharePolicy, sharePauseReason, sharePauseState } from './sharePolicy.ts'
 
 test('pauses only background links that opted into metered pausing', () => {
   assert.equal(
@@ -37,6 +37,25 @@ test('fails closed until the initial network restriction is known', () => {
   )
   assert.equal(
     sharePauseReason({ publication: 'foreground', network: 'pause-when-metered' }, 'unknown'),
+    undefined,
+  )
+})
+
+test('a user pause overrides network policy for every link type', () => {
+  assert.equal(
+    sharePauseState({ publication: 'background', network: 'pause-when-metered' }, 'metered', true),
+    'user',
+  )
+  assert.equal(
+    sharePauseState({ publication: 'foreground', network: 'always' }, undefined, true),
+    'user',
+  )
+  assert.equal(
+    sharePauseState({ publication: 'background', network: 'pause-when-metered' }, 'metered', false),
+    'metered',
+  )
+  assert.equal(
+    sharePauseState({ publication: 'foreground', network: 'always' }, undefined, false),
     undefined,
   )
 })

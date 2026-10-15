@@ -105,6 +105,7 @@ const ReturnOfferRecord = z.object({
 
 const PrivateStateSchema = z.object({
   sharingBehavior: SharingBehavior.optional(),
+  paused: z.boolean().optional(),
   version: z.literal(1),
   deviceComparisons: z.array(DeviceComparison).max(256).optional(),
   comparisonBudgets: z.array(ComparisonBudget).max(256).optional(),

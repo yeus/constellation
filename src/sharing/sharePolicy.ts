@@ -6,7 +6,7 @@ import type {
 } from '../shareDraft.ts'
 
 export type NetworkRestriction = SharePauseReason | 'unknown'
-export type SharePauseState = SharePauseReason | 'unknown'
+export type SharePauseState = SharePauseReason | 'user' | 'unknown'
 
 export const sharePauseReason = (
   share: { publication: SharePublication; network: ShareNetworkPolicy },
@@ -17,6 +17,12 @@ export const sharePauseReason = (
   }
   return restriction
 }
+
+export const sharePauseState = (
+  share: { publication: SharePublication; network: ShareNetworkPolicy },
+  restriction: NetworkRestriction | undefined,
+  pausedByUser: boolean,
+): SharePauseState | undefined => (pausedByUser ? 'user' : sharePauseReason(share, restriction))
 
 export const backgroundSharePolicy = (
   publication: SharePublication,
