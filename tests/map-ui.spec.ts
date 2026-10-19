@@ -800,3 +800,59 @@ test('selects self and peers independently in a group and paints only own point 
     (window as typeof window & { selfGroupTest: { dispose(): void } }).selfGroupTest.dispose(),
   )
 })
+
+test('caches public basemap tiles, reports usage and clears the offline cache', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await expect(page.locator('.maplibregl-canvas')).toBeVisible({ timeout: 30_000 })
+  const cacheEntries = () =>
+    page.evaluate(async () => {
+      if (!navigator.storage?.getDirectory) return -1
+      try {
+        const root = await navigator.storage.getDirectory()
+        const directory = (await root.getDirectoryHandle(
+          'constellation-pmtiles-cache-v1',
+        )) as FileSystemDirectoryHandle & { values(): AsyncIterable<FileSystemHandle> }
+        let count = 0
+        for await (const entry of directory.values()) {
+          if (entry) count += 1
+        }
+        return count
+      } catch {
+        return 0
+      }
+    })
+  await expect.poll(cacheEntries, { timeout: 90_000 }).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.locator('.map-cache-settings summary').click()
+  const section = page.locator('.map-cache-settings')
+  await expect(section).toContainText('opfs')
+  await expect(section).toContainText('tiles')
+  await section.getByRole('button', { name: '128 MB' }).click()
+  await expect(section.getByRole('button', { name: '128 MB' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  expect(await page.evaluate(() => localStorage.getItem('constellation.map-cache-bytes'))).toBe(
+    String(128 * 1024 * 1024),
+  )
+
+  await section.getByRole('button', { name: 'Clear map cache' }).click()
+  await expect.poll(cacheEntries).toBe(0)
+  await expect(section).toContainText('0.0 MB')
+})
+
+test('keeps the online map usable when cache storage is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: {} })
+    Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined })
+  })
+  await page.goto('/')
+  await expect(page.locator('.maplibregl-canvas')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.locator('.map-cache-settings summary').click()
+  await expect(page.locator('.map-cache-settings')).toContainText('0.0 MB')
+  await expect(page.locator('.map-cache-settings')).not.toContainText('opfs')
+})

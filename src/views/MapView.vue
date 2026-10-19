@@ -10,6 +10,7 @@
         :locations="locations"
         :decluttering="mapDecluttering"
         :map-family="mapFamily"
+        :cache-max-bytes="mapCacheMaxBytes"
         @select="openFollowDetails"
         @area-overflow="openAreaPeers"
         @select-own="openSettings"
@@ -64,6 +65,26 @@
         >
           Minimalist map
         </button>
+        <details class="map-cache-settings" @toggle="refreshMapCacheStats">
+          <summary>Offline map cache</summary>
+          <p class="field-help">
+            Caches requested public basemap tiles on this device. Peer locations, links and history
+            are never stored here.
+          </p>
+          <div class="map-cache-settings__sizes" role="group" aria-label="Maximum map cache size">
+            <button
+              v-for="size in mapCacheSizes"
+              :key="size"
+              type="button"
+              :aria-pressed="mapCacheMaxBytes === size * 1024 * 1024"
+              @click="setMapCacheMaxBytes(size * 1024 * 1024)"
+            >
+              {{ size }} MB
+            </button>
+          </div>
+          <p class="field-help">{{ mapCacheLabel }}</p>
+          <button type="button" @click="clearMapCache">Clear map cache</button>
+        </details>
         <details class="map-decluttering-settings">
           <summary>Map decluttering</summary>
           <label>
@@ -619,6 +640,7 @@ import { invoke } from '@tauri-apps/api/core'
 import SettingsSheet from '../components/SettingsSheet.vue'
 import { defaultSharingBehavior, type SharingBehavior } from '../sharing/sharingBehavior.ts'
 import type { AndroidSharingSetup } from '../android/backgroundSharing.ts'
+import type { PmtilesCacheStats } from '../map/pmtiles.ts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
@@ -806,6 +828,39 @@ const mapFamily = ref<MapFamily>(
     ? 'minimalist'
     : 'default',
 )
+const MAP_CACHE_BYTES_KEY = 'constellation.map-cache-bytes'
+const MAP_CACHE_DEFAULT_BYTES = 64 * 1024 * 1024
+const readMapCacheBytes = (): number => {
+  const stored = window.localStorage.getItem(MAP_CACHE_BYTES_KEY)
+  if (stored === null) return MAP_CACHE_DEFAULT_BYTES
+  const bytes = Number(stored)
+  return Number.isFinite(bytes) && bytes >= 0 ? bytes : MAP_CACHE_DEFAULT_BYTES
+}
+const mapCacheMaxBytes = ref(readMapCacheBytes())
+const mapCacheStats = ref<PmtilesCacheStats>()
+const mapCacheSizes = [64, 128, 256] as const
+const refreshMapCacheStats = async (): Promise<void> => {
+  mapCacheStats.value = await locationMap.value?.cacheStats().catch(() => undefined)
+}
+const setMapCacheMaxBytes = (bytes: number): void => {
+  mapCacheMaxBytes.value = bytes
+  try {
+    window.localStorage.setItem(MAP_CACHE_BYTES_KEY, String(bytes))
+  } catch {
+    // The cache still uses the selected limit for this session.
+  }
+}
+const clearMapCache = async (): Promise<void> => {
+  await locationMap.value?.clearCache().catch(() => undefined)
+  await refreshMapCacheStats()
+  sessionLog.record({ level: 'info', event: 'map.cache.cleared' })
+}
+const mapCacheLabel = computed(() => {
+  const stats = mapCacheStats.value
+  if (!stats) return 'Cache usage unavailable.'
+  const megabytes = (stats.bytes / (1024 * 1024)).toFixed(1)
+  return `${megabytes} MB · ${stats.tiles} tiles${stats.backend ? ` · ${stats.backend}` : ''}`
+})
 const mapDecluttering = ref<MapDeclutteringPreferences>(
   loadMapDeclutteringPreferences(window.localStorage),
 )
@@ -818,6 +873,9 @@ const introSeenKey = 'constellation.privacy-intro-seen'
 const actionsExpanded = ref(false)
 const introOpen = ref(window.localStorage.getItem(introSeenKey) !== '1')
 const menuOpen = ref(false)
+watch(menuOpen, (open) => {
+  if (open) void refreshMapCacheStats()
+})
 const onMenuKeyDown = (event: KeyboardEvent): void => {
   if (event.key !== 'Escape' || !menuOpen.value) return
   menuOpen.value = false

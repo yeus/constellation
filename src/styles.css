@@ -310,13 +310,45 @@ button {
   color: var(--selected-text);
 }
 
-.map-decluttering-settings {
+.map-decluttering-settings,
+.map-cache-settings {
   display: grid;
   min-width: 15rem;
   gap: 0.4rem;
   padding: 0.4rem 0.65rem;
   border-top: 1px solid var(--border);
   font-size: 0.78rem;
+}
+
+.map-cache-settings summary {
+  min-height: 2.25rem;
+  align-content: center;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.map-cache-settings__sizes {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.map-cache-settings__sizes button,
+.map-cache-settings > button {
+  min-height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--control-fill);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.map-cache-settings__sizes button {
+  flex: 1;
+}
+
+.map-cache-settings__sizes button[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .map-decluttering-settings summary {

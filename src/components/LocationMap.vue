@@ -191,7 +191,7 @@ const visibleLargePeers = computed(() =>
 const individualAvatars = ref<{ location: MapLocation; x: number; y: number }[]>([])
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
-const runtime = createPmtilesRuntime()
+const runtime = createPmtilesRuntime({ maxBytes: props.cacheMaxBytes })
 let map: Map | null = null
 let presentationFrame: number | undefined
 
@@ -403,13 +403,23 @@ const focusLocations = (locations: readonly MapLocation[]): void => {
   const bounds = locationsBounds(locations)
   if (bounds) fitAreaBounds(bounds)
 }
-defineExpose({ centerOn, focusLocations })
+defineExpose({
+  centerOn,
+  focusLocations,
+  cacheStats: () => runtime.cacheStats(),
+  clearCache: () => runtime.clearCache(),
+  setCacheMaxBytes: (value: number) => runtime.setCacheMaxBytes(value),
+})
 
 watch(() => props.locations, refreshPresentation, { deep: true })
 watch(() => props.decluttering, refreshPresentation, { deep: true })
 watch(
   () => props.mapFamily,
   () => map?.setStyle(createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value)),
+)
+watch(
+  () => props.cacheMaxBytes,
+  (value) => runtime.setCacheMaxBytes(Math.max(0, value ?? 0)),
 )
 onMounted(() => {
   darkScheme.addEventListener('change', updateTheme)

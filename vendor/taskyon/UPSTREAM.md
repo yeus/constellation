@@ -33,3 +33,15 @@ The copied packages retain Taskyon's MIT copyright notice in `vendor/taskyon/LIC
 - Snapshot date: 2026-10-04
 - Upstream working-tree changes: extract common registry/runner with backward-compatible re-export; propagate parent cancellation to active diagnostics.
 - Owner: `frontend/packages/diagnostics`; generated dist is built locally.
+
+## PMTiles cache snapshot
+
+- Package: `@taskyon/pmtiles-cache` (complete source and test snapshot)
+- Source repository: Taskyon `frontend`, branch `constellation` working tree
+- Base revision: `73126bee904cb2e5debd6fc7385a2a022e1b5e0f`
+- Snapshot date: 2026-10-14
+- Upstream working-tree changes: new tile-aware sparse PMTiles cache for Constellation
+  v0.1.4, including a spec-v3 archive writer, a minimal staged storage port, tile-level LRU
+  eviction, remote-version invalidation and focused writer/cache tests. The package is not yet
+  published as a released Taskyon version; this snapshot records the working-tree source.
+- Owner: `frontend/packages/pmtiles-cache`; generated dist is built locally.

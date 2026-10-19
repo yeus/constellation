@@ -14,7 +14,7 @@
   "scripts": {
     "ci:quick": "node scripts/ci-preflight.mjs quick",
     "ci:preflight": "node scripts/ci-preflight.mjs preflight",
-    "build:vendor": "yarn workspace @taskyon/diagnostics build && yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build",
+    "build:vendor": "yarn workspace @taskyon/diagnostics build && yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build && yarn workspace @taskyon/pmtiles-cache build",
     "icons:generate": "tauri icon assets/icon-manifest.json -o src-tauri/icons",
     "dev": "yarn build:vendor && vite",
     "dev:tauri:frontend": "yarn build:vendor && vite --mode tauri",
@@ -49,7 +49,7 @@
     "licenses:artifacts": "node scripts/artifact-license-inventory.mjs",
     "lint:flatpak": "node scripts/flatpak-lint.mjs",
     "test:unit": "node --experimental-strip-types --test 'src/**/*.test.ts'",
-    "test:vendor": "yarn workspace @taskyon/diagnostics test && yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test",
+    "test:vendor": "yarn workspace @taskyon/diagnostics test && yarn workspace @taskyon/protocol test && yarn workspace @taskyon/p2p-core test && yarn workspace @taskyon/pmtiles-cache test",
     "test": "yarn build:vendor && yarn test:vendor && yarn test:unit && yarn test:scripts",
     "test:e2e": "yarn build:vendor && playwright test",
     "preview": "vite preview",

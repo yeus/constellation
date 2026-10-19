@@ -6,6 +6,7 @@ const EVENT_CODES = [
   'map.error',
   'map.archive.verified',
   'map.archive.failed',
+  'map.cache.cleared',
   'sharing.peer.status',
   'sharing.share.create.started',
   'sharing.share.create.succeeded',

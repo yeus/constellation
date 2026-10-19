@@ -2114,6 +2114,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@taskyon/pmtiles-cache@workspace:vendor/taskyon/pmtiles-cache":
+  version: 0.0.0-use.local
+  resolution: "@taskyon/pmtiles-cache@workspace:vendor/taskyon/pmtiles-cache"
+  dependencies:
+    pmtiles: "npm:4.4.1"
+    tsup: "npm:^8.5.0"
+    typescript: "npm:^5.9.2"
+  languageName: unknown
+  linkType: soft
+
 "@taskyon/protocol@workspace:*, @taskyon/protocol@workspace:vendor/taskyon/protocol":
   version: 0.0.0-use.local
   resolution: "@taskyon/protocol@workspace:vendor/taskyon/protocol"

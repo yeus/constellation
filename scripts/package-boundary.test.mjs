@@ -10,6 +10,7 @@ const supportedTaskyonPackages = new Set([
   '@taskyon/protocol',
   '@taskyon/p2p-core',
   '@taskyon/diagnostics',
+  '@taskyon/pmtiles-cache',
 ])
 
 const sourceFiles = (directory) =>
@@ -67,7 +68,7 @@ test('vendored Taskyon snapshots record their upstream provenance', () => {
   assert.match(upstream, /Base revision: `[0-9a-f]{40}`/)
   assert.match(upstream, /Snapshot date: \d{4}-\d{2}-\d{2}/)
 
-  for (const packageDirectory of ['p2p-core', 'protocol', 'diagnostics']) {
+  for (const packageDirectory of ['p2p-core', 'protocol', 'diagnostics', 'pmtiles-cache']) {
     const manifest = JSON.parse(
       fs.readFileSync(
         path.join(repositoryRoot, 'vendor/taskyon', packageDirectory, 'package.json'),
