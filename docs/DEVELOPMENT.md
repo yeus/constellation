@@ -476,6 +476,26 @@ tapping it opens the app. Ending links requires Revoke link or the confirmed
 Revoke all action in the peer list. The managed `--notification-pause-smoke`
 fixture pauses and resumes the same link while the service stays alive.
 
+The v0.1.4 peer list uses progressive disclosure: direction-first summaries, then
+Names and privacy, Manage link, Connection details and Ended history sections.
+Share back is hidden when a peer already has an unended outgoing grant. The
+precision choices are Exact, Neighbourhood and City with a question-mark help
+dialog. On the map, peer avatars open the peer list with that peer expanded, a
+group area opens a temporary Selected group scope with a Local entry, and the
+own map target opens Settings.
+
+The basemap is served through the vendored `@taskyon/pmtiles-cache`. Requested
+public tiles are kept in a sparse on-device PMTiles archive via OPFS where
+available and IndexedDB otherwise; misses still come from the online archive.
+The app menu exposes 64/128/256 MB limits and a clear action. Peer locations,
+links and history are never cached, and the map falls back to the online reader
+when storage is unavailable.
+
+On an Android browser, opening a valid share offers an optional app handoff
+prompt with Open in app, Get the app and Continue in browser. It never requests
+the visitor's location, does not migrate keys or auto-save a preview, warns that
+the app may need a fresh source approval, and keeps the browser preview intact.
+
 Android also declares a `text/plain` share target: sharing a Constellation link
 from a messenger opens a one-time in-app approval before the recipient connects.
 An external camera app can handle QR codes through the same HTTPS link. Android
