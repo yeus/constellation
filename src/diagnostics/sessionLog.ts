@@ -13,6 +13,8 @@ const EVENT_CODES = [
   'sharing.follow.accept.started',
   'sharing.follow.accept.succeeded',
   'sharing.follow.accept.failed',
+  'sharing.app_handoff.launch',
+  'sharing.app_handoff.dismissed',
   'sharing.follow.status',
   'sharing.network.connections',
   'sharing.background.status',

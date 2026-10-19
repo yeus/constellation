@@ -54,7 +54,7 @@ test('share setup keeps link choices on one page and explains privacy without lo
     form.getByRole('button', { name: 'Create location link', exact: true }),
   ).toBeVisible()
   await form.getByLabel('Share a name').fill('Synthetic River')
-  await form.getByRole('button', { name: 'Very coarse 20 km radius', exact: true }).click()
+  await form.getByRole('button', { name: 'City 20 km radius', exact: true }).click()
   await form.getByRole('button', { name: '8 hours', exact: true }).click()
   await form.getByRole('button', { name: 'No share cap', exact: true }).click()
   await expect(
@@ -78,6 +78,36 @@ test('share setup keeps link choices on one page and explains privacy without lo
     'true',
   )
   await expect(form).toContainText('End-to-end encrypted. No central location storage.')
+})
+
+test('precision options keep their order and explain each choice without losing the draft', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await openShareCreator(page)
+  const form = page.getByRole('dialog', { name: 'Share your location' })
+  const options = form.locator('.choice-grid').first().getByRole('button')
+  await expect(options).toHaveCount(3)
+  await expect(options.nth(0)).toContainText('Exact')
+  await expect(options.nth(0)).toContainText('No added blurring')
+  await expect(options.nth(1)).toContainText('Neighbourhood')
+  await expect(options.nth(1)).toContainText('1 km radius')
+  await expect(options.nth(2)).toContainText('City')
+  await expect(options.nth(2)).toContainText('20 km radius')
+  await expect(options.nth(1)).toHaveAttribute('aria-pressed', 'true')
+
+  await form.getByRole('button', { name: 'Explain precision choices' }).click()
+  const help = page.getByRole('dialog', { name: 'Precision choices' })
+  await expect(help).toBeVisible()
+  await expect(help).toContainText('device-reported position')
+  await expect(help).toContainText('1 km radius')
+  await expect(help).toContainText('20 km radius')
+  await expect(help).toContainText('promises anonymity')
+  await expect(form).not.toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(help).toHaveCount(0)
+  await expect(form.getByRole('button', { name: 'Explain precision choices' })).toBeFocused()
+  await expect(options.nth(1)).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('device behavior lives in Settings and browser background sharing is visibly unavailable', async ({
@@ -267,8 +297,8 @@ test('configures a privacy-preserving location share', async ({ page }) => {
   await expect(page.locator('.dock-peers')).toContainText('Sharing 0 · Seeing 0')
   await openShareCreator(page)
 
-  const approximate = page.getByRole('button', { name: /Approximate/ })
-  const veryCoarse = page.getByRole('button', { name: /Very coarse/ })
+  const approximate = page.getByRole('button', { name: /Neighbourhood/ })
+  const veryCoarse = page.getByRole('button', { name: /City/ })
   const oneHour = page.getByRole('button', { name: '1 hour' })
   const oneViewer = page.getByRole('button', { name: '1', exact: true })
 
@@ -363,6 +393,7 @@ test('nests pending share-back under its peer and offers explicit name adoption'
       setup: () => () =>
         h(PeerListSheet, {
           filter: 'all',
+          paused: false,
           viewableIds: [],
           shareBackBusy: false,
           stoppedViewers: [],
@@ -470,6 +501,7 @@ test('peer list uses distinct main actions, one filter menu, and compact details
       setup: () => () =>
         h(PeerListSheet, {
           filter: state.filter,
+          paused: false,
           viewableIds: ['synthetic-incoming'],
           shareBackBusy: false,
           stoppedViewers: [],
@@ -523,14 +555,16 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   )
   const peer = list.locator('.peer-list__item').first()
   await expect(peer.getByRole('button', { name: 'Show River on map' })).toBeVisible()
+  await expect(peer.locator('.peer-list__summary')).toContainText('Sharing and viewing as My alias')
   expect(await peer.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false)
   await peer.getByRole('button', { name: 'Show River on map' }).click()
   expect(await peer.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false)
   await peer.locator('.peer-list__summary').click()
-  await expect(peer.locator('.peer-list__relationship')).toHaveCount(2)
+  await expect(peer.locator('.peer-list__direction')).toHaveCount(2)
   await expect(peer.getByRole('button', { name: 'Revoke link' })).toHaveCount(0)
   await peer.getByRole('button', { name: 'Manage link' }).click()
   await expect(peer.getByRole('button', { name: 'Revoke link' })).toBeVisible()
+  await expect(peer.getByRole('button', { name: 'Share back', exact: true })).toHaveCount(0)
   await list.getByRole('button', { name: 'Filter peers', exact: true }).click()
   await list.getByLabel('Show ended').check()
   await expect(list.locator('.peer-list__item')).toHaveCount(2)
@@ -548,6 +582,70 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   await expect(list.getByRole('button', { name: 'Filter peers', exact: true })).toBeFocused()
   expect(await list.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
   await page.screenshot({ path: test.info().outputPath('peer-list-layout.png') })
+})
+
+test('selected group scope lists a Local entry and offers local settings', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const vueModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+    if (!vueModuleUrl) throw new Error('Vue module was not loaded.')
+    const { createApp, h } = await import(/* @vite-ignore */ vueModuleUrl)
+    const { default: PeerListSheet } = await import('../src/components/PeerListSheet.vue')
+    const state = { local: false }
+    const container = document.createElement('div')
+    document.body.append(container)
+    createApp({
+      setup: () => () =>
+        h(PeerListSheet, {
+          filter: 'group',
+          paused: false,
+          viewableIds: ['synthetic-followed'],
+          limitedIds: ['synthetic-followed'],
+          groupScope: true,
+          shareBackBusy: false,
+          stoppedViewers: [],
+          oldShares: [],
+          oldFollowing: [],
+          shares: [],
+          following: [
+            {
+              shareId: 'synthetic-followed',
+              peerId: 'synthetic-peer',
+              localName: 'River',
+              displayName: 'River',
+              color: '#438ec9',
+              connected: true,
+              status: 'live',
+              saved: true,
+              expiresAt: null,
+              updatesReceived: 1,
+              returnPromptSeen: true,
+            },
+          ],
+          onOpenLocalSettings: () => {
+            state.local = true
+          },
+        }),
+    }).mount(container)
+    ;(window as typeof window & { groupScopeTest?: { local: boolean } }).groupScopeTest = state
+  })
+  const list = page.locator('.peer-list')
+  await expect(list).toHaveAttribute('aria-label', 'Selected group')
+  await expect(list.locator('.peer-list__local')).toContainText('Local')
+  await expect(list.locator('.peer-list__local')).toContainText('This device')
+  await list.getByRole('button', { name: 'Filter peers', exact: true }).click()
+  await expect(list.getByRole('button', { name: 'Selected group', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await list.getByRole('button', { name: 'Local', exact: true }).click()
+  expect(
+    await page.evaluate(
+      () => (window as typeof window & { groupScopeTest: { local: boolean } }).groupScopeTest.local,
+    ),
+  ).toBe(true)
 })
 
 test('filter menu floats above an empty peer list instead of being clipped', async ({ page }) => {
@@ -651,4 +749,76 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
   await setup.getByRole('button', { name: 'Save settings' }).focus()
   await page.keyboard.press('Tab')
   await expect(setup.getByRole('button', { name: 'Close settings' })).toBeFocused()
+})
+
+test('offers an Android app handoff on incoming links without starting own sharing', async ({
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.setTimeout(90_000)
+  test.skip(testInfo.project.name !== 'desktop')
+  if (!baseURL) throw new Error('A base URL is required.')
+  const sourceContext = await browser.newContext({
+    baseURL,
+    geolocation: { latitude: 48.1372, longitude: 11.5756 },
+    permissions: ['geolocation'],
+  })
+  const androidViewerContext = await browser.newContext({
+    baseURL,
+    userAgent:
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+    viewport: { width: 390, height: 844 },
+  })
+  const desktopViewerContext = await browser.newContext({ baseURL })
+  try {
+    const source = await sourceContext.newPage()
+    const androidViewer = await androidViewerContext.newPage()
+    const desktopViewer = await desktopViewerContext.newPage()
+    await source.goto('/')
+    await openShareCreator(source)
+    await source.getByRole('button', { name: '10', exact: true }).click()
+    await source.getByRole('button', { name: 'Create location link' }).click()
+    const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
+    await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
+
+    await androidViewer.goto(url)
+    const handoff = androidViewer.getByRole('region', {
+      name: 'Open in the Constellation app',
+    })
+    await expect(handoff).toBeVisible({ timeout: 30_000 })
+    await expect(handoff).toContainText('same link')
+    await expect(handoff).toContainText('approve this device again')
+    await expect(handoff.getByRole('button', { name: 'Open in app' })).toBeVisible()
+    await expect(handoff.getByRole('link', { name: 'Get the app' })).toHaveAttribute(
+      'href',
+      'https://github.com/yeus/constellation/releases/latest',
+    )
+    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toBeVisible()
+    expect(
+      await androidViewer.evaluate(
+        async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
+      ),
+    ).toBe('prompt')
+
+    await handoff.getByRole('button', { name: 'Continue in browser' }).click()
+    await expect(handoff).toHaveCount(0)
+    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toBeVisible()
+    await androidViewer.goto(url)
+    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toBeVisible({
+      timeout: 30_000,
+    })
+    await expect(handoff).toHaveCount(0)
+
+    await desktopViewer.goto(url)
+    await expect(desktopViewer.getByRole('region', { name: 'Location preview' })).toBeVisible({
+      timeout: 30_000,
+    })
+    await expect(
+      desktopViewer.getByRole('region', { name: 'Open in the Constellation app' }),
+    ).toHaveCount(0)
+  } finally {
+    await desktopViewerContext.close()
+    await androidViewerContext.close()
+    await sourceContext.close()
+  }
 })

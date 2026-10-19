@@ -6,15 +6,35 @@
         v-if="presentation.groups.length"
         class="location-map__group-areas"
         :viewBox="`0 0 ${presentation.width} ${presentation.height}`"
-        aria-hidden="true"
       >
         <circle
           v-for="group in presentation.groups"
           :key="group.key"
           class="location-map__group-area"
+          role="button"
+          tabindex="0"
+          :aria-label="`Show all ${group.members.length} peers in this group`"
           :cx="group.x"
           :cy="group.y"
           :r="group.radiusPx"
+          @click.stop="
+            emit(
+              'selectGroup',
+              group.members.map((member) => member.id),
+            )
+          "
+          @keydown.enter.prevent="
+            emit(
+              'selectGroup',
+              group.members.map((member) => member.id),
+            )
+          "
+          @keydown.space.prevent="
+            emit(
+              'selectGroup',
+              group.members.map((member) => member.id),
+            )
+          "
         />
       </svg>
       <div
@@ -22,6 +42,12 @@
         :key="group.key"
         class="location-map__group"
         :style="{ left: `${group.x}px`, top: `${group.y}px` }"
+        @click.stop="
+          emit(
+            'selectGroup',
+            group.members.map((member) => member.id),
+          )
+        "
       >
         <button
           v-for="member in group.members"
@@ -30,10 +56,10 @@
           type="button"
           :aria-label="
             member.isOwn
-              ? 'Center on my location'
+              ? 'Open settings for my location'
               : `Show ${member.label || 'shared location'} details`
           "
-          @click.stop="member.isOwn ? emit('centerOwn') : emit('select', member.id)"
+          @click.stop="member.isOwn ? emit('selectOwn') : emit('select', member.id)"
         >
           <PeerAvatar
             :name="member.isOwn ? 'Me' : member.label || 'Shared location'"
@@ -64,8 +90,8 @@
           v-for="location in visibleLargePeers"
           :key="location.id"
           type="button"
-          :aria-label="`Show ${location.label || 'shared location'} area on map`"
-          @click.stop="centerOn(location)"
+          :aria-label="`Show ${location.label || 'shared location'} details`"
+          @click.stop="emit('select', location.id)"
         >
           <PeerAvatar :name="location.label || 'Shared location'" :color="location.color" />
         </button>
@@ -127,12 +153,14 @@ const props = withDefaults(
     decluttering: MapDeclutteringPreferences
     pmtilesUrl?: string
     mapFamily?: MapFamily
+    cacheMaxBytes?: number
   }>(),
   { pmtilesUrl: DEFAULT_WORLD_PMTILES_URL, mapFamily: 'default' },
 )
 const emit = defineEmits<{
   select: [shareId: string]
-  centerOwn: []
+  selectOwn: []
+  selectGroup: [shareIds: string[]]
   ownAreaHidden: [hidden: boolean]
   areaOverflow: [shareIds: string[]]
   diagnostic: [entry: SessionLogInput]
@@ -244,8 +272,11 @@ const initialize = (): void => {
         map?.getLayer(id),
       )
       if (layers.length === 0) return
-      const id = map.queryRenderedFeatures(event.point, { layers })[0]?.properties?.id
-      if (typeof id === 'string') emit('select', id)
+      const feature = map.queryRenderedFeatures(event.point, { layers })[0]
+      const id = feature?.properties?.id
+      if (typeof id !== 'string') return
+      if (feature?.properties?.isOwn === true) emit('selectOwn')
+      else emit('select', id)
     })
     map.on('style.load', () => {
       if (map) {
@@ -427,6 +458,12 @@ onBeforeUnmount(() => {
   stroke-width: 2;
   stroke-dasharray: 6 3;
   vector-effect: non-scaling-stroke;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.location-map__group-area:focus-visible {
+  outline: 2px solid #438ec9;
+  outline-offset: 3px;
 }
 
 .location-map__group {

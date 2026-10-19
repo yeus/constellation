@@ -417,9 +417,7 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
     if (!vueModuleUrl || !maplibreModuleUrl)
       throw new Error('The map browser modules were not loaded.')
     const { createApp, h } = await import(/* @vite-ignore */ vueModuleUrl)
-    const maplibre = await import(/* @vite-ignore */ maplibreModuleUrl)
     const { default: LocationMap } = await import('../src/components/LocationMap.vue')
-    const { locationAreaBounds } = await import('../src/location/mapModel.ts')
     const labels = ['Ada North', 'Ben South', 'Cora East', 'Drew West', 'Eli Center', 'Faye Coast']
     const locations = labels.map((label, index) => ({
       id: `synthetic-peer-${index}`,
@@ -439,13 +437,8 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       zIndex: '9999',
     })
     document.body.append(container)
-    const cameraBounds: unknown[] = []
-    const originalFitBounds = maplibre.Map.prototype.fitBounds
-    maplibre.Map.prototype.fitBounds = function (bounds: unknown) {
-      cameraBounds.push(bounds)
-      return originalFitBounds.call(this, bounds)
-    }
     const overflowIds: string[][] = []
+    const selections: string[] = []
     const app = createApp({
       render: () =>
         h(LocationMap, {
@@ -458,6 +451,7 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
             markerCollisionDistancePx: 48,
           },
           onAreaOverflow: (ids: string[]) => overflowIds.push(ids),
+          onSelect: (id: string) => selections.push(id),
         }),
     })
     app.mount(container)
@@ -465,21 +459,15 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       areaStackTest?: {
         app: { unmount: () => void }
         container: HTMLElement
-        cameraBounds: unknown[]
-        expectedBounds: unknown
         overflowIds: string[][]
-        restoreFitBounds: () => void
+        selections: string[]
       }
     }
     testWindow.areaStackTest = {
       app,
       container,
-      cameraBounds,
-      expectedBounds: locationAreaBounds(locations[0]!),
       overflowIds,
-      restoreFitBounds: () => {
-        maplibre.Map.prototype.fitBounds = originalFitBounds
-      },
+      selections,
     }
   })
 
@@ -539,30 +527,25 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       ],
     ])
 
-  await stack.getByRole('button', { name: 'Show Ada North area on map' }).click()
-  const cameraBounds = await page.evaluate(() => {
-    const testWindow = window as typeof window & {
-      areaStackTest: { cameraBounds: unknown[]; expectedBounds: unknown }
-    }
-    return {
-      actual: testWindow.areaStackTest.cameraBounds,
-      expected: testWindow.areaStackTest.expectedBounds,
-    }
-  })
-  expect(cameraBounds.actual).toEqual([cameraBounds.expected])
+  await stack.getByRole('button', { name: 'Show Ada North details' }).click()
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { areaStackTest: { selections: string[] } }).areaStackTest
+          .selections,
+    ),
+  ).toEqual(['synthetic-peer-0'])
 
   await page.evaluate(() => {
     const testWindow = window as typeof window & {
       areaStackTest?: {
         app: { unmount: () => void }
         container: HTMLElement
-        restoreFitBounds: () => void
       }
     }
     const fixture = testWindow.areaStackTest
     if (!fixture) return
     fixture.app.unmount()
-    fixture.restoreFitBounds()
     fixture.container.remove()
     delete testWindow.areaStackTest
   })
@@ -738,6 +721,7 @@ test('selects self and peers independently in a group and paints only own point 
     Object.assign(container.style, { position: 'fixed', inset: '0', zIndex: '9999' })
     document.body.append(container)
     const selections: string[] = []
+    const groupSelections: string[][] = []
     const original = Map.prototype.project
     let pointFilter = (): unknown => undefined
     Map.prototype.project = function (...args: unknown[]) {
@@ -756,13 +740,15 @@ test('selects self and peers independently in a group and paints only own point 
             uncertaintyOverlapThreshold: 0.9,
             markerCollisionDistancePx: 18,
           },
-          onCenterOwn: () => selections.push('self'),
+          onSelectOwn: () => selections.push('own'),
           onSelect: (id: string) => selections.push(id),
+          onSelectGroup: (ids: string[]) => groupSelections.push(ids),
         }),
     })
     app.mount(container)
     ;(window as typeof window & { selfGroupTest: unknown }).selfGroupTest = {
       selections,
+      groupSelections,
       separate: () => {
         locations.value = locations.value.map((location) =>
           location.isOwn ? location : { ...location, longitude: 30 },
@@ -777,7 +763,7 @@ test('selects self and peers independently in a group and paints only own point 
     }
   })
   const root = page.locator('#self-group-test')
-  const self = root.getByRole('button', { name: 'Center on my location' })
+  const self = root.getByRole('button', { name: 'Open settings for my location' })
   await expect(self).toBeVisible()
   await expect(self).toHaveText('ME')
   await expect(self.locator('.peer-avatar')).toHaveCSS('color', 'rgb(247, 143, 59)')
@@ -789,7 +775,15 @@ test('selects self and peers independently in a group and paints only own point 
         (window as typeof window & { selfGroupTest: { selections: string[] } }).selfGroupTest
           .selections,
     ),
-  ).toEqual(['self', 'synthetic-peer'])
+  ).toEqual(['own', 'synthetic-peer'])
+  await root.getByRole('button', { name: /Show all 2 peers in this group/ }).press('Enter')
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { selfGroupTest: { groupSelections: string[][] } }).selfGroupTest
+          .groupSelections,
+    ),
+  ).toEqual([expect.arrayContaining(['synthetic-self', 'synthetic-peer'])])
   expect(
     await page.evaluate(() =>
       (

@@ -42,7 +42,10 @@ export const openPeerFilterMenu = async (page: Page): Promise<void> => {
 export const expandPeerDetails = async (peer: Locator): Promise<void> => {
   if (!(await peer.evaluate((element) => (element as HTMLDetailsElement).open)))
     await peer.locator('.peer-list__summary').click()
-  const details = peer.locator('.peer-list__advanced')
-  if (!(await details.evaluate((element) => (element as HTMLDetailsElement).open)))
-    await details.locator('summary').first().click()
+  const sections = peer.locator('.peer-list__section')
+  for (let index = 0; index < (await sections.count()); index += 1) {
+    const section = sections.nth(index)
+    if (!(await section.evaluate((element) => (element as HTMLDetailsElement).open)))
+      await section.locator(':scope > summary').click()
+  }
 }

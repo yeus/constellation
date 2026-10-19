@@ -12,7 +12,8 @@
         :map-family="mapFamily"
         @select="openFollowDetails"
         @area-overflow="openAreaPeers"
-        @center-own="centerOnOwnLocation"
+        @select-own="openSettings"
+        @select-group="openGroupPeers"
         @own-area-hidden="ownAreaHidden = $event"
         @diagnostic="sessionLog.record"
       />
@@ -360,6 +361,33 @@
       <p v-if="!runtimeState.canSave">
         Protected storage is unavailable on this device; preview only.
       </p>
+      <section v-if="showAppHandoff" class="app-handoff" aria-label="Open in the Constellation app">
+        <strong>Have the Constellation app?</strong>
+        <p>
+          Open this same link in the Android app. If you already previewed here, the sender may need
+          to approve this device again in the app.
+        </p>
+        <div class="preview-actions">
+          <button class="secondary-action" type="button" @click="openInviteInApp">
+            Open in app
+          </button>
+          <a
+            class="secondary-action"
+            href="https://github.com/yeus/constellation/releases/latest"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Get the app
+          </a>
+          <button class="secondary-action" type="button" @click="dismissAppHandoff">
+            Continue in browser
+          </button>
+        </div>
+        <p class="field-help">
+          Not installed yet? Install it, then reopen the original link. Your browser preview stays
+          available.
+        </p>
+      </section>
     </section>
 
     <section
@@ -518,6 +546,7 @@
       :viewable-ids="viewableIds"
       :selected-id="selectedFollowId"
       :limited-ids="areaPeerIds"
+      :group-scope="groupScope"
       :clear-old-busy="clearingOldPeers"
       :share-back-busy="creatingShare"
       :paused="sharingPaused"
@@ -525,6 +554,7 @@
       :revoke-all-busy="revokingAllShares"
       :peer-name-preferences="peerNamePreferences"
       @clear-old="clearOldPeers"
+      @open-local-settings="openSettings"
       @profile="setPeerNamePreferences"
       @adopt-name="adoptPeerName"
       @close="peerListOpen = false"
@@ -691,6 +721,7 @@ sessionLog.record({ level: 'info', event: 'app.started' })
 
 const isNative = '__TAURI_INTERNALS__' in window
 const showNativeAppHint = !isNative && /Android|Linux/i.test(navigator.userAgent)
+const isAndroidBrowser = !isNative && /Android/i.test(navigator.userAgent)
 const isAndroid = isNative && /Android/i.test(navigator.userAgent)
 const androidLocationApi = isAndroid ? createTauriAndroidLocationApi() : undefined
 const locationSource = createBrowserLocationSource({
@@ -900,7 +931,8 @@ const returnToBrowserDiagnostics = () => {
 const diagnosticsOpen = ref(false)
 const peerListOpen = ref(false)
 const areaPeerIds = ref<readonly string[]>()
-const peerListFilter = ref<'all' | 'sharing' | 'viewing' | 'both'>('all')
+const groupScope = ref(false)
+const peerListFilter = ref<'all' | 'sharing' | 'viewing' | 'both' | 'group'>('all')
 const followInputOpen = ref(false)
 const qrScannerOpen = ref(false)
 const canScanQr = Boolean(window.isSecureContext && navigator.mediaDevices)
@@ -914,6 +946,7 @@ const readyShare = ref<ShareSummary>()
 const readyShareIsReturn = ref(false)
 const invitationPending = ref(false)
 const invitationUrl = ref<string>()
+const previewInvite = ref<{ shareId: string; url: string }>()
 const browserLocationDeferred = ref(!isNative && window.location.hash.startsWith('#share='))
 const nicknamePrompt = ref<{ shareId: string; name: string }>()
 const shareBackPrompt = ref<{ shareId: string; name: string }>()
@@ -1191,6 +1224,47 @@ const activeFollowing = computed(() =>
   ),
 )
 const previewFollow = computed(() => activeFollowing.value.find((entry) => !entry.saved))
+const APP_HANDOFF_DISMISSED_KEY = 'constellation.app-handoff-dismissed'
+const readAppHandoffDismissed = (): readonly string[] => {
+  try {
+    const value: unknown = JSON.parse(
+      window.localStorage.getItem(APP_HANDOFF_DISMISSED_KEY) ?? '[]',
+    )
+    return Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string').slice(-50)
+      : []
+  } catch {
+    return []
+  }
+}
+const appHandoffDismissed = ref<readonly string[]>(readAppHandoffDismissed())
+const showAppHandoff = computed(
+  () =>
+    isAndroidBrowser &&
+    previewFollow.value !== undefined &&
+    previewInvite.value?.shareId === previewFollow.value.shareId &&
+    !appHandoffDismissed.value.includes(previewFollow.value.shareId),
+)
+const dismissAppHandoff = (): void => {
+  const shareId = previewInvite.value?.shareId
+  if (!shareId) return
+  appHandoffDismissed.value = [...new Set([...appHandoffDismissed.value, shareId])].slice(-50)
+  try {
+    window.localStorage.setItem(
+      APP_HANDOFF_DISMISSED_KEY,
+      JSON.stringify(appHandoffDismissed.value),
+    )
+  } catch {
+    // A dismissed prompt may reappear when storage is unavailable.
+  }
+  sessionLog.record({ level: 'info', event: 'sharing.app_handoff.dismissed' })
+}
+const openInviteInApp = (): void => {
+  const url = previewInvite.value?.url
+  if (!url) return
+  sessionLog.record({ level: 'info', event: 'sharing.app_handoff.launch' })
+  window.location.assign(url)
+}
 const comparisonOpen = ref(false)
 const openDeviceComparisons = (): void => {
   menuOpen.value = false
@@ -1437,6 +1511,7 @@ const openFollowInput = (): void => {
 }
 const openFollowing = (): void => {
   areaPeerIds.value = undefined
+  groupScope.value = false
   selectedFollowId.value = undefined
   peerListFilter.value = 'viewing'
   peerListOpen.value = true
@@ -1444,6 +1519,7 @@ const openFollowing = (): void => {
 }
 const openPeerList = (): void => {
   areaPeerIds.value = undefined
+  groupScope.value = false
   selectedFollowId.value = undefined
   peerListFilter.value = 'all'
   peerListOpen.value = true
@@ -1451,9 +1527,18 @@ const openPeerList = (): void => {
 }
 const openAreaPeers = (ids: string[]): void => {
   areaPeerIds.value = ids
+  groupScope.value = true
   peerListFilter.value = 'all'
   selectedFollowId.value = undefined
   peerListOpen.value = true
+}
+const openGroupPeers = (ids: string[]): void => {
+  areaPeerIds.value = ids
+  groupScope.value = true
+  peerListFilter.value = 'group'
+  selectedFollowId.value = undefined
+  peerListOpen.value = true
+  menuOpen.value = false
 }
 const openNewShare = (): void => {
   if (behaviorReviewRequired.value) {
@@ -1515,6 +1600,8 @@ const centerOnOwnLocation = (): void => {
 }
 const openFollowDetails = (shareId: string): void => {
   if (!runtimeState.value.following.some((entry) => entry.shareId === shareId)) return
+  groupScope.value = false
+  areaPeerIds.value = undefined
   selectedFollowId.value = shareId
   peerListFilter.value = 'viewing'
   peerListOpen.value = true
@@ -1731,6 +1818,8 @@ const previewInvitation = async (url: string): Promise<void> => {
   if (accepting.value) return
   accepting.value = true
   localError.value = ''
+  const shareId = parseShareInvitation(url).shareId
+  previewInvite.value = { shareId, url }
   try {
     await runtime.acceptShare(url, { saved: false })
     collapseActions()

@@ -1,7 +1,7 @@
 <template>
   <div class="sheet-backdrop share-backdrop" @click.self="emit('close')">
     <section
-      v-show="!privacyOpen"
+      v-show="!privacyOpen && !precisionHelpOpen"
       class="share-sheet share-sheet--create"
       role="dialog"
       aria-modal="true"
@@ -48,8 +48,30 @@
       </p>
 
       <fieldset>
-        <legend>Precision</legend>
+        <legend>
+          Precision
+          <button
+            ref="precisionHelpButton"
+            type="button"
+            class="precision-help"
+            aria-label="Explain precision choices"
+            aria-haspopup="dialog"
+            @click="precisionHelpOpen = true"
+          >
+            <CircleHelpIcon aria-hidden="true" />
+          </button>
+        </legend>
         <div class="choice-grid choice-grid--three">
+          <button
+            type="button"
+            class="choice"
+            :class="{ 'choice--selected': draft.precision === 'exact' }"
+            :aria-pressed="draft.precision === 'exact'"
+            @click="emit('precision', 'exact')"
+          >
+            <LocateIcon aria-hidden="true" /><strong>Exact</strong>
+            <span>No added blurring</span>
+          </button>
           <button
             type="button"
             class="choice"
@@ -57,7 +79,7 @@
             :aria-pressed="draft.precision === 'approximate'"
             @click="emit('precision', 'approximate')"
           >
-            <RadiusIcon aria-hidden="true" /><strong>Approximate</strong>
+            <RadiusIcon aria-hidden="true" /><strong>Neighbourhood</strong>
             <span>1 km radius</span>
           </button>
           <button
@@ -67,18 +89,8 @@
             :aria-pressed="draft.precision === 'very-coarse'"
             @click="emit('precision', 'very-coarse')"
           >
-            <AreaIcon aria-hidden="true" /><strong>Very coarse</strong>
+            <AreaIcon aria-hidden="true" /><strong>City</strong>
             <span>{{ VERY_COARSE_RADIUS_METERS / 1_000 }} km radius</span>
-          </button>
-          <button
-            type="button"
-            class="choice"
-            :class="{ 'choice--selected': draft.precision === 'exact' }"
-            :aria-pressed="draft.precision === 'exact'"
-            @click="emit('precision', 'exact')"
-          >
-            <LocateIcon aria-hidden="true" /><strong>Device accuracy</strong>
-            <span>No added blurring</span>
           </button>
         </div>
       </fieldset>
@@ -169,6 +181,7 @@
       </button>
     </section>
     <SharingPrivacyDialog v-if="privacyOpen" @close="closePrivacy" />
+    <PrecisionHelpDialog v-if="precisionHelpOpen" @close="closePrecisionHelp" />
   </div>
 </template>
 
@@ -178,6 +191,7 @@ import {
   LucideDices as Dices,
   LucideRadius as RadiusIcon,
   LucideCircleDashed as AreaIcon,
+  LucideCircleHelp as CircleHelpIcon,
   LucideLocateFixed as LocateIcon,
   LucideClock as ClockIcon,
   LucideInfinity as InfinityIcon,
@@ -185,6 +199,7 @@ import {
   LucideUsersRound as GroupIcon,
   LucideLockKeyhole as LockIcon,
 } from '@lucide/vue'
+import PrecisionHelpDialog from './PrecisionHelpDialog.vue'
 import SharingPrivacyDialog from './SharingPrivacyDialog.vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { LocationPrecision, ShareDraft, ShareDuration, ViewerCapacity } from '../shareDraft.ts'
@@ -211,6 +226,13 @@ const emit = defineEmits<{
 
 const privacyOpen = ref(false)
 const privacyButton = ref<HTMLButtonElement>()
+const precisionHelpOpen = ref(false)
+const precisionHelpButton = ref<HTMLButtonElement>()
+const closePrecisionHelp = async (): Promise<void> => {
+  precisionHelpOpen.value = false
+  await nextTick()
+  precisionHelpButton.value?.focus()
+}
 const closePrivacy = async (): Promise<void> => {
   privacyOpen.value = false
   await nextTick()
@@ -244,6 +266,32 @@ const viewerOptions: readonly { label: string; value: ViewerCapacity }[] = [
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.precision-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-left: 0.3rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--control-fill);
+  color: var(--muted);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.precision-help svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.precision-help:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .share-name input {

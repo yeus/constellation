@@ -447,7 +447,7 @@ test('share-back preserves its sender and options through cancellation and a fai
 
       await openReturnForm()
       await form.getByLabel('Share a name', { exact: true }).fill('Synthetic Return')
-      await form.getByRole('button', { name: /Very coarse/ }).click()
+      await form.getByRole('button', { name: /City/ }).click()
       await form.getByRole('button', { name: 'Until stopped', exact: true }).click()
       await expect(form.getByRole('button', { name: 'Create location link' })).toBeDisabled()
       await form.getByRole('button', { name: '8 hours', exact: true }).click()
@@ -468,7 +468,7 @@ test('share-back preserves its sender and options through cancellation and a fai
       await expect(form).toContainText('Sharing back to River')
       await expect(form.getByText('Viewers', { exact: true })).toHaveCount(0)
       await expect(form.getByLabel('Share a name', { exact: true })).toHaveValue('Synthetic Return')
-      await expect(form.getByRole('button', { name: /Very coarse/ })).toHaveAttribute(
+      await expect(form.getByRole('button', { name: /City/ })).toHaveAttribute(
         'aria-pressed',
         'true',
       )
@@ -515,6 +515,14 @@ test('share-back preserves its sender and options through cancellation and a fai
       })
       expect(result.expiresAt).toBeGreaterThanOrEqual(confirmedAt + 8 * 60 * 60 * 1_000)
       expect(result.expiresAt).toBeLessThan(Date.now() + 8 * 60 * 60 * 1_000)
+      const viewerPeers = await openPeerFilter(viewer, 'Viewing')
+      const riverPeer = viewerPeers.locator('.peer-list__item').filter({ hasText: 'River' })
+      await expandPeerDetails(riverPeer)
+      await expect(
+        riverPeer.getByRole('button', { name: 'Share back to River', exact: true }),
+      ).toHaveCount(0)
+      await riverPeer.getByRole('button', { name: 'Revoke link', exact: true }).click()
+      await expect.poll(readShareCount).toBe(0)
       await openReturnForm()
       const originalPeers = await openPeerFilter(first, 'Sharing')
       const originalPeer = originalPeers.locator('.peer-list__item').first()
@@ -524,7 +532,7 @@ test('share-back preserves its sender and options through cancellation and a fai
       await form.getByRole('button', { name: 'Create location link' }).click()
       await expect(viewer.locator('.toast')).toContainText('no longer available for sharing back')
       await expect(form).toContainText('Only this sender receives the private offer')
-      expect(await readShareCount()).toBe(1)
+      expect(await readShareCount()).toBe(0)
       await form.getByRole('button', { name: 'Close', exact: true }).click()
     },
     { afterFirstFollow: saveLocationPreview },
@@ -607,9 +615,9 @@ test('return consent applies to every viewer of the same original link', async (
     await secondReturnForm.click()
     const secondShareForm = secondViewer.getByRole('dialog', { name: 'Share your location' })
     await expect(secondShareForm).toContainText('Only this sender receives the private offer')
-    await secondShareForm.getByRole('button', { name: /Very coarse/ }).click()
+    await secondShareForm.getByRole('button', { name: /City/ }).click()
     await secondShareForm.getByRole('button', { name: '8 hours' }).click()
-    await expect(secondShareForm.getByRole('button', { name: /Very coarse/ })).toHaveAttribute(
+    await expect(secondShareForm.getByRole('button', { name: /City/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
@@ -643,7 +651,7 @@ test('return consent applies to every viewer of the same original link', async (
     const peerList = await openPeerList(source)
     await expect(peerList.locator('.peer-list__item')).toHaveCount(2)
     await openPeerFilterMenu(peerList.page())
-    await peerList.getByRole('button', { name: 'All' }).click()
+    await peerList.getByRole('button', { name: 'All', exact: true }).click()
     await expect(peerList.locator('.peer-list__item')).toHaveCount(2)
     await openPeerFilterMenu(peerList.page())
     await peerList.getByRole('button', { name: 'Both' }).click()
@@ -912,7 +920,7 @@ test('very coarse shares deliver a 20 km approximate area to a browser viewer', 
     const viewer = await viewerContext.newPage()
     await source.goto('/')
     await openShareCreator(source)
-    await source.getByRole('button', { name: /Very coarse/ }).click()
+    await source.getByRole('button', { name: /City/ }).click()
     await source.getByRole('button', { name: 'Create location link' }).click()
     const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
     const broadState = () =>

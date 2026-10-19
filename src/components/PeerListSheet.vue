@@ -32,6 +32,15 @@
             >
               {{ option.label }}
             </button>
+            <button
+              v-if="groupScope"
+              type="button"
+              :aria-pressed="filter === 'group'"
+              @click="selectFilter('group')"
+            >
+              Selected group
+            </button>
+            <button type="button" @click="emit('openLocalSettings')">Local</button>
             <label class="peer-list__ended-toggle">
               <input v-model="showEnded" type="checkbox" /> Show ended
             </label>
@@ -86,6 +95,15 @@
         Show all on map
       </button>
 
+      <div v-if="groupScope" class="peer-list__local">
+        <PeerAvatar name="Me" />
+        <span class="peer-list__local-name">Local</span>
+        <small class="peer-list__summary-context">This device</small>
+        <button type="button" class="peer-text-action" @click="emit('openLocalSettings')">
+          Settings
+        </button>
+      </div>
+
       <details
         v-for="peer in peers"
         :key="peer.key"
@@ -96,8 +114,8 @@
         <summary class="peer-list__summary">
           <PeerAvatar :name="peer.name" :waiting="peer.waiting" />
           <span class="peer-list__summary-name">{{ peer.name }}</span>
-          <small
-            >{{ peer.direction }} · {{ peerStatus(peer) }}
+          <small class="peer-list__summary-context">
+            {{ peerContext(peer) }} · {{ peerStatus(peer) }}
             <template v-if="peer.stopped.some(({ dismissed }) => !dismissed)">
               ·
               {{
@@ -130,92 +148,50 @@
         </summary>
 
         <div class="peer-list__details">
-          <div v-for="stopped in peer.stopped" :key="stopped.eventId" class="peer-history-item">
-            <strong>Stopped following</strong>
-            <span>Reported {{ new Date(stopped.recordedAt).toLocaleString() }}</span>
-            <button
-              v-if="!stopped.dismissed"
-              type="button"
-              class="peer-text-action"
-              @click="emit('dismissStopped', stopped.shareId, stopped.peerId)"
-            >
-              Dismiss
-            </button>
-          </div>
-          <div v-for="ended in peer.ended" :key="ended.key" class="peer-history-item">
-            <strong>{{ ended.name }}</strong>
-            <span
-              >{{ ended.kind === 'sharing' ? 'Shared' : 'Viewed' }} · {{ ended.reason }} ·
-              {{ new Date(ended.endedAt).toLocaleString() }}</span
-            >
-          </div>
-          <button
-            v-if="peer.peerId && advertisedName(peer) && advertisedName(peer) !== peer.name"
-            type="button"
-            class="peer-text-action"
-            :aria-label="`Review advertised name ${advertisedName(peer)}`"
-            @click="pendingAdoption = { peerId: peer.peerId, name: advertisedName(peer)! }"
-          >
-            Advertised name: {{ advertisedName(peer) }}
-          </button>
-          <div
-            v-for="connection in peer.shares"
-            :key="`compact:${connection.share.shareId}`"
-            class="peer-list__relationship"
-          >
-            <div>
-              <strong>Sharing with {{ peer.waiting ? 'a new viewer' : peer.name }}</strong>
-              <span
-                >{{ connection.share.precision }} ·
+          <div class="peer-list__directions">
+            <div v-if="peer.shares.length" class="peer-list__direction">
+              <span class="peer-list__direction-label">
                 {{
-                  connection.share.paused
-                    ? 'Paused'
-                    : connection.viewer
-                      ? 'Connected'
-                      : 'Waiting for a viewer'
+                  peer.waiting ? 'Your location to a new viewer' : `Your location to ${peer.name}`
                 }}
-                ·
-                {{
-                  connection.share.expiresAt === null
-                    ? 'until stopped'
-                    : remaining(connection.share.expiresAt) + ' left'
-                }}</span
-              >
+              </span>
+              <span class="peer-list__direction-status">{{ outgoingSummary(peer) }}</span>
             </div>
-            <button class="peer-text-action" type="button" @click="openDetails($event)">
-              Manage link
-            </button>
-          </div>
-          <div
-            v-for="follow in peer.following"
-            :key="`compact:${follow.shareId}`"
-            class="peer-list__relationship peer-list__relationship--viewing"
-          >
-            <div>
-              <strong>Viewing {{ peer.name }}</strong>
-              <span
-                >{{ statusLabel(follow.status) }} ·
-                {{
-                  follow.lastLocationAt
-                    ? elapsed(follow.lastLocationAt) + ' ago'
-                    : 'No location yet'
-                }}</span
-              >
+            <div v-if="peer.following.length" class="peer-list__direction">
+              <span class="peer-list__direction-label">{{ peer.name }}’s location to you</span>
+              <span class="peer-list__direction-status">{{ incomingSummary(peer) }}</span>
             </div>
-            <button
-              v-if="follow.status !== 'approval-pending' && follow.status !== 'denied'"
-              class="peer-text-action"
-              type="button"
-              :disabled="shareBackBusy"
-              :aria-label="`Share back to ${peer.name}`"
-              @click="emit('shareBack', follow.shareId)"
-            >
-              Share back
-            </button>
+            <div class="peer-list__direction-actions">
+              <button
+                v-if="peerShareIds(peer).length > 0"
+                class="peer-text-action"
+                type="button"
+                @click="openDetails($event)"
+              >
+                Manage link
+              </button>
+              <button
+                v-if="peerFollowIds(peer).length > 0"
+                class="peer-text-action"
+                type="button"
+                @click="emit('focusPeer', peerFollowIds(peer))"
+              >
+                Show on map
+              </button>
+            </div>
           </div>
-          <details class="peer-list__advanced">
-            <summary>Details</summary>
-            <div class="peer-list__advanced-content">
+          <details class="peer-list__section peer-list__section--names" open>
+            <summary>Names and privacy</summary>
+            <div class="peer-list__section-content">
+              <button
+                v-if="peer.peerId && advertisedName(peer) && advertisedName(peer) !== peer.name"
+                type="button"
+                class="peer-text-action"
+                :aria-label="`Review advertised name ${advertisedName(peer)}`"
+                @click="pendingAdoption = { peerId: peer.peerId, name: advertisedName(peer)! }"
+              >
+                Advertised name: {{ advertisedName(peer) }}
+              </button>
               <div v-if="peer.peerId" class="peer-link-item">
                 <button
                   v-if="editingProfile !== peer.peerId"
@@ -258,6 +234,39 @@
                   </div>
                 </template>
               </div>
+              <div
+                v-for="follow in peer.following"
+                :key="`name:${follow.shareId}`"
+                class="peer-link-item"
+              >
+                <strong>{{ follow.displayName || follow.localName || 'Shared location' }}</strong>
+                <div v-if="editingFollow === follow.shareId" class="peer-viewer-details__edit">
+                  <input
+                    v-model="nameDraft"
+                    type="text"
+                    maxlength="32"
+                    aria-label="Your nickname"
+                    @keyup.enter="saveFollowName(follow.shareId)"
+                    @keyup.esc="editingFollow = undefined"
+                  />
+                  <button type="button" @click="saveFollowName(follow.shareId)">Save</button>
+                  <button type="button" @click="editingFollow = undefined">Cancel</button>
+                </div>
+                <button
+                  v-else
+                  class="peer-text-action"
+                  type="button"
+                  :aria-label="`Edit nickname for ${peer.name}`"
+                  @click="editFollowName(follow.shareId, follow.localName)"
+                >
+                  <PencilLine aria-hidden="true" /> Edit nickname
+                </button>
+              </div>
+            </div>
+          </details>
+          <details class="peer-list__section peer-list__section--link">
+            <summary>Manage link</summary>
+            <div class="peer-list__section-content">
               <article
                 v-for="connection in peer.shares"
                 :key="`${connection.share.shareId}:${connection.viewer?.fingerprint ?? 'waiting'}`"
@@ -360,7 +369,14 @@
                   </button>
                 </div>
               </article>
-
+            </div>
+          </details>
+          <details
+            v-if="peer.following.length"
+            class="peer-list__section peer-list__section--connection"
+          >
+            <summary>Connection details</summary>
+            <div class="peer-list__section-content">
               <article
                 v-for="follow in peer.following"
                 :key="follow.shareId"
@@ -391,26 +407,19 @@
                     follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt)
                   }}</span
                 >
-                <div v-if="editingFollow === follow.shareId" class="peer-viewer-details__edit">
-                  <input
-                    v-model="nameDraft"
-                    type="text"
-                    maxlength="32"
-                    aria-label="Your nickname"
-                    @keyup.enter="saveFollowName(follow.shareId)"
-                    @keyup.esc="editingFollow = undefined"
-                  />
-                  <button type="button" @click="saveFollowName(follow.shareId)">Save</button>
-                  <button type="button" @click="editingFollow = undefined">Cancel</button>
-                </div>
                 <button
-                  v-else
+                  v-if="
+                    !hasOutgoingGrant(peer) &&
+                    follow.status !== 'approval-pending' &&
+                    follow.status !== 'denied'
+                  "
                   class="peer-text-action"
                   type="button"
-                  :aria-label="`Edit nickname for ${peer.name}`"
-                  @click="editFollowName(follow.shareId, follow.localName)"
+                  :disabled="shareBackBusy"
+                  :aria-label="`Share back to ${peer.name}`"
+                  @click="emit('shareBack', follow.shareId)"
                 >
-                  <PencilLine aria-hidden="true" /> Edit nickname
+                  Share back
                 </button>
                 <div class="peer-link-item__colors" aria-label="Location color">
                   <button
@@ -427,6 +436,7 @@
                   <button
                     v-if="viewableIds.includes(follow.shareId)"
                     type="button"
+                    :aria-label="`Show ${follow.displayName || follow.localName || 'shared location'} on map`"
                     @click="emit('focus', follow.shareId)"
                   >
                     Show on map
@@ -439,6 +449,34 @@
                   </button>
                 </div>
               </article>
+            </div>
+          </details>
+          <details
+            v-if="peer.ended.length || peer.stopped.length"
+            class="peer-list__section peer-list__section--ended"
+            :open="peer.stopped.some(({ dismissed }) => !dismissed)"
+          >
+            <summary>Ended history</summary>
+            <div class="peer-list__section-content">
+              <div v-for="stopped in peer.stopped" :key="stopped.eventId" class="peer-history-item">
+                <strong>Stopped following</strong>
+                <span>Reported {{ new Date(stopped.recordedAt).toLocaleString() }}</span>
+                <button
+                  v-if="!stopped.dismissed"
+                  type="button"
+                  class="peer-text-action"
+                  @click="emit('dismissStopped', stopped.shareId, stopped.peerId)"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <div v-for="ended in peer.ended" :key="ended.key" class="peer-history-item">
+                <strong>{{ ended.name }}</strong>
+                <span
+                  >{{ ended.kind === 'sharing' ? 'Shared' : 'Viewed' }} · {{ ended.reason }} ·
+                  {{ new Date(ended.endedAt).toLocaleString() }}</span
+                >
+              </div>
             </div>
           </details>
         </div>
@@ -492,7 +530,7 @@ import { canClearPeerRecord, protectActivePeerHistory } from '../sharing/peerHis
 import type { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import { FOLLOW_COLORS, type FollowSummary, type ShareSummary } from '../sharing/sharingRuntime.ts'
 
-type PeerFilter = 'all' | 'sharing' | 'viewing' | 'both'
+type PeerFilter = 'all' | 'sharing' | 'viewing' | 'both' | 'group'
 type PeerLink = { share: ShareSummary; viewer?: NonNullable<ShareSummary['viewers']>[number] }
 type PeerEntry = {
   key: string
@@ -501,7 +539,6 @@ type PeerEntry = {
   following: FollowSummary[]
   name: string
   color: string
-  direction: string
   waiting: boolean
   stopped: StoppedViewerRecord[]
   ended: {
@@ -520,6 +557,7 @@ const props = defineProps<{
   filter: PeerFilter
   viewableIds: readonly string[]
   limitedIds?: readonly string[]
+  groupScope?: boolean
   selectedId?: string
   clearOldBusy?: boolean
   shareBackBusy: boolean
@@ -549,6 +587,7 @@ const emit = defineEmits<{
   shareLocation: []
   togglePause: []
   revokeAll: []
+  openLocalSettings: []
   focusPeer: [shareIds: string[]]
   filter: [filter: PeerFilter]
   dismissStopped: [shareId: string, peerId: string]
@@ -573,7 +612,13 @@ const filters: readonly { value: PeerFilter; label: string }[] = [
   { value: 'both', label: 'Both' },
 ]
 const dialogName = computed(() =>
-  props.filter === 'sharing' ? 'Active shares' : props.filter === 'viewing' ? 'Following' : 'Peers',
+  props.filter === 'sharing'
+    ? 'Active shares'
+    : props.filter === 'viewing'
+      ? 'Following'
+      : props.filter === 'group'
+        ? 'Selected group'
+        : 'Peers',
 )
 const filterMenu = ref<HTMLDetailsElement>()
 const revokeAllConfirming = ref(false)
@@ -651,13 +696,11 @@ const hasClearableHistory = computed(() => {
 const openDetails = (event: Event): void => {
   const target = event.currentTarget
   if (!(target instanceof HTMLElement)) return
-  const details = target
-    .closest('.peer-list__item')
-    ?.querySelector<HTMLDetailsElement>('.peer-list__advanced')
-  if (details) {
-    details.open = true
-    details.querySelector('summary')?.focus()
-  }
+  const item = target.closest('.peer-list__item')
+  item?.querySelectorAll<HTMLDetailsElement>('.peer-list__section').forEach((section) => {
+    section.open = true
+  })
+  item?.querySelector<HTMLElement>('.peer-list__section--link summary')?.focus()
 }
 const showEnded = ref(false)
 const totalConnectedViewers = computed(() =>
@@ -675,7 +718,6 @@ const peers = computed(() => {
       following: [],
       name: 'Unknown peer',
       color: '#438ec9',
-      direction: '',
       waiting: false,
       stopped: [],
       ended: [],
@@ -761,18 +803,6 @@ const peers = computed(() => {
         entry.shares.every(({ viewer }) => !viewer) &&
         !entry.following.length
       entry.color = entry.following[0]?.color ?? '#438ec9'
-      const sharing = entry.shares.length > 0
-      const viewing = entry.following.length > 0
-      entry.direction =
-        sharing && viewing
-          ? 'Sharing and viewing'
-          : sharing
-            ? 'Sharing'
-            : viewing
-              ? 'Viewing'
-              : entry.stopped.length
-                ? 'Stopped following'
-                : 'Ended'
       return entry
     })
     .filter((entry) => {
@@ -836,6 +866,61 @@ const peerStatus = (peer: PeerEntry): string => {
   return peer.stopped.some(({ dismissed }) => !dismissed)
     ? 'Stopped following'
     : (peer.following[0]?.status ?? 'Ended')
+}
+const peerShareIds = (peer: PeerEntry): string[] => peer.shares.map(({ share }) => share.shareId)
+const peerFollowIds = (peer: PeerEntry): string[] =>
+  peer.following
+    .filter((follow) => props.viewableIds.includes(follow.shareId))
+    .map((follow) => follow.shareId)
+const hasOutgoingGrant = (peer: PeerEntry): boolean =>
+  peer.peerId !== undefined && peer.shares.length > 0
+const outgoingAdvertisedNames = (peer: PeerEntry): string[] => {
+  const names = new Set<string>()
+  for (const { share } of peer.shares) if (share.name) names.add(share.name)
+  const preference = props.peerNamePreferences?.find(({ peerId }) => peerId === peer.peerId)
+  if (preference?.sharedName) names.add(preference.sharedName)
+  return [...names]
+}
+const summarizedNames = (names: readonly string[]): string => {
+  if (names.length === 0) return ''
+  if (names.length === 1) return names[0]!
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names[0]} and ${names.length - 1} more`
+}
+const peerContext = (peer: PeerEntry): string => {
+  const sharing = peer.shares.length > 0
+  const viewing = peer.following.length > 0
+  const names = summarizedNames(outgoingAdvertisedNames(peer))
+  if (!sharing && !viewing) return peer.stopped.length ? 'Stopped following' : 'Ended'
+  if (sharing && viewing) return names ? `Sharing and viewing as ${names}` : 'Sharing and viewing'
+  if (sharing) return names ? `Sharing as ${names}` : 'Sharing'
+  return 'Viewing'
+}
+const precisionLabel = (precision: ShareSummary['precision']): string =>
+  precision === 'very-coarse' ? 'City' : precision === 'approximate' ? 'Neighbourhood' : 'Exact'
+const outgoingSummary = (peer: PeerEntry): string => {
+  const pieces: string[] = []
+  const precisions = [...new Set(peer.shares.map(({ share }) => precisionLabel(share.precision)))]
+  if (precisions.length) pieces.push(precisions.join(', '))
+  if (peer.shares.some(({ share }) => share.paused)) pieces.push('Paused')
+  if (peer.waiting) pieces.push('Waiting for a viewer')
+  else {
+    const viewers = peer.shares.reduce((count, { share }) => count + share.viewerCount, 0)
+    if (viewers) pieces.push(`${viewers} connected`)
+  }
+  const expiries = peer.shares
+    .map(({ share }) => share.expiresAt)
+    .filter((expiry): expiry is number => expiry !== null)
+  pieces.push(expiries.length ? `${remaining(Math.min(...expiries))} left` : 'until stopped')
+  return pieces.join(' · ')
+}
+const incomingSummary = (peer: PeerEntry): string => {
+  const follow = peer.following[0]
+  if (!follow) return ''
+  const age = follow.lastLocationAt
+    ? `Updated ${elapsed(follow.lastLocationAt)} ago`
+    : 'No location yet'
+  return `${statusLabel(follow.status)} · ${age}`
 }
 const expandedRelationshipIds = ref<ReadonlySet<string>>(new Set())
 const collapsedSelectedFollowIds = ref<ReadonlySet<string>>(new Set())
@@ -1074,43 +1159,60 @@ const remaining = (timestamp: number): string => {
   color: var(--muted);
   font-size: 0.75rem;
 }
-.peer-list__relationship {
+.peer-list__directions {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem 0.65rem;
+  border-radius: 0.45rem;
+  background: var(--control-fill);
+}
+.peer-list__direction {
+  display: grid;
+  gap: 0.15rem;
+}
+.peer-list__direction-label {
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.peer-list__direction-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.peer-list__direction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.peer-list__local {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.6rem 0.65rem;
-  border-left: 2px solid var(--accent);
-  background: var(--control-fill);
-  border-radius: 0.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  margin-bottom: 0.5rem;
 }
-.peer-list__relationship--viewing {
-  border-left-color: #438ec9;
+.peer-list__local .peer-text-action {
+  margin-left: auto;
 }
-.peer-list__relationship > div {
-  display: grid;
-  gap: 0.2rem;
+.peer-list__local-name {
+  font-weight: 650;
 }
-.peer-list__relationship strong {
-  font-size: 0.85rem;
-}
-.peer-list__relationship span {
+.peer-list__local .peer-list__summary-context {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
 }
-.peer-list__relationship button {
-  flex-shrink: 0;
-  color: var(--text);
-}
-.peer-list__advanced > summary {
+.peer-list__section > summary {
   cursor: pointer;
   font-size: 0.85rem;
+  font-weight: 650;
   padding: 0.6rem 0;
-  color: var(--muted);
 }
-.peer-list__advanced-content {
+.peer-list__section-content {
   display: grid;
   gap: 0.3rem;
+  padding-left: 0.5rem;
+  padding-bottom: 0.3rem;
 }
 .peer-list__ended-toggle {
   display: flex;
