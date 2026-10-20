@@ -18,6 +18,12 @@ const proofMessage = (input: RedemptionProofInput): Uint8Array =>
     ].join('\0'),
   )
 
+const signHmac = async (secret: Uint8Array, message: Uint8Array): Promise<string> => {
+  const key = await importHmacKey(secret, ['sign'])
+  const signature = await crypto.subtle.sign('HMAC', key, Uint8Array.from(message).buffer)
+  return bytesToBase64Url(new Uint8Array(signature))
+}
+
 const importHmacKey = (secret: Uint8Array, usage: KeyUsage[]) =>
   crypto.subtle.importKey(
     'raw',
@@ -30,14 +36,7 @@ const importHmacKey = (secret: Uint8Array, usage: KeyUsage[]) =>
 export const createRedemptionProof = async (
   secret: Uint8Array,
   input: RedemptionProofInput,
-): Promise<string> => {
-  const key = await importHmacKey(secret, ['sign'])
-  return bytesToBase64Url(
-    new Uint8Array(
-      await crypto.subtle.sign('HMAC', key, Uint8Array.from(proofMessage(input)).buffer),
-    ),
-  )
-}
+): Promise<string> => signHmac(secret, proofMessage(input))
 
 export const verifyRedemptionProof = async (
   secret: Uint8Array,
@@ -81,14 +80,7 @@ const stopNoticeMessage = (input: StopNoticeProofInput): Uint8Array =>
 export const createStopNoticeProof = async (
   secret: Uint8Array,
   input: StopNoticeProofInput,
-): Promise<string> => {
-  const key = await importHmacKey(secret, ['sign'])
-  return bytesToBase64Url(
-    new Uint8Array(
-      await crypto.subtle.sign('HMAC', key, Uint8Array.from(stopNoticeMessage(input)).buffer),
-    ),
-  )
-}
+): Promise<string> => signHmac(secret, stopNoticeMessage(input))
 
 export const verifyStopNoticeProof = async (
   secret: Uint8Array,

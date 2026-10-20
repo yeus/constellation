@@ -1,4 +1,4 @@
-import type { ShareSummary } from './sharingRuntime.ts'
+import type { ShareSummary } from './sharingContracts.ts'
 
 // Android service presence is authoritative when a source share is handed over.
 export const mergeShareSummaries = (

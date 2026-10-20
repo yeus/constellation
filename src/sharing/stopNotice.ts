@@ -5,18 +5,8 @@ import { base64UrlToBytes } from './encoding.ts'
 
 export const STOP_NOTICE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
-export const recordStoppedViewer = async (
-  history: Map<string, StoppedViewerRecord>,
-  record: Omit<StoppedViewerRecord, 'recordedAt' | 'dismissed'>,
-  persist: () => Promise<void>,
-  now: number = Date.now(),
-): Promise<number> => {
-  const key = JSON.stringify([record.shareId, record.peerId])
-  const previous = history.get(key)
-  if (previous?.eventId === record.eventId) return previous.recordedAt
-  const seen = previous?.recentEvents?.find(({ eventId }) => eventId === record.eventId)
-  if (seen) return seen.recordedAt
-  const recentEvents = previous
+const recentStopEvents = (previous: StoppedViewerRecord | undefined) =>
+  previous
     ? [
         ...(previous.recentEvents ?? []),
         {
@@ -25,7 +15,14 @@ export const recordStoppedViewer = async (
         },
       ].slice(-16)
     : undefined
-  const before = new Map(history)
+
+const rememberStoppedViewer = (
+  history: Map<string, StoppedViewerRecord>,
+  record: Omit<StoppedViewerRecord, 'recordedAt' | 'dismissed'>,
+  recentEvents: StoppedViewerRecord['recentEvents'],
+  now: number,
+) => {
+  const key = JSON.stringify([record.shareId, record.peerId])
   history.delete(key)
   history.set(key, {
     shareId: record.shareId,
@@ -38,11 +35,33 @@ export const recordStoppedViewer = async (
     const oldest = history.keys().next().value
     if (oldest) history.delete(oldest)
   }
+}
+
+const restoreStoppedHistory = (
+  history: Map<string, StoppedViewerRecord>,
+  before: ReadonlyMap<string, StoppedViewerRecord>,
+) => {
+  history.clear()
+  for (const [key, entry] of before) history.set(key, entry)
+}
+
+export const recordStoppedViewer = async (
+  history: Map<string, StoppedViewerRecord>,
+  record: Omit<StoppedViewerRecord, 'recordedAt' | 'dismissed'>,
+  persist: () => Promise<void>,
+  now: number = Date.now(),
+): Promise<number> => {
+  const key = JSON.stringify([record.shareId, record.peerId])
+  const previous = history.get(key)
+  if (previous?.eventId === record.eventId) return previous.recordedAt
+  const seen = previous?.recentEvents?.find(({ eventId }) => eventId === record.eventId)
+  if (seen) return seen.recordedAt
+  const before = new Map(history)
+  rememberStoppedViewer(history, record, recentStopEvents(previous), now)
   try {
     await persist()
   } catch (error) {
-    history.clear()
-    for (const [oldKey, entry] of before) history.set(oldKey, entry)
+    restoreStoppedHistory(history, before)
     throw error
   }
   return now

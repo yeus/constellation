@@ -1,9 +1,10 @@
-import type { FollowSummary, ShareSummary } from './sharingRuntime.ts'
+import type {
+  FollowSummary,
+  PeerHistoryProtection,
+  ShareSummary,
+} from './sharingContracts.ts'
 
-export interface PeerHistoryProtection {
-  readonly peerIds: readonly string[]
-  readonly shareIds: readonly string[]
-}
+export type { PeerHistoryProtection } from './sharingContracts.ts'
 
 export const protectActivePeerHistory = (
   shares: readonly Pick<ShareSummary, 'shareId' | 'recipientPeerId' | 'viewers'>[],

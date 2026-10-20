@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { countPeerPaths } from './networkPeerCounts.ts'
-import type { NetworkDiagnostics } from './sharingRuntime.ts'
+import type { NetworkDiagnostics } from './sharingContracts.ts'
 
 const make = (
   peerId: string,

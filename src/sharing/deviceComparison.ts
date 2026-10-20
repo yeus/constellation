@@ -103,15 +103,14 @@ const verify = async (
     encode(['constellation-device-comparison-v1', domain, ...values]),
   )
 }
+const commitmentMessage = (binding: ComparisonBinding, random: string) =>
+  encode(['constellation-device-commit-v1', ...identity(binding), random])
+
+const sha256 = async (bytes: Uint8Array): Promise<Uint8Array> =>
+  new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer))
+
 const commitmentFor = async (binding: ComparisonBinding, random: string) =>
-  bytesToBase64Url(
-    new Uint8Array(
-      await crypto.subtle.digest(
-        'SHA-256',
-        encode(['constellation-device-commit-v1', ...identity(binding), random]),
-      ),
-    ),
-  )
+  bytesToBase64Url(await sha256(commitmentMessage(binding, random)))
 
 // Rejection sampling avoids modulo bias over the 26^4 comparison space.
 export const comparisonLetters = async (
@@ -167,7 +166,7 @@ export const createComparisonCommit = async (secret: Uint8Array, binding: Compar
   }
 }
 
-export const createComparisonResponder = (dependencies: {
+type ComparisonDependencies = {
   authorize: (shareId: string) => Promise<{ binding: ComparisonBinding; secret: Uint8Array }>
   reserve: (binding: ComparisonBinding) => Promise<void>
   now: () => number
@@ -177,71 +176,96 @@ export const createComparisonResponder = (dependencies: {
     letters: string
     expiresAt: number
   }) => void
-}) => {
-  let used = false
-  let cancelled = false
-  let pending:
-    | {
-        binding: ComparisonBinding
-        secret: Uint8Array
-        commitment: string
-        challenge: string
-        expiresAt: number
-      }
-    | undefined
+}
+
+type PendingComparison = {
+  binding: ComparisonBinding
+  secret: Uint8Array
+  commitment: string
+  challenge: string
+  expiresAt: number
+}
+
+type ComparisonResponderState = {
+  used: boolean
+  cancelled: boolean
+  pending?: PendingComparison
+}
+
+const commitComparison = async (
+  state: ComparisonResponderState,
+  dependencies: ComparisonDependencies,
+  input: z.output<typeof commitRequest>,
+) => {
+  if (state.used || state.cancelled) throw new Error('Device comparison denied.')
+  state.used = true
+  const request = commitRequest.parse({
+    shareId: input.shareId,
+    commitment: input.commitment,
+    proof: input.proof,
+  })
+  const { binding, secret } = await dependencies.authorize(request.shareId)
+  if (
+    !(await verify(secret, 'commit', [...identity(binding), request.commitment], request.proof))
+  ) {
+    throw new Error('Device comparison denied.')
+  }
+  await dependencies.reserve(binding)
+  if (state.cancelled) throw new Error('Device comparison denied.')
+  const challenge = nonce()
+  const expiresAt = dependencies.now() + COMPARISON_TTL_MS
+  state.pending = { binding, secret, commitment: request.commitment, challenge, expiresAt }
+  return {
+    challenge,
+    expiresAt,
+    proof: await comparisonProof(secret, 'challenge', [
+      ...identity(binding),
+      request.commitment,
+      challenge,
+      expiresAt,
+    ]),
+  }
+}
+
+const revealComparison = async (
+  state: ComparisonResponderState,
+  dependencies: ComparisonDependencies,
+  input: z.output<typeof revealRequest>,
+) => {
+  const active = state.pending
+  state.pending = undefined
+  if (!active || state.cancelled || dependencies.now() >= active.expiresAt) {
+    throw new Error('Device comparison denied.')
+  }
+  const request = revealRequest.parse({ nonce: input.nonce, proof: input.proof })
+  const { binding, secret, commitment, challenge, expiresAt } = active
+  await dependencies.authorize(binding.shareId)
+  const transcript = [...identity(binding), commitment, challenge, expiresAt, request.nonce]
+  if (
+    commitment !== (await commitmentFor(binding, request.nonce)) ||
+    !(await verify(secret, 'reveal', transcript, request.proof))
+  ) {
+    throw new Error('Device comparison denied.')
+  }
+  const letters = await comparisonLetters(secret, transcript)
+  if (state.cancelled || dependencies.now() >= expiresAt) {
+    throw new Error('Device comparison denied.')
+  }
+  dependencies.complete({ binding, challenge, letters, expiresAt })
+  return { proof: await comparisonProof(secret, 'complete', transcript) }
+}
+
+export const createComparisonResponder = (dependencies: ComparisonDependencies) => {
+  const state: ComparisonResponderState = { used: false, cancelled: false }
   return {
     cancel: () => {
-      cancelled = true
-      pending = undefined
+      state.cancelled = true
+      state.pending = undefined
     },
-    commit: async (input: z.output<typeof commitRequest>) => {
-      if (used || cancelled) throw new Error('Device comparison denied.')
-      used = true
-      const request = commitRequest.parse({
-        shareId: input.shareId,
-        commitment: input.commitment,
-        proof: input.proof,
-      })
-      const { binding, secret } = await dependencies.authorize(request.shareId)
-      if (
-        !(await verify(secret, 'commit', [...identity(binding), request.commitment], request.proof))
-      )
-        throw new Error('Device comparison denied.')
-      await dependencies.reserve(binding)
-      if (cancelled) throw new Error('Device comparison denied.')
-      const challenge = nonce()
-      const expiresAt = dependencies.now() + COMPARISON_TTL_MS
-      pending = { binding, secret, commitment: request.commitment, challenge, expiresAt }
-      return {
-        challenge,
-        expiresAt,
-        proof: await comparisonProof(secret, 'challenge', [
-          ...identity(binding),
-          request.commitment,
-          challenge,
-          expiresAt,
-        ]),
-      }
-    },
-    reveal: async (input: z.output<typeof revealRequest>) => {
-      const active = pending
-      pending = undefined
-      if (!active || cancelled || dependencies.now() >= active.expiresAt)
-        throw new Error('Device comparison denied.')
-      const request = revealRequest.parse({ nonce: input.nonce, proof: input.proof })
-      const { binding, secret, commitment, challenge, expiresAt } = active
-      await dependencies.authorize(binding.shareId)
-      const transcript = [...identity(binding), commitment, challenge, expiresAt, request.nonce]
-      if (
-        commitment !== (await commitmentFor(binding, request.nonce)) ||
-        !(await verify(secret, 'reveal', transcript, request.proof))
-      )
-        throw new Error('Device comparison denied.')
-      const letters = await comparisonLetters(secret, transcript)
-      if (cancelled || dependencies.now() >= expiresAt) throw new Error('Device comparison denied.')
-      dependencies.complete({ binding, challenge, letters, expiresAt })
-      return { proof: await comparisonProof(secret, 'complete', transcript) }
-    },
+    commit: (input: z.output<typeof commitRequest>) =>
+      commitComparison(state, dependencies, input),
+    reveal: (input: z.output<typeof revealRequest>) =>
+      revealComparison(state, dependencies, input),
   }
 }
 

@@ -1,4 +1,4 @@
-import type { NetworkDiagnostics } from './sharingRuntime.ts'
+import type { NetworkDiagnostics } from './sharingContracts.ts'
 
 export interface PeerPathCounts {
   readonly direct: number

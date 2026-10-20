@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mergeShareSummaries, hasNewShareRecipient } from './sharePresentation.ts'
-import type { ShareSummary } from './sharingRuntime.ts'
+import type { ShareSummary } from './sharingContracts.ts'
 
 test('background presence replaces duplicate foreground summaries without hiding distinct shares', () => {
   const share: ShareSummary = {

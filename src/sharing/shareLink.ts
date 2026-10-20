@@ -4,11 +4,12 @@ import { peerIdFromPrivateKey, peerIdFromString } from '@libp2p/peer-id'
 
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { decodeShareCapability, encodeShareCapability } from './shareLinkCodec.ts'
+import type { ShareCapability } from './sharingContracts.ts'
 
 export const SHARE_LINK_VERSION = 1 as const
 export const MAX_SHARE_FRAGMENT_LENGTH = 1_800
 
-const ShareCapabilitySchema = z
+const ShareCapabilitySchema: z.ZodType<ShareCapability> = z
   .object({
     v: z.literal(SHARE_LINK_VERSION),
     shareId: z.string().min(16).max(64),
@@ -21,7 +22,7 @@ const ShareCapabilitySchema = z
   })
   .strict()
 
-export type ShareCapability = z.output<typeof ShareCapabilitySchema>
+export type { ShareCapability } from './sharingContracts.ts'
 
 export const returnOwnerMessage = (shareId: string, sourcePeerId: string): Uint8Array =>
   new TextEncoder().encode(`constellation-return-owner-v1:${shareId}:${sourcePeerId}`)

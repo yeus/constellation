@@ -80,11 +80,7 @@ test('restores directional name consent and private association only from encryp
   assert.equal(parsePrivateState(state).peerNamePreferences, undefined)
 })
 
-test('retains offline stop notices and recipient binding in protected state across reload', async () => {
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
-    'encrypt',
-    'decrypt',
-  ])
+const stopNoticeFixture = () => {
   const pending = {
     shareId: 'synthetic-stop-share-id',
     sourcePeerId: 'synthetic-source-peer',
@@ -109,6 +105,15 @@ test('retains offline stop notices and recipient binding in protected state acro
     recordedAt: 2_000,
     recentEvents: [{ eventId: pending.eventId, recordedAt: 1_000 }],
   }
+  return { pending, ended, stopped }
+}
+
+test('retains offline stop notices and recipient binding in protected state across reload', async () => {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ])
+  const { pending, ended, stopped } = stopNoticeFixture()
   const encrypted = await encryptPrivateState(
     {
       ...state,

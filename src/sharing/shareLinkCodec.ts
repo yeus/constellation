@@ -4,7 +4,7 @@ import { unzlibSync, zlibSync } from 'fflate'
 import { decode as decodeMultihash } from 'multiformats/hashes/digest'
 
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
-import type { ShareCapability } from './shareLink.ts'
+import type { ShareCapability } from './sharingContracts.ts'
 
 const MAX_PACKED_BYTES = 4_096
 
