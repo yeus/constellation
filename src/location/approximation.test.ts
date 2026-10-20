@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { LOCATION_PROFILE_V1, type LocationObservationV1 } from './locationObservation.ts'
-import { circleOverlapRatio, distanceMeters, projectApproximateLocation } from './approximation.ts'
+import {
+  circleOverlapRatio,
+  distanceMeters,
+  projectApproximateLocation,
+  type ApproximationState,
+} from './approximation.ts'
 
 const exactObservation = (
   latitude: number,
@@ -139,14 +144,9 @@ test('city-sized areas return toward the preset after a temporary accuracy enlar
   )
 })
 
-test('keeps jitter inside one region and preserves containment across a movement sweep', () => {
-  let state = projectApproximateLocation(
-    exactObservation(32.7157, -117.1611, 8),
-    undefined,
-    randomValues(0.2, 0.3, 0.4),
-  ).state
+const assertJitterSweep = (initial: ApproximationState) => {
+  let state = initial
   const first = state
-
   for (let index = 1; index <= 20; index += 1) {
     const jitter = index % 2 === 0 ? 0.00005 : -0.00005
     const result = projectApproximateLocation(
@@ -166,7 +166,11 @@ test('keeps jitter inside one region and preserves containment across a movement
   }
   assert.equal(state.latitude, first.latitude)
   assert.equal(state.longitude, first.longitude)
+  return state
+}
 
+const assertMovementSweep = (initial: ApproximationState) => {
+  let state = initial
   for (let index = 0; index < 8; index += 1) {
     const previous = state
     const moved = exactObservation(32.73 + index * 0.01, -117.1611, 25, 30 + index)
@@ -185,6 +189,15 @@ test('keeps jitter inside one region and preserves containment across a movement
     )
     assert.ok(circleOverlapRatio(previous.radiusMeters, state.radiusMeters, centers) >= 0.75)
   }
+}
+
+test('keeps jitter inside one region and preserves containment across a movement sweep', () => {
+  const initial = projectApproximateLocation(
+    exactObservation(32.7157, -117.1611, 8),
+    undefined,
+    randomValues(0.2, 0.3, 0.4),
+  ).state
+  assertMovementSweep(assertJitterSweep(initial))
 })
 
 test('bounds randomized center offsets across deterministic random samples', () => {

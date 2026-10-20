@@ -122,19 +122,12 @@ const createRegion = (
   }
 }
 
-export const projectApproximateLocation = (
+const nextApproximationState = (
   observation: LocationObservationV1,
   previous: ApproximationState | undefined,
-  random: () => number = () => {
-    const value = crypto.getRandomValues(new Uint32Array(1))[0]
-    if (value === undefined) throw new Error('Secure random generation failed.')
-    return value / 2 ** 32
-  },
-  minimumRadiusMeters = DEFAULT_RADIUS_METERS,
-): { observation: LocationObservationV1; state: ApproximationState } => {
-  if (!Number.isFinite(minimumRadiusMeters) || minimumRadiusMeters < DEFAULT_RADIUS_METERS) {
-    throw new RangeError('Approximate area radius must be at least one kilometre.')
-  }
+  random: () => number,
+  minimumRadiusMeters: number,
+): ApproximationState => {
   const distance = previous
     ? distanceMeters(
         previous.latitude,
@@ -148,23 +141,45 @@ export const projectApproximateLocation = (
     : false
   const beyondCount =
     previous && distance > previous.thresholdMeters ? previous.beyondThresholdCount + 1 : 0
-  const state =
-    !previous || containmentFailed || beyondCount >= 2
-      ? createRegion(observation, previous, random, minimumRadiusMeters)
-      : { ...previous, beyondThresholdCount: beyondCount }
+  return !previous || containmentFailed || beyondCount >= 2
+    ? createRegion(observation, previous, random, minimumRadiusMeters)
+    : { ...previous, beyondThresholdCount: beyondCount }
+}
 
-  return {
-    state,
-    observation: parseLocationObservationV1({
-      profile: observation.profile,
-      sourceId: observation.sourceId,
-      precision: 'approximate',
-      sequence: observation.sequence,
-      capturedAt: observation.capturedAt,
-      expiresAt: observation.expiresAt,
-      latitude: state.latitude,
-      longitude: state.longitude,
-      accuracyMeters: state.radiusMeters,
-    }),
+const approximateObservation = (
+  observation: LocationObservationV1,
+  state: ApproximationState,
+): LocationObservationV1 =>
+  parseLocationObservationV1({
+    profile: observation.profile,
+    sourceId: observation.sourceId,
+    precision: 'approximate',
+    sequence: observation.sequence,
+    capturedAt: observation.capturedAt,
+    expiresAt: observation.expiresAt,
+    latitude: state.latitude,
+    longitude: state.longitude,
+    accuracyMeters: state.radiusMeters,
+  })
+
+export const projectApproximateLocation = (
+  observation: LocationObservationV1,
+  previous: ApproximationState | undefined,
+  random: () => number = () => {
+    const value = crypto.getRandomValues(new Uint32Array(1))[0]
+    if (value === undefined) throw new Error('Secure random generation failed.')
+    return value / 2 ** 32
+  },
+  minimumRadiusMeters = DEFAULT_RADIUS_METERS,
+): { observation: LocationObservationV1; state: ApproximationState } => {
+  if (!Number.isFinite(minimumRadiusMeters) || minimumRadiusMeters < DEFAULT_RADIUS_METERS) {
+    throw new RangeError('Approximate area radius must be at least one kilometre.')
   }
+  const state = nextApproximationState(
+    observation,
+    previous,
+    random,
+    minimumRadiusMeters,
+  )
+  return { state, observation: approximateObservation(observation, state) }
 }

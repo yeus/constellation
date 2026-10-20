@@ -3,16 +3,12 @@ import test from 'node:test'
 
 import { createBrowserLocationSource, type BrowserGeolocation } from './browser.ts'
 
-const createFixture = () => {
+const createGeolocationFixture = () => {
   let success: Parameters<BrowserGeolocation['watchPosition']>[0] | undefined
   let failure: Parameters<BrowserGeolocation['watchPosition']>[1]
   const cleared: number[] = []
-  const timers = new Map<number, () => void>()
   let receivedOptions: PositionOptions | undefined
   let refreshCount = 0
-  let nextTimer = 1
-  let now = 10_000
-
   const geolocation: BrowserGeolocation = {
     watchPosition: (onSuccess, onError, options) => {
       success = onSuccess
@@ -27,27 +23,9 @@ const createFixture = () => {
       refreshCount += 1
     },
   }
-
-  const source = createBrowserLocationSource({
-    sourceId: 'synthetic-browser',
-    geolocation,
-    now: () => now,
-    liveWindowMs: 5_000,
-    observationTtlMs: 20_000,
-    setTimer: (callback) => {
-      const id = nextTimer++
-      timers.set(id, callback)
-      return id
-    },
-    clearTimer: (id) => timers.delete(id),
-  })
-
   return {
-    source,
+    geolocation,
     cleared,
-    setNow: (value: number) => {
-      now = value
-    },
     succeed: (accuracy = 8) =>
       success?.({
         timestamp: 10_000,
@@ -61,9 +39,36 @@ const createFixture = () => {
         },
       }),
     deny: () => failure?.({ code: 1 }),
-    runTimers: () => [...timers.values()].forEach((callback) => callback()),
     getPositionOptions: () => receivedOptions,
     getRefreshCount: () => refreshCount,
+  }
+}
+
+const createFixture = () => {
+  const geolocationFixture = createGeolocationFixture()
+  const timers = new Map<number, () => void>()
+  let nextTimer = 1
+  let now = 10_000
+  const source = createBrowserLocationSource({
+    sourceId: 'synthetic-browser',
+    geolocation: geolocationFixture.geolocation,
+    now: () => now,
+    liveWindowMs: 5_000,
+    observationTtlMs: 20_000,
+    setTimer: (callback) => {
+      const id = nextTimer++
+      timers.set(id, callback)
+      return id
+    },
+    clearTimer: (id) => timers.delete(id),
+  })
+  return {
+    ...geolocationFixture,
+    source,
+    setNow: (value: number) => {
+      now = value
+    },
+    runTimers: () => [...timers.values()].forEach((callback) => callback()),
   }
 }
 

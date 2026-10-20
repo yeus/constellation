@@ -46,16 +46,22 @@ const LOCATION_OBSERVATION_FIELDS = [
   'speedMps',
 ] as const
 
-export const parseLocationObservationV1 = (value: unknown): LocationObservationV1 => {
+const observationObject = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError('Location observation must be an object.')
   }
-  const raw = value as Record<string, unknown>
+  return value as Record<string, unknown>
+}
+
+const assertKnownObservationFields = (raw: Record<string, unknown>) => {
   const unknownField = Object.keys(raw).find(
     (field) =>
       !LOCATION_OBSERVATION_FIELDS.includes(field as (typeof LOCATION_OBSERVATION_FIELDS)[number]),
   )
   if (unknownField) throw new TypeError(`Unknown location observation field: ${unknownField}.`)
+}
+
+const assertObservationIdentity = (raw: Record<string, unknown>) => {
   if (raw.profile !== LOCATION_PROFILE_V1) {
     throw new TypeError(`Unsupported location profile: ${String(raw.profile)}.`)
   }
@@ -65,17 +71,23 @@ export const parseLocationObservationV1 = (value: unknown): LocationObservationV
   if (raw.precision !== 'exact' && raw.precision !== 'approximate') {
     throw new TypeError('precision must be exact or approximate.')
   }
+}
 
-  const sequence = requireFiniteNumber(raw.sequence, 'sequence')
-  const capturedAt = requireFiniteNumber(raw.capturedAt, 'capturedAt')
-  const expiresAt = requireFiniteNumber(raw.expiresAt, 'expiresAt')
-  const latitude = requireFiniteNumber(raw.latitude, 'latitude')
-  const longitude = requireFiniteNumber(raw.longitude, 'longitude')
-  const accuracyMeters = requireFiniteNumber(raw.accuracyMeters, 'accuracyMeters')
-  const altitudeMeters = optionalFiniteNumber(raw.altitudeMeters, 'altitudeMeters')
-  const headingDegrees = optionalFiniteNumber(raw.headingDegrees, 'headingDegrees')
-  const speedMps = optionalFiniteNumber(raw.speedMps, 'speedMps')
+const observationNumbers = (raw: Record<string, unknown>) => ({
+  sequence: requireFiniteNumber(raw.sequence, 'sequence'),
+  capturedAt: requireFiniteNumber(raw.capturedAt, 'capturedAt'),
+  expiresAt: requireFiniteNumber(raw.expiresAt, 'expiresAt'),
+  latitude: requireFiniteNumber(raw.latitude, 'latitude'),
+  longitude: requireFiniteNumber(raw.longitude, 'longitude'),
+  accuracyMeters: requireFiniteNumber(raw.accuracyMeters, 'accuracyMeters'),
+  altitudeMeters: optionalFiniteNumber(raw.altitudeMeters, 'altitudeMeters'),
+  headingDegrees: optionalFiniteNumber(raw.headingDegrees, 'headingDegrees'),
+  speedMps: optionalFiniteNumber(raw.speedMps, 'speedMps'),
+})
 
+const assertObservationRanges = (values: ReturnType<typeof observationNumbers>) => {
+  const { sequence, capturedAt, expiresAt, latitude, longitude, accuracyMeters, headingDegrees, speedMps } =
+    values
   if (!Number.isSafeInteger(sequence) || sequence < 0) {
     throw new RangeError('sequence must be a non-negative safe integer.')
   }
@@ -92,19 +104,29 @@ export const parseLocationObservationV1 = (value: unknown): LocationObservationV
   if (speedMps !== undefined && speedMps < 0) {
     throw new RangeError('speedMps must be non-negative.')
   }
+}
 
+const locationObservation = (
+  raw: Record<string, unknown>,
+  values: ReturnType<typeof observationNumbers>,
+): LocationObservationV1 => {
+  const { altitudeMeters, headingDegrees, speedMps, ...required } = values
   return {
     profile: LOCATION_PROFILE_V1,
-    sourceId: raw.sourceId,
-    precision: raw.precision,
-    sequence,
-    capturedAt,
-    expiresAt,
-    latitude,
-    longitude,
-    accuracyMeters,
+    sourceId: raw.sourceId as string,
+    precision: raw.precision as 'exact' | 'approximate',
+    ...required,
     ...(altitudeMeters === undefined ? {} : { altitudeMeters }),
     ...(headingDegrees === undefined ? {} : { headingDegrees }),
     ...(speedMps === undefined ? {} : { speedMps }),
   }
+}
+
+export const parseLocationObservationV1 = (value: unknown): LocationObservationV1 => {
+  const raw = observationObject(value)
+  assertKnownObservationFields(raw)
+  assertObservationIdentity(raw)
+  const values = observationNumbers(raw)
+  assertObservationRanges(values)
+  return locationObservation(raw, values)
 }

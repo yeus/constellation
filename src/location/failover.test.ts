@@ -20,13 +20,11 @@ const settle = async (): Promise<void> => {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
-const fixture = () => {
+const createProviderPair = () => {
   const events: string[] = []
-  const timers = new Map<number, () => void>()
   let nativeSuccess: ((value: BrowserPosition) => void) | undefined
   let nativeError: ((error: { code: number }) => void) | undefined
   let webSuccess: ((value: BrowserPosition) => void) | undefined
-  let timerId = 0
   const native: BrowserGeolocation = {
     watchPosition: (success, error) => {
       events.push('native-start')
@@ -48,7 +46,21 @@ const fixture = () => {
       events.push(`web-stop:${id}`)
     },
   }
-  const geolocation = createFailoverGeolocation(native, web, {
+  return {
+    native,
+    web,
+    events,
+    nativeSuccess: () => nativeSuccess?.(position),
+    nativeError: (code: number) => nativeError?.({ code }),
+    webSuccess: () => webSuccess?.(position),
+  }
+}
+
+const fixture = () => {
+  const providers = createProviderPair()
+  const timers = new Map<number, () => void>()
+  let timerId = 0
+  const geolocation = createFailoverGeolocation(providers.native, providers.web, {
     setTimer: (callback, delay) => {
       assert.equal(delay, 20_000)
       const id = ++timerId
@@ -60,11 +72,8 @@ const fixture = () => {
     },
   })
   return {
+    ...providers,
     geolocation,
-    events,
-    nativeSuccess: () => nativeSuccess?.(position),
-    nativeError: (code: number) => nativeError?.({ code }),
-    webSuccess: () => webSuccess?.(position),
     timeout: () => [...timers.values()].forEach((callback) => callback()),
   }
 }
