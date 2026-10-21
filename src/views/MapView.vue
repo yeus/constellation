@@ -134,7 +134,6 @@
           </label>
         </details>
         <button type="button" @click="openSettings">Settings</button>
-        <button type="button" @click="openDeviceComparisons">Compare devices</button>
         <button type="button" @click="openAbout">Privacy and licenses</button>
         <button type="button" @click="copyLogs">Copy logs</button>
         <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
@@ -223,86 +222,29 @@
       </button>
     </section>
 
-    <div v-if="comparisonOpen" class="sheet-backdrop" @click.self="comparisonOpen = false">
-      <section class="share-sheet" role="dialog" aria-modal="true" aria-label="Device comparison">
-        <header class="sheet-header">
-          <h2>Device comparison</h2>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="Close"
-            @click="comparisonOpen = false"
-          >
-            <CloseIcon />
-          </button>
-        </header>
-        <p class="field-help">
-          Optional. Compare through a trusted independent channel. Three attempts per link; older
-          apps may not support this.
-        </p>
-        <section
-          v-for="comparison in deviceComparisons"
-          :key="comparison.challenge"
-          aria-label="Device letter comparison"
-        >
-          <p class="eyebrow">{{ comparisonLabel(comparison.shareId) }} · {{ comparison.role }}</p>
-          <strong class="device-comparison-letters">{{ comparison.letters }}</strong>
-          <p>
-            Compare these letters with the other device through a trusted call or in person. A match
-            compares device keys, not a person's identity.
-          </p>
-          <p v-if="comparison.confirmedAt">You confirmed a match on this device.</p>
-          <div class="preview-actions">
-            <button
-              v-if="!comparison.confirmedAt"
-              class="primary-action"
-              type="button"
-              @click="changeDeviceComparison(comparison, 'confirm')"
-            >
-              Letters match
-            </button>
-            <button
-              class="secondary-action"
-              type="button"
-              @click="changeDeviceComparison(comparison, 'cancel')"
-            >
-              Cancel / mismatch
-            </button>
-          </div>
-        </section>
-        <section
-          v-for="follow in comparisonFollows"
-          :key="follow.shareId"
-          aria-label="Optional device comparison"
-        >
-          <span>{{ follow.localName }}</span>
-          <button
-            class="secondary-action"
-            type="button"
-            :disabled="comparingDevice === follow.shareId"
-            @click="startDeviceComparison(follow.shareId)"
-          >
-            Compare device letters
-          </button>
-          <button
-            v-if="comparingDevice === follow.shareId"
-            class="secondary-action"
-            type="button"
-            @click="cancelPendingDeviceComparison(follow.shareId)"
-          >
-            Cancel comparison
-          </button>
-          <span class="field-help"
-            >Optional. Four letters offer about 19 bits of security; three attempts per link. Older
-            apps may not support comparison.</span
-          >
-        </section>
-
-        <p v-if="!deviceComparisons.length && !comparisonFollows.length" class="field-help">
-          The viewer can start comparison from their device. Pending comparisons will appear here.
-        </p>
-      </section>
-    </div>
+    <DeviceComparisonSheet
+      v-if="comparisonOpen && comparisonShareId"
+      :label="comparisonLabel(comparisonShareId)"
+      :viewer="Boolean(selectedComparisonFollow)"
+      :comparison="selectedDeviceComparison"
+      :pending="comparingDevice === comparisonShareId"
+      :mismatch="comparisonMismatch"
+      :can-block="canBlockComparedDevice"
+      :can-reject="canRejectComparedDevice"
+      :error="comparisonError"
+      @close="closeDeviceComparison"
+      @start="startDeviceComparison(comparisonShareId)"
+      @cancel="cancelActiveDeviceComparison"
+      @confirm="
+        selectedDeviceComparison && changeDeviceComparison(selectedDeviceComparison, 'confirm')
+      "
+      @mismatch="markDeviceComparisonMismatch"
+      @stop="endMismatchedConnection"
+      @reject="endMismatchedConnection"
+      @block="endMismatchedConnection"
+      @clear="clearSelectedComparison"
+      @revoke="endMismatchedConnection"
+    />
 
     <section
       v-if="pendingViewerApproval"
@@ -320,7 +262,11 @@
       <strong v-if="pendingDeviceComparison" class="device-comparison-letters">{{
         pendingDeviceComparison.letters
       }}</strong>
-      <button class="secondary-action" type="button" @click="openDeviceComparisons">
+      <button
+        class="secondary-action"
+        type="button"
+        @click="openDeviceComparison(pendingViewerApproval.shareId, pendingViewerApproval.peerId)"
+      >
         Optional device comparison
       </button>
       <div class="preview-actions">
@@ -343,6 +289,35 @@
       </div>
     </section>
 
+    <section
+      v-if="
+        senderComparisonAttention &&
+        !pendingViewerApproval &&
+        !comparisonOpen &&
+        !peerListOpen &&
+        !previewFollow &&
+        !invitationPending &&
+        !showAppHandoff &&
+        !readyShare
+      "
+      class="accept-card"
+      role="region"
+      aria-label="Device verification ready"
+    >
+      <p class="eyebrow">Optional security check</p>
+      <strong>A device is ready to compare letters</strong>
+      <p>Compare these letters with the viewer through a trusted independent channel.</p>
+      <button
+        type="button"
+        class="secondary-action"
+        @click="
+          openDeviceComparison(senderComparisonAttention.shareId, senderComparisonAttention.peerId)
+        "
+      >
+        View verification
+      </button>
+    </section>
+
     <section v-if="previewFollow" class="accept-card" aria-label="Location preview">
       <p class="eyebrow">Private preview</p>
       <strong>{{ previewFollow.localName }}</strong>
@@ -357,7 +332,7 @@
         v-if="previewFollow.status !== 'denied'"
         class="secondary-action"
         type="button"
-        @click="openDeviceComparisons"
+        @click="openDeviceComparison(previewFollow.shareId, previewFollow.peerId)"
       >
         Compare device letters
       </button>
@@ -555,8 +530,10 @@
 
     <PeerListSheet
       v-if="peerListOpen"
+      v-show="!comparisonOpen"
       :shares="activeShares"
       :following="activeFollowing"
+      :comparisons="deviceComparisons"
       :filter="peerListFilter"
       :old-shares="oldSharing"
       :old-following="runtimeState.oldSeeing"
@@ -574,6 +551,7 @@
       :pause-busy="changingSharingPause"
       :revoke-all-busy="revokingAllShares"
       :peer-name-preferences="peerNamePreferences"
+      @compare-device="openDeviceComparison"
       @clear-old="clearOldPeers"
       @open-local-settings="openSettings"
       @profile="setPeerNamePreferences"
@@ -655,6 +633,7 @@ import SharingDiagnosticsSheet from '../components/SharingDiagnosticsSheet.vue'
 import CloseIcon from '../components/icons/CloseIcon.vue'
 import AboutSheet from '../components/AboutSheet.vue'
 import PeerListSheet from '../components/PeerListSheet.vue'
+import DeviceComparisonSheet from '../components/DeviceComparisonSheet.vue'
 import ShareReadySheet from '../components/ShareReadySheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
 import { createSessionLog } from '../diagnostics/sessionLog.ts'
@@ -1338,42 +1317,126 @@ const openInviteInApp = (): void => {
   window.location.assign(url)
 }
 const comparisonOpen = ref(false)
-const openDeviceComparisons = (): void => {
-  menuOpen.value = false
-  comparisonOpen.value = true
-}
-const comparisonLabel = (shareId: string): string =>
-  runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
-  activeShares.value.find((entry) => entry.shareId === shareId)?.name ||
-  'Single-recipient link'
+const comparisonShareId = ref<string>()
+const comparisonPeerId = ref<string>()
+const comparisonMismatch = ref(false)
+const comparisonError = ref<string>()
 const comparingDevice = ref<string>()
 const deviceComparisons = computed(() => [
   ...(runtimeState.value.deviceComparisons ?? []),
   ...(backgroundStatus.value?.deviceComparisons ?? []),
 ])
-const comparisonFollows = computed(() =>
-  runtimeState.value.following.filter(
-    (follow) =>
-      !['denied', 'revoked', 'expired'].includes(follow.status) &&
-      !deviceComparisons.value.some((comparison) => comparison.shareId === follow.shareId),
+const selectedComparisonFollow = computed(() =>
+  runtimeState.value.following.find((entry) => entry.shareId === comparisonShareId.value),
+)
+const selectedDeviceComparison = computed(() =>
+  deviceComparisons.value.find(
+    (entry) =>
+      entry.shareId === comparisonShareId.value &&
+      (selectedComparisonFollow.value
+        ? entry.role === 'viewer'
+        : entry.role === 'sender' && entry.peerId === comparisonPeerId.value),
   ),
 )
+const comparisonLabel = (shareId: string): string =>
+  runtimeState.value.following.find((entry) => entry.shareId === shareId)?.localName ||
+  activeShares.value.find((entry) => entry.shareId === shareId)?.name ||
+  'Single-recipient link'
+const canRejectComparedDevice = computed(
+  () =>
+    pendingViewerApproval.value?.shareId === comparisonShareId.value &&
+    (!comparisonPeerId.value || pendingViewerApproval.value?.peerId === comparisonPeerId.value),
+)
+const comparedViewerFingerprint = computed(
+  () =>
+    activeShares.value
+      .filter(({ shareId }) => shareId === comparisonShareId.value)
+      .flatMap(({ viewers }) => viewers ?? [])
+      .find(({ peerId }) => peerId === comparisonPeerId.value)?.fingerprint,
+)
+const canBlockComparedDevice = computed(
+  () =>
+    !selectedComparisonFollow.value &&
+    !canRejectComparedDevice.value &&
+    Boolean(comparedViewerFingerprint.value),
+)
+const openDeviceComparison = (shareId: string, peerId?: string): void => {
+  menuOpen.value = false
+  comparisonShareId.value = shareId
+  comparisonPeerId.value = peerId
+  comparisonMismatch.value = false
+  comparisonError.value = undefined
+  comparisonOpen.value = true
+}
+const closeDeviceComparison = (): void => {
+  // Closing an in-flight viewer comparison cancels its stream, not just the dialog.
+  if (comparingDevice.value === comparisonShareId.value) void clearSelectedComparison()
+  comparisonOpen.value = false
+}
 const startDeviceComparison = async (shareId: string): Promise<void> => {
   comparingDevice.value = shareId
-  comparisonOpen.value = true
+  comparisonError.value = undefined
   try {
     await runtime.startDeviceComparison(shareId)
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Device comparison unavailable.'
+    comparisonError.value =
+      error instanceof Error ? error.message : 'Device comparison unavailable.'
   } finally {
     comparingDevice.value = undefined
   }
 }
-const cancelPendingDeviceComparison = async (shareId: string): Promise<void> => {
+const clearSelectedComparison = async (): Promise<boolean> => {
+  const shareId = comparisonShareId.value
+  if (!shareId) return false
   try {
-    await runtime.cancelDeviceComparison(shareId, '')
+    const current = selectedDeviceComparison.value
+    if (
+      current &&
+      backgroundStatus.value?.deviceComparisons?.some(
+        (entry) => entry.challenge === current.challenge,
+      )
+    ) {
+      if (!backgroundSharing) throw new Error('Background comparison unavailable.')
+      backgroundStatus.value = await backgroundSharing.deviceComparison(
+        shareId,
+        current.challenge,
+        'cancel',
+      )
+    } else {
+      await runtime.cancelDeviceComparison(shareId, current?.challenge ?? '')
+    }
+    return true
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Could not cancel comparison.'
+    comparisonError.value = error instanceof Error ? error.message : 'Could not cancel comparison.'
+    return false
+  }
+}
+const cancelActiveDeviceComparison = async (): Promise<void> => {
+  if (await clearSelectedComparison()) comparisonOpen.value = false
+}
+const markDeviceComparisonMismatch = async (): Promise<void> => {
+  comparisonMismatch.value = true
+  await clearSelectedComparison()
+}
+const endMismatchedConnection = async (): Promise<void> => {
+  const shareId = comparisonShareId.value
+  if (!shareId) return
+  try {
+    if (selectedComparisonFollow.value) await stopFollowing(shareId)
+    else if (canRejectComparedDevice.value) {
+      const request = pendingViewerApproval.value
+      if (!request) throw new Error('The pending device is no longer available.')
+      await blockViewerChecked(request.shareId, request.fingerprint)
+    } else if (comparedViewerFingerprint.value) {
+      await blockViewerChecked(shareId, comparedViewerFingerprint.value)
+    } else {
+      // With no authenticated per-viewer fingerprint, revocation is link-wide.
+      await revokeShare(shareId)
+    }
+    closeDeviceComparison()
+  } catch (error) {
+    comparisonError.value =
+      error instanceof Error ? error.message : 'Could not stop this connection.'
   }
 }
 const changeDeviceComparison = async (
@@ -1396,7 +1459,8 @@ const changeDeviceComparison = async (
       await runtime.confirmDeviceComparison(comparison.shareId, comparison.challenge)
     else await runtime.cancelDeviceComparison(comparison.shareId, comparison.challenge)
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Could not save device comparison.'
+    comparisonError.value =
+      error instanceof Error ? error.message : 'Could not save device comparison.'
   }
 }
 
@@ -1412,6 +1476,15 @@ const pendingDeviceComparison = computed(() =>
       entry.role === 'sender' &&
       entry.shareId === pendingViewerApproval.value?.shareId &&
       entry.peerId === pendingViewerApproval.value?.peerId,
+  ),
+)
+const senderComparisonAttention = computed(() =>
+  deviceComparisons.value.find(
+    (entry) =>
+      entry.role === 'sender' &&
+      entry.confirmedAt === undefined &&
+      Date.now() < entry.expiresAt &&
+      activeShares.value.some((share) => share.shareId === entry.shareId),
   ),
 )
 
@@ -2106,13 +2179,17 @@ const setViewerName = async (shareId: string, fingerprint: string, name: string)
     localError.value = 'Device name could not be saved in protected storage.'
   }
 }
+const blockViewerChecked = async (shareId: string, fingerprint: string): Promise<void> => {
+  if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
+    if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+    backgroundStatus.value = await backgroundSharing.blockViewer(shareId, fingerprint)
+  } else {
+    await runtime.blockViewer(shareId, fingerprint)
+  }
+}
 const blockViewer = async (shareId: string, fingerprint: string): Promise<void> => {
   try {
-    if (backgroundStatus.value?.shares.some((share) => share.shareId === shareId)) {
-      backgroundStatus.value = await backgroundSharing?.blockViewer(shareId, fingerprint)
-    } else {
-      await runtime.blockViewer(shareId, fingerprint)
-    }
+    await blockViewerChecked(shareId, fingerprint)
   } catch (error) {
     localError.value = error instanceof Error ? error.message : 'Could not block this device.'
   }

@@ -181,91 +181,163 @@
             </div>
           </div>
           <details class="peer-list__section peer-list__section--names" open>
-            <summary>Names and privacy</summary>
+            <summary>
+              <UserRound aria-hidden="true" /><span>Names and privacy</span
+              ><ChevronDown aria-hidden="true" />
+            </summary>
             <div class="peer-list__section-content">
-              <button
-                v-if="peer.peerId && advertisedName(peer) && advertisedName(peer) !== peer.name"
-                type="button"
-                class="peer-text-action"
-                :aria-label="`Review advertised name ${advertisedName(peer)}`"
-                @click="pendingAdoption = { peerId: peer.peerId, name: advertisedName(peer)! }"
-              >
-                Advertised name: {{ advertisedName(peer) }}
-              </button>
-              <div v-if="peer.peerId" class="peer-link-item">
-                <button
-                  v-if="editingProfile !== peer.peerId"
-                  class="peer-text-action"
-                  type="button"
-                  @click="editProfile(peer.peerId)"
-                >
-                  Name sharing
-                </button>
-                <template v-else>
-                  <label
-                    ><input v-model="shareProfileName" type="checkbox" /> Share my name with this
-                    peer</label
+              <div class="peer-list__names-grid">
+                <div class="peer-list__private-names">
+                  <span class="peer-list__field-label">Your nickname</span>
+                  <div
+                    v-for="follow in peer.following"
+                    :key="`name:${follow.shareId}`"
+                    class="peer-list__nickname"
                   >
-                  <input
-                    v-if="shareProfileName"
-                    v-model="profileNameDraft"
-                    aria-label="Your name for this peer"
-                    type="text"
-                    maxlength="32"
-                    placeholder="Your chosen name"
-                  />
-                  <label
-                    ><input v-model="associateNames" type="checkbox" /> Reuse my private nickname
-                    across reciprocal shares</label
-                  >
-                  <p class="field-help">
-                    Your nickname for them stays private. Name sharing is independent in each
-                    direction.
-                  </p>
-                  <div class="peer-link-item__actions">
-                    <button
-                      type="button"
-                      :disabled="shareProfileName && !profileNameDraft.trim()"
-                      @click="saveProfile(peer.peerId)"
-                    >
-                      Save name preferences
-                    </button>
-                    <button type="button" @click="editingProfile = undefined">Cancel</button>
+                    <template v-if="editingFollow === follow.shareId">
+                      <input
+                        v-model="nameDraft"
+                        type="text"
+                        maxlength="32"
+                        aria-label="Your nickname"
+                        @keyup.enter="saveFollowName(follow.shareId)"
+                        @keyup.esc="editingFollow = undefined"
+                      />
+                      <button type="button" @click="saveFollowName(follow.shareId)">Save</button>
+                      <button type="button" @click="editingFollow = undefined">Cancel</button>
+                    </template>
+                    <template v-else>
+                      <span>{{ follow.localName }}</span>
+                      <button
+                        type="button"
+                        :aria-label="`Edit nickname for ${peer.name}`"
+                        @click="editFollowName(follow.shareId, follow.localName)"
+                      >
+                        Edit
+                      </button>
+                    </template>
                   </div>
-                </template>
-              </div>
-              <div
-                v-for="follow in peer.following"
-                :key="`name:${follow.shareId}`"
-                class="peer-link-item"
-              >
-                <strong>{{ follow.displayName || follow.localName || 'Shared location' }}</strong>
-                <div v-if="editingFollow === follow.shareId" class="peer-viewer-details__edit">
-                  <input
-                    v-model="nameDraft"
-                    type="text"
-                    maxlength="32"
-                    aria-label="Your nickname"
-                    @keyup.enter="saveFollowName(follow.shareId)"
-                    @keyup.esc="editingFollow = undefined"
-                  />
-                  <button type="button" @click="saveFollowName(follow.shareId)">Save</button>
-                  <button type="button" @click="editingFollow = undefined">Cancel</button>
+                  <div
+                    v-for="connection in peer.shares.filter(({ viewer }) => viewer)"
+                    :key="`device-name:${connection.share.shareId}`"
+                    class="peer-list__nickname"
+                  >
+                    <template
+                      v-if="
+                        editingViewer ===
+                        `${connection.share.shareId}:${connection.viewer?.fingerprint}`
+                      "
+                    >
+                      <input
+                        v-model="nameDraft"
+                        type="text"
+                        maxlength="32"
+                        aria-label="Device name"
+                        @keyup.enter="
+                          saveName(connection.share.shareId, connection.viewer!.fingerprint)
+                        "
+                        @keyup.esc="editingViewer = undefined"
+                      />
+                      <button
+                        type="button"
+                        @click="saveName(connection.share.shareId, connection.viewer!.fingerprint)"
+                      >
+                        Save
+                      </button>
+                      <button type="button" @click="editingViewer = undefined">Cancel</button>
+                    </template>
+                    <template v-else>
+                      <span>{{
+                        connection.viewer?.localName || connection.viewer?.displayName || peer.name
+                      }}</span>
+                      <button
+                        type="button"
+                        :aria-label="`Edit device name for connection ${connection.viewer?.fingerprint}`"
+                        @click="
+                          editName(
+                            connection.share.shareId,
+                            connection.viewer!.fingerprint,
+                            connection.viewer?.localName || '',
+                          )
+                        "
+                      >
+                        Edit
+                      </button>
+                    </template>
+                  </div>
+                  <p
+                    v-if="!peer.following.length && !peer.shares.some(({ viewer }) => viewer)"
+                    class="field-help"
+                  >
+                    No nickname set yet.
+                  </p>
+                  <button
+                    v-if="peer.peerId && advertisedName(peer) && advertisedName(peer) !== peer.name"
+                    type="button"
+                    class="peer-text-action"
+                    :aria-label="`Review advertised name ${advertisedName(peer)}`"
+                    @click="pendingAdoption = { peerId: peer.peerId, name: advertisedName(peer)! }"
+                  >
+                    Advertised name: {{ advertisedName(peer) }}
+                  </button>
                 </div>
-                <button
-                  v-else
-                  class="peer-text-action"
-                  type="button"
-                  :aria-label="`Edit nickname for ${peer.name}`"
-                  @click="editFollowName(follow.shareId, follow.localName)"
-                >
-                  <PencilLine aria-hidden="true" /> Edit nickname
-                </button>
+                <div v-if="peer.peerId" class="peer-list__name-sharing">
+                  <button
+                    type="button"
+                    class="peer-list__name-switch"
+                    role="switch"
+                    :aria-label="`Share my name with ${peer.name}`"
+                    :aria-checked="
+                      editingProfile === peer.peerId
+                        ? shareProfileName
+                        : Boolean(sharedName(peer.peerId))
+                    "
+                    @click="toggleProfile(peer.peerId)"
+                  >
+                    <span>Share my name</span
+                    ><span class="peer-list__switch-track" aria-hidden="true" />
+                  </button>
+                  <p class="field-help">Your nickname stays private.</p>
+                  <div v-if="editingProfile === peer.peerId" class="peer-list__name-editor">
+                    <label v-if="shareProfileName">
+                      Name to share
+                      <input
+                        v-model="profileNameDraft"
+                        aria-label="Your name for this peer"
+                        type="text"
+                        maxlength="32"
+                        placeholder="Your chosen name"
+                      />
+                    </label>
+                    <label
+                      ><input v-model="associateNames" type="checkbox" /> Reuse my private nickname
+                      across reciprocal shares</label
+                    >
+                    <p class="field-help">
+                      Name sharing is independent in each direction. Save to apply.
+                    </p>
+                    <div class="peer-link-item__actions">
+                      <button
+                        type="button"
+                        :disabled="shareProfileName && !profileNameDraft.trim()"
+                        @click="saveProfile(peer.peerId)"
+                      >
+                        Save name preferences
+                      </button>
+                      <button type="button" @click="editingProfile = undefined">Cancel</button>
+                    </div>
+                  </div>
+                  <p v-else-if="sharedName(peer.peerId)" class="field-help">
+                    Sharing as {{ sharedName(peer.peerId) }}
+                  </p>
+                </div>
               </div>
             </div>
           </details>
           <details class="peer-list__section peer-list__section--link">
-            <summary>Manage link</summary>
+            <summary>
+              <Link2 aria-hidden="true" /><span>Manage link</span><ChevronDown aria-hidden="true" />
+            </summary>
             <div class="peer-list__section-content">
               <article
                 v-for="connection in peer.shares"
@@ -309,45 +381,6 @@
                     <span class="peer-viewer-details__fingerprint"
                       >Connection {{ connection.viewer.fingerprint }}</span
                     >
-                    <div
-                      v-if="
-                        editingViewer ===
-                        `${connection.share.shareId}:${connection.viewer.fingerprint}`
-                      "
-                      class="peer-viewer-details__edit"
-                    >
-                      <input
-                        v-model="nameDraft"
-                        type="text"
-                        maxlength="32"
-                        aria-label="Device name"
-                        @keyup.enter="
-                          saveName(connection.share.shareId, connection.viewer.fingerprint)
-                        "
-                        @keyup.esc="editingViewer = undefined"
-                      />
-                      <button
-                        type="button"
-                        @click="saveName(connection.share.shareId, connection.viewer.fingerprint)"
-                      >
-                        Save
-                      </button>
-                    </div>
-                    <button
-                      v-else
-                      class="peer-text-action"
-                      type="button"
-                      :aria-label="`Edit device name for connection ${connection.viewer.fingerprint}`"
-                      @click="
-                        editName(
-                          connection.share.shareId,
-                          connection.viewer.fingerprint,
-                          connection.viewer.localName || '',
-                        )
-                      "
-                    >
-                      <PencilLine aria-hidden="true" /> Edit name
-                    </button>
                     <button
                       class="peer-text-action"
                       type="button"
@@ -371,12 +404,63 @@
               </article>
             </div>
           </details>
-          <details
-            v-if="peer.following.length"
-            class="peer-list__section peer-list__section--connection"
-          >
-            <summary>Connection details</summary>
+          <details class="peer-list__section peer-list__section--connection">
+            <summary>
+              <Smartphone aria-hidden="true" /><span>Connection details</span
+              ><ChevronDown aria-hidden="true" />
+            </summary>
             <div class="peer-list__section-content">
+              <p
+                v-if="!peer.following.length && !peer.shares.some(({ viewer }) => viewer)"
+                class="field-help"
+              >
+                No active device connection to inspect.
+              </p>
+              <article
+                v-for="connection in peer.shares.filter(({ viewer }) => viewer)"
+                :key="`outgoing:${connection.share.shareId}`"
+                class="peer-link-item"
+              >
+                <strong
+                  >{{
+                    connection.viewer?.displayName || connection.viewer?.localName || peer.name
+                  }}
+                  · viewing your location</strong
+                >
+                <span
+                  >Last connected
+                  {{ new Date(connection.viewer!.lastSeenAt).toLocaleString() }}</span
+                >
+                <span>Connection {{ connection.viewer?.fingerprint }}</span>
+                <span
+                  v-if="
+                    connection.viewer &&
+                    comparisonFor(connection.share.shareId, connection.viewer.peerId, 'sender')
+                  "
+                  class="field-help"
+                >
+                  {{
+                    comparisonStatus(connection.share.shareId, connection.viewer.peerId, 'sender')
+                  }}
+                </span>
+                <p class="field-help">
+                  Optional device verification compares four letters through a trusted call or in
+                  person.
+                </p>
+                <button
+                  v-if="connection.viewer"
+                  type="button"
+                  class="peer-text-action"
+                  :aria-label="`Verify viewer device for ${connection.share.name || 'Private link'} (${connection.viewer.fingerprint})`"
+                  @click="emit('compareDevice', connection.share.shareId, connection.viewer.peerId)"
+                >
+                  {{
+                    comparisonFor(connection.share.shareId, connection.viewer.peerId, 'sender')
+                      ? 'View verification'
+                      : 'Verify connection'
+                  }}
+                </button>
+              </article>
               <article
                 v-for="follow in peer.following"
                 :key="follow.shareId"
@@ -407,6 +491,29 @@
                     follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt)
                   }}</span
                 >
+                <p class="field-help">
+                  Optional device verification compares the connection with a trusted call or in
+                  person.
+                </p>
+                <span
+                  v-if="comparisonFor(follow.shareId, follow.peerId ?? '', 'viewer')"
+                  class="field-help"
+                >
+                  {{ comparisonStatus(follow.shareId, follow.peerId ?? '', 'viewer') }}
+                </span>
+                <button
+                  v-if="follow.peerId && !['revoked', 'expired', 'denied'].includes(follow.status)"
+                  type="button"
+                  class="peer-text-action"
+                  :aria-label="`Verify connection to ${peer.name}`"
+                  @click="emit('compareDevice', follow.shareId, follow.peerId)"
+                >
+                  {{
+                    comparisonFor(follow.shareId, follow.peerId ?? '', 'viewer')
+                      ? 'View verification'
+                      : 'Verify connection'
+                  }}
+                </button>
                 <button
                   v-if="
                     !hasOutgoingGrant(peer) &&
@@ -452,12 +559,17 @@
             </div>
           </details>
           <details
-            v-if="peer.ended.length || peer.stopped.length"
             class="peer-list__section peer-list__section--ended"
             :open="peer.stopped.some(({ dismissed }) => !dismissed)"
           >
-            <summary>Ended history</summary>
+            <summary>
+              <Clock3 aria-hidden="true" /><span>Ended history</span
+              ><ChevronDown aria-hidden="true" />
+            </summary>
             <div class="peer-list__section-content">
+              <p v-if="!peer.stopped.length && !peer.ended.length" class="field-help">
+                No ended connections.
+              </p>
               <div v-for="stopped in peer.stopped" :key="stopped.eventId" class="peer-history-item">
                 <strong>Stopped following</strong>
                 <span>Reported {{ new Date(stopped.recordedAt).toLocaleString() }}</span>
@@ -523,6 +635,14 @@ import {
   LucideShare2 as ShareIcon,
   LucideUserPlus as AddIcon,
 } from '@lucide/vue'
+import {
+  LucideUserRound as UserRound,
+  LucideLink2 as Link2,
+  LucideSmartphone as Smartphone,
+  LucideClock3 as Clock3,
+  LucideChevronDown as ChevronDown,
+} from '@lucide/vue'
+import type { DeviceComparison } from '../sharing/deviceComparison.ts'
 import CloseIcon from './icons/CloseIcon.vue'
 import PeerAvatar from './PeerAvatar.vue'
 import { advertisedPeerName, type PeerNamePreference } from '../sharing/peerNames.ts'
@@ -558,6 +678,7 @@ type PeerEntry = {
 }
 
 const props = defineProps<{
+  comparisons?: readonly DeviceComparison[]
   peerNamePreferences?: readonly PeerNamePreference[]
   shares: readonly ShareSummary[]
   following: readonly FollowSummary[]
@@ -597,6 +718,7 @@ const emit = defineEmits<{
   unfollow: [shareId: string]
   keep: [shareId: string]
   shareBack: [shareId: string]
+  compareDevice: [shareId: string, peerId?: string]
   adoptName: [peerId: string, name: string]
   profile: [peerId: string, associateNames: boolean, sharedName: string | null]
 }>()
@@ -692,20 +814,15 @@ const openDetails = (event: Event): void => {
   const target = event.currentTarget
   if (!(target instanceof HTMLElement)) return
   const item = target.closest('.peer-list__item')
-  item?.querySelectorAll<HTMLDetailsElement>('.peer-list__section').forEach((section) => {
-    section.open = true
-  })
+  const linkSection = item?.querySelector<HTMLDetailsElement>('.peer-list__section--link')
+  if (linkSection) linkSection.open = true
   item?.querySelector<HTMLElement>('.peer-list__section--link summary')?.focus()
 }
 const showEnded = ref(false)
 const totalConnectedViewers = computed(() =>
   props.shares.reduce((count, share) => count + share.viewerCount, 0),
 )
-const getPeerEntry = (
-  entries: Map<string, PeerEntry>,
-  key: string,
-  peerId?: string,
-): PeerEntry => {
+const getPeerEntry = (entries: Map<string, PeerEntry>, key: string, peerId?: string): PeerEntry => {
   const existing = entries.get(key)
   if (existing) return existing
   const created: PeerEntry = {
@@ -871,8 +988,7 @@ const matchesSharingFilter = (entry: PeerEntry, showEnded: boolean): boolean =>
   (showEnded && entry.ended.some(({ kind }) => kind === 'sharing'))
 
 const matchesViewingFilter = (entry: PeerEntry, showEnded: boolean): boolean =>
-  entry.following.length > 0 ||
-  (showEnded && entry.ended.some(({ kind }) => kind === 'viewing'))
+  entry.following.length > 0 || (showEnded && entry.ended.some(({ kind }) => kind === 'viewing'))
 
 const matchesPeerFilter = (
   entry: PeerEntry,
@@ -909,9 +1025,7 @@ const peers = computed(() => {
   )
   return [...entries.values()]
     .map((entry) => decoratePeerEntry(entry, props.peerNamePreferences))
-    .filter((entry) =>
-      matchesPeerFilter(entry, props.filter, showEnded.value, props.limitedIds),
-    )
+    .filter((entry) => matchesPeerFilter(entry, props.filter, showEnded.value, props.limitedIds))
     .sort((left, right) => left.name.localeCompare(right.name))
 })
 
@@ -957,6 +1071,28 @@ const summarizedNames = (names: readonly string[]): string => {
   if (names.length === 1) return names[0]!
   if (names.length === 2) return `${names[0]} and ${names[1]}`
   return `${names[0]} and ${names.length - 1} more`
+}
+const comparisonFor = (
+  shareId: string,
+  peerId: string,
+  role: DeviceComparison['role'],
+): DeviceComparison | undefined =>
+  props.comparisons?.find(
+    (entry) =>
+      entry.shareId === shareId &&
+      entry.role === role &&
+      (role === 'viewer' || entry.peerId === peerId),
+  )
+const comparisonStatus = (
+  shareId: string,
+  peerId: string,
+  role: DeviceComparison['role'],
+): string => {
+  const comparison = comparisonFor(shareId, peerId, role)
+  if (!comparison) return ''
+  return comparison.confirmedAt
+    ? `Verified locally ${new Date(comparison.confirmedAt).toLocaleDateString()}`
+    : 'Letters ready to compare · not verified'
 }
 const peerContext = (peer: PeerEntry): string => {
   const sharing = peer.shares.length > 0
@@ -1033,6 +1169,12 @@ const editingProfile = ref<string>()
 const profileNameDraft = ref('')
 const shareProfileName = ref(false)
 const associateNames = ref(false)
+const sharedName = (peerId: string): string | null =>
+  props.peerNamePreferences?.find((preference) => preference.peerId === peerId)?.sharedName ?? null
+const toggleProfile = (peerId: string): void => {
+  if (editingProfile.value !== peerId) editProfile(peerId)
+  shareProfileName.value = !shareProfileName.value
+}
 const editProfile = (peerId: string): void => {
   const preference = props.peerNamePreferences?.find((record) => record.peerId === peerId)
   profileNameDraft.value = preference?.sharedName ?? ''
@@ -1273,17 +1415,159 @@ const remaining = (timestamp: number): string => {
   color: var(--muted);
   font-size: 0.78rem;
 }
+.peer-list__section {
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  overflow: hidden;
+  background: var(--surface-strong);
+}
 .peer-list__section > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.8rem;
   cursor: pointer;
-  font-size: 0.85rem;
+  list-style: none;
+  padding: 0.65rem 0.8rem;
+  color: var(--text);
+  background: var(--control-fill);
+  font-size: 0.88rem;
   font-weight: 650;
-  padding: 0.6rem 0;
+}
+.peer-list__section > summary::-webkit-details-marker {
+  display: none;
+}
+.peer-list__section > summary svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+}
+.peer-list__section > summary svg:last-child {
+  margin-left: auto;
+  transition: transform 150ms ease;
+}
+.peer-list__section[open] > summary svg:last-child {
+  transform: rotate(180deg);
+}
+.peer-list__section > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .peer-list__section-content {
   display: grid;
+  gap: 0.4rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.peer-list__names-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.9rem;
+}
+.peer-list__private-names,
+.peer-list__name-sharing,
+.peer-list__name-editor {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.peer-list__name-sharing {
+  padding-left: 0.9rem;
+  border-left: 1px solid var(--border);
+}
+.peer-list__field-label {
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+.peer-list__nickname {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.peer-list__nickname > span,
+.peer-list__nickname > input {
+  flex: 1 1 7rem;
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--control-fill);
+  color: var(--text);
+}
+.peer-list__nickname button {
+  min-height: 2.2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--control-fill);
+  color: var(--text);
+  cursor: pointer;
+}
+.peer-list__name-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 650;
+  text-align: left;
+}
+.peer-list__switch-track {
+  width: 2.2rem;
+  height: 1.25rem;
+  border-radius: 2rem;
+  background: var(--border);
+  position: relative;
+}
+.peer-list__switch-track::before {
+  content: '';
+  position: absolute;
+  top: 0.16rem;
+  left: 0.16rem;
+  height: 0.93rem;
+  width: 0.93rem;
+  background: var(--surface-strong);
+  border-radius: 50%;
+  transition: transform 150ms ease;
+}
+.peer-list__name-switch[aria-checked='true'] .peer-list__switch-track {
+  background: var(--accent);
+}
+.peer-list__name-switch[aria-checked='true'] .peer-list__switch-track::before {
+  transform: translateX(0.95rem);
+}
+.peer-list__name-editor label {
+  display: grid;
   gap: 0.3rem;
-  padding-left: 0.5rem;
-  padding-bottom: 0.3rem;
+  font-size: 0.8rem;
+}
+.peer-list__name-editor label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: start;
+}
+.peer-list__name-editor input[type='text'] {
+  min-width: 0;
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--control-fill);
+  color: var(--text);
+  border-radius: 0.5rem;
+}
+@media (max-width: 560px) {
+  .peer-list__names-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .peer-list__name-sharing {
+    padding-left: 0;
+    padding-top: 0.75rem;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
 }
 .peer-list__ended-toggle {
   display: flex;

@@ -494,7 +494,10 @@ test('peer list uses distinct main actions, one filter menu, and compact details
         },
       ],
       focused: false,
+      compared: '',
+      sharedName: null as string | null,
     })
+    ;(window as Window & { __peerCompareTest?: typeof state }).__peerCompareTest = state
     const container = document.createElement('div')
     document.body.append(container)
     createApp({
@@ -503,6 +506,16 @@ test('peer list uses distinct main actions, one filter menu, and compact details
           filter: state.filter,
           paused: false,
           viewableIds: ['synthetic-incoming'],
+          peerNamePreferences: state.sharedName
+            ? [
+                {
+                  peerId: 'synthetic-peer',
+                  associateNames: false,
+                  sharedName: state.sharedName,
+                  receivedName: null,
+                },
+              ]
+            : [],
           shareBackBusy: false,
           stoppedViewers: [],
           oldShares: state.old,
@@ -544,6 +557,12 @@ test('peer list uses distinct main actions, one filter menu, and compact details
           onFocusPeer: () => {
             state.focused = true
           },
+          onCompareDevice: (shareId: string, peerId?: string) => {
+            state.compared = `${shareId}:${peerId}`
+          },
+          onProfile: (_peerId: string, _associateNames: boolean, sharedName: string | null) => {
+            state.sharedName = sharedName
+          },
         }),
     }).mount(container)
   })
@@ -564,6 +583,29 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   await expect(peer.getByRole('button', { name: 'Revoke link' })).toHaveCount(0)
   await peer.getByRole('button', { name: 'Manage link' }).click()
   await expect(peer.getByRole('button', { name: 'Revoke link' })).toBeVisible()
+  const sections = peer.locator('.peer-list__section')
+  await expect(sections.locator(':scope > summary')).toHaveCount(4)
+  await expect(sections.nth(0)).toContainText('Names and privacy')
+  await expect(sections.nth(1)).toContainText('Manage link')
+  await expect(sections.nth(2)).toContainText('Connection details')
+  await expect(sections.nth(3)).toContainText('Ended history')
+  const nameSwitch = peer.getByRole('switch', { name: 'Share my name with River' })
+  await expect(nameSwitch).toHaveAttribute('aria-checked', 'false')
+  await nameSwitch.click()
+  await expect(peer.getByRole('button', { name: 'Save name preferences' })).toBeDisabled()
+  await peer.getByRole('textbox', { name: 'Your name for this peer' }).fill('Sender alias')
+  await peer.getByRole('button', { name: 'Save name preferences' }).click()
+  await expect(nameSwitch).toHaveAttribute('aria-checked', 'true')
+  await sections.nth(2).locator(':scope > summary').click()
+  await peer.getByRole('button', { name: 'Verify connection to River' }).click()
+  expect(
+    await page.evaluate(
+      () =>
+        (window as Window & { __peerCompareTest?: { compared: string } }).__peerCompareTest
+          ?.compared,
+    ),
+  ).toBe('synthetic-incoming:synthetic-peer')
+  await expect(peer).toContainText('Optional device verification')
   await expect(peer.getByRole('button', { name: 'Share back', exact: true })).toHaveCount(0)
   await list.getByRole('button', { name: 'Filter peers', exact: true }).click()
   await list.getByLabel('Show ended').check()
@@ -821,4 +863,137 @@ test('offers an Android app handoff on incoming links without starting own shari
     await androidViewerContext.close()
     await sourceContext.close()
   }
+})
+
+test('device verification dialog requires a local decision and treats mismatches as unsafe', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const vueModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+    if (!vueModuleUrl) throw new Error('Vue module was not loaded.')
+    const { createApp, h, reactive } = await import(/* @vite-ignore */ vueModuleUrl)
+    const { default: DeviceComparisonSheet } = await import(
+      '../src/components/DeviceComparisonSheet.vue'
+    )
+    const comparison = {
+      shareId: 'synthetic-share-0001',
+      ownPeerId: 'viewer-A',
+      peerId: 'source-B',
+      role: 'viewer' as const,
+      challenge: 'A'.repeat(43),
+      letters: 'RKMP',
+      expiresAt: Date.now() + 120_000,
+    }
+    const state = reactive({
+      viewer: true,
+      mismatch: false,
+      canBlock: false,
+      comparison: comparison as typeof comparison | undefined,
+      events: [] as string[],
+    })
+    ;(window as Window & { __deviceDialogTest?: typeof state }).__deviceDialogTest = state
+    const container = document.createElement('div')
+    document.body.append(container)
+    createApp({
+      setup: () => () =>
+        h(DeviceComparisonSheet, {
+          label: 'River',
+          viewer: state.viewer,
+          comparison: state.comparison,
+          mismatch: state.mismatch,
+          pending: false,
+          canReject: !state.viewer && !state.canBlock,
+          canBlock: state.canBlock,
+          onConfirm: () => state.events.push('confirm'),
+          onMismatch: () => {
+            state.events.push('mismatch')
+            state.mismatch = true
+          },
+          onStop: () => state.events.push('stop'),
+          onBlock: () => state.events.push('block'),
+          onClear: () => state.events.push('clear'),
+          onClose: () => state.events.push('close'),
+        }),
+    }).mount(container)
+  })
+
+  const dialog = page.getByRole('dialog', { name: 'Verify connection' })
+  await expect(dialog).toContainText('RKMP')
+  await expect(dialog).toContainText('not the person')
+  await expect(dialog).toContainText('does not approve location access')
+  const events = () =>
+    page.evaluate(
+      () =>
+        (window as Window & { __deviceDialogTest?: { events: string[] } }).__deviceDialogTest!
+          .events,
+    )
+  expect(await events()).toEqual([])
+  await dialog.getByRole('button', { name: 'Letters match' }).click()
+  expect(await events()).toEqual(['confirm'])
+  await dialog.getByRole('button', { name: "Letters don't match" }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Do not trust this connection')
+  await dialog.getByRole('button', { name: 'Stop following' }).click()
+  expect(await events()).toEqual(['confirm', 'mismatch', 'stop'])
+
+  await page.evaluate(() => {
+    const state = (
+      window as Window & {
+        __deviceDialogTest?: {
+          viewer: boolean
+          mismatch: boolean
+          comparison?: unknown
+        }
+      }
+    ).__deviceDialogTest!
+    state.viewer = false
+    state.mismatch = false
+    state.comparison = undefined
+  })
+  await expect(dialog).toContainText('Waiting for the viewer to start verification')
+  await expect(dialog.getByRole('button', { name: 'Start verification' })).toHaveCount(0)
+
+  await page.evaluate(() => {
+    const state = (
+      window as Window & {
+        __deviceDialogTest?: {
+          viewer: boolean
+          mismatch: boolean
+          canBlock: boolean
+        }
+      }
+    ).__deviceDialogTest!
+    state.mismatch = true
+    state.canBlock = true
+  })
+  await dialog.getByRole('button', { name: 'Block this device' }).click()
+  expect(await events()).toEqual(['confirm', 'mismatch', 'stop', 'block'])
+  await page.evaluate(() => {
+    const state = (
+      window as Window & {
+        __deviceDialogTest?: {
+          viewer: boolean
+          mismatch: boolean
+          comparison?: object
+        }
+      }
+    ).__deviceDialogTest!
+    state.viewer = true
+    state.mismatch = false
+    state.comparison = {
+      shareId: 'synthetic-share-0001',
+      ownPeerId: 'viewer-A',
+      peerId: 'source-B',
+      role: 'viewer',
+      challenge: 'A'.repeat(43),
+      letters: 'RKMP',
+      expiresAt: Date.now() - 5_000,
+      confirmedAt: Date.now() - 30_000,
+    }
+  })
+  await expect(dialog).toContainText("other device's confirmation is not known")
+  await dialog.getByRole('button', { name: 'Clear local verification' }).click()
+  expect(await events()).toEqual(['confirm', 'mismatch', 'stop', 'block', 'clear'])
 })

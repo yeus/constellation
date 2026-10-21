@@ -93,11 +93,13 @@ two minutes; confirmations retain their historical transcript and are shown
 only for the current eligible binding. Blocking, revocation, changed source or
 local viewer identity, and stopping following invalidate their presentation.
 
-**Cancel / mismatch** clears the local result and confirmation. Cancelling an
-in-flight viewer exchange closes its stream. Cancellation after completion is
-local: it does not remotely erase the other device's displayed result or its
-independent confirmation. Tell the other person about a mismatch and reject or
-stop the link. No automatic verified claim or remote confirmation message exists.
+**Cancel** clears the local pending result and confirmation, and an in-flight viewer
+exchange closes its stream. **Letters don't match** also clears the local result,
+but shows an explicit warning with Stop following, Reject device (if approval
+is pending), or Block this device when an authenticated viewer fingerprint is
+available. Otherwise Revoke link explicitly affects all viewers of that link.
+Clearing a previously confirmed result is also explicit and local; neither side
+can erase the other's independent confirmation. Never retry automatically.
 
 Comparison requires protected storage. It remains optional when storage is
 unavailable or the peer lacks the new stream. Existing fingerprints retain their
@@ -105,6 +107,29 @@ existing informational role; they are not four-letter SAS values.
 
 Clock skew can make comparison fail closed; the two-minute deadline is not a
 trusted identity or wall-clock attestation.
+
+## Contextual workflow (v0.1.4)
+
+The selected peer's Connection details shows separate incoming and outgoing
+device relationships with an optional Verify connection action. The viewer
+starts the authenticated exchange; the sender waits for the viewer's request.
+Approval and preview surfaces offer contextual shortcuts. A sender-side notification
+shows when new letters are ready. A link-scoped modal shows large letters,
+the expiry, and explicit local match, mismatch, and cancellation controls.
+Confirmed comparisons show the local confirmation date and offer a way to clear
+that local confirmation. The viewer presentation uses the authenticated result
+for its share binding and role rather than comparing a presentation-level peer
+identifier with a cryptographic identity. Sender-side device selection remains
+bound to the exact authenticated viewer peer. Matching names or nicknames never
+qualify as verification. This adds no new protocol messages or location access.
+
+The desktop/mobile browser UI regression covers presentation, deliberate
+confirmation, mismatch escalation, and clearing; a two-browser end-to-end test
+covers viewer initiation, sender notification, matching letters and independent
+local confirmation. Installed Android and real-world human-channel acceptance
+remain outstanding.
+human-channel acceptance are still outstanding.
+
 
 ## Implementation and validation
 
