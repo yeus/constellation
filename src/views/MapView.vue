@@ -684,6 +684,7 @@ import {
   setRequireViewerApproval,
   setViewerCapacity,
   type LocationPrecision,
+  type ShareDraft,
   type ShareDuration,
   type ViewerCapacity,
 } from '../shareDraft.ts'
@@ -1135,18 +1136,18 @@ const receiveSharedText = async (): Promise<void> => {
     checkingSharedText = false
   }
 }
-let receivingApprovedReturns = false
-const refreshBackgroundStatus = async (): Promise<void> => {
-  if (!backgroundSharing) return
-  const next = await backgroundSharing.status()
-  if (backgroundStatus.value?.state !== next.state) {
+const logBackgroundStatusChanges = (
+  previous: AndroidBackgroundStatus | undefined,
+  next: AndroidBackgroundStatus,
+): void => {
+  if (previous?.state !== next.state) {
     sessionLog.record({ level: 'info', event: 'sharing.background.status', state: next.state })
   }
-  if (next.peerStatus && backgroundStatus.value?.peerStatus !== next.peerStatus) {
+  if (next.peerStatus && previous?.peerStatus !== next.peerStatus) {
     sessionLog.record({ level: 'info', event: 'sharing.background.peer', state: next.peerStatus })
   }
   const previousViewers =
-    backgroundStatus.value?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0
+    previous?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0
   const nextViewers = next.shares.reduce((count, share) => count + share.viewerCount, 0)
   if (previousViewers !== nextViewers) {
     sessionLog.record({
@@ -1155,7 +1156,7 @@ const refreshBackgroundStatus = async (): Promise<void> => {
       message: `${nextViewers} connected sessions across ${next.shares.length} links`,
     })
   }
-  if (backgroundStatus.value?.location.status !== next.location.status) {
+  if (previous?.location.status !== next.location.status) {
     sessionLog.record({
       level: 'info',
       event: 'sharing.background.location',
@@ -1164,8 +1165,8 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   }
   if (
     next.diagnostics &&
-    (!backgroundStatus.value?.diagnostics ||
-      transportSummary(backgroundStatus.value.diagnostics) !== transportSummary(next.diagnostics))
+    (!previous?.diagnostics ||
+      transportSummary(previous.diagnostics) !== transportSummary(next.diagnostics))
   ) {
     sessionLog.record({
       level: 'info',
@@ -1173,13 +1174,14 @@ const refreshBackgroundStatus = async (): Promise<void> => {
       message: transportSummary(next.diagnostics),
     })
   }
-  if (next.diagnostics) recordSessionEvents(backgroundStatus.value?.diagnostics, next.diagnostics)
-  const previousServiceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
-  const previous = backgroundStatus.value ?? { shares: [] }
-  backgroundStatus.value = next
-  dismissReadyShareOnNewRecipient(previous, next)
-  if (previousServiceOwnsLocation !== Boolean(next.shares.length)) updateLocationOwnership()
-  if (receivingApprovedReturns || changingReturnOffer.value) return
+  if (next.diagnostics) recordSessionEvents(previous?.diagnostics, next.diagnostics)
+}
+
+let receivingApprovedReturns = false
+const receiveApprovedBackgroundReturnsForStatus = async (
+  next: AndroidBackgroundStatus,
+): Promise<void> => {
+  if (!backgroundSharing || receivingApprovedReturns || changingReturnOffer.value) return
   receivingApprovedReturns = true
   try {
     const result = await receiveApprovedBackgroundReturns(
@@ -1197,6 +1199,18 @@ const refreshBackgroundStatus = async (): Promise<void> => {
   } finally {
     receivingApprovedReturns = false
   }
+}
+
+const refreshBackgroundStatus = async (): Promise<void> => {
+  if (!backgroundSharing) return
+  const next = await backgroundSharing.status()
+  logBackgroundStatusChanges(backgroundStatus.value, next)
+  const previousServiceOwnsLocation = Boolean(backgroundStatus.value?.shares.length)
+  const previous = backgroundStatus.value ?? { shares: [] }
+  backgroundStatus.value = next
+  dismissReadyShareOnNewRecipient(previous, next)
+  if (previousServiceOwnsLocation !== Boolean(next.shares.length)) updateLocationOwnership()
+  await receiveApprovedBackgroundReturnsForStatus(next)
 }
 
 const activeShares = computed(() =>
@@ -1707,12 +1721,14 @@ const acceptScannedLink = (url: string): void => {
   offerInvitation(url)
 }
 
-const createShare = async (): Promise<void> => {
-  if (behaviorReviewRequired.value || settingsBusy.value) {
-    openSettings()
-    return
-  }
-  if (creatingShare.value) return
+type ShareCreationContext = {
+  readonly shareBackTarget: string | undefined
+  readonly returnFollow: SharingRuntimeState['following'][number] | undefined
+  readonly useBackground: boolean
+  readonly draft: ShareDraft
+}
+
+const beginShareCreation = (): ShareCreationContext => {
   const shareBackTarget = returnTarget.value
   const returnFollow = shareBackTarget
     ? runtimeState.value.following.find(({ shareId }) => shareId === shareBackTarget)
@@ -1729,102 +1745,156 @@ const createShare = async (): Promise<void> => {
   creatingShare.value = true
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.share.create.started' })
+  return { shareBackTarget, returnFollow, useBackground, draft }
+}
+
+const validateReturnShareTarget = (context: ShareCreationContext): void => {
+  if (
+    context.shareBackTarget &&
+    (!context.returnFollow ||
+      ['approval-pending', 'denied', 'revoked', 'expired'].includes(context.returnFollow.status))
+  ) {
+    throw new Error('This location is no longer available for sharing back.')
+  }
+  if (context.shareBackTarget && !context.returnFollow?.peerId) {
+    throw new Error('The original sender has no verified device identity.')
+  }
+}
+
+const waitForBackgroundCondition = async (condition: () => boolean): Promise<void> => {
+  const deadline = Date.now() + 30_000
+  while (!condition() && Date.now() < deadline) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 250))
+    await refreshBackgroundStatus()
+  }
+}
+
+const startBackgroundShare = async (
+  context: ShareCreationContext,
+  sharing: NonNullable<typeof backgroundSharing>,
+): Promise<ShareSummary> => {
+  await refreshBackgroundStatus()
+  await waitForBackgroundCondition(() => backgroundStatus.value?.state !== 'starting')
+  const existingShareIds = new Set(backgroundStatus.value?.shares.map(({ shareId }) => shareId))
+  locationSource.stop()
+  backgroundStatus.value = await sharing.start(
+    context.draft,
+    shareBaseUrl,
+    document.visibilityState === 'visible',
+  )
+  await waitForBackgroundCondition(
+    () =>
+      Boolean(
+        backgroundStatus.value?.shares.some(({ shareId }) => !existingShareIds.has(shareId)),
+      ) || backgroundStatus.value?.state === 'error',
+  )
+  const created = backgroundStatus.value?.shares.find(
+    ({ shareId }) => !existingShareIds.has(shareId),
+  )
+  if (!created) {
+    throw new Error(backgroundStatus.value?.message || 'Could not create the location link.')
+  }
+  return created
+}
+
+const verifyBackgroundOwnership = async (
+  updated: ShareSummary,
+  source: ReturnType<typeof parseShareInvitation>,
+  owner: { ownerPeerId: string },
+): Promise<void> => {
+  const updatedCapability = parseShareInvitation(updated.url)
+  if (
+    updatedCapability.sourcePeerId !== source.sourcePeerId ||
+    updatedCapability.secret !== source.secret ||
+    !(await verifyReturnOwner(updatedCapability, owner.ownerPeerId))
+  ) {
+    throw new Error('The background link failed ownership verification.')
+  }
+}
+
+const adoptBackgroundOwnership = async (
+  created: ShareSummary,
+  context: ShareCreationContext,
+  sharing: NonNullable<typeof backgroundSharing>,
+): Promise<ShareSummary> => {
+  // Adopt the foreground owner proof before the link is presented so a
+  // return offer can never be bound to the unattended native identity.
+  const binding =
+    context.shareBackTarget && context.returnFollow?.peerId
+      ? ({ mode: 'recipient', recipientPeerId: context.returnFollow.peerId } as const)
+      : ({ mode: 'source' } as const)
   try {
-    if (
-      shareBackTarget &&
-      (!returnFollow ||
-        ['approval-pending', 'denied', 'revoked', 'expired'].includes(returnFollow.status))
-    ) {
-      throw new Error('This location is no longer available for sharing back.')
-    }
-    if (shareBackTarget && !returnFollow?.peerId) {
-      throw new Error('The original sender has no verified device identity.')
-    }
-    if (useBackground && backgroundSharing) {
-      await refreshBackgroundStatus()
-      let deadline = Date.now() + 30_000
-      while (backgroundStatus.value?.state === 'starting' && Date.now() < deadline) {
-        await new Promise((resolve) => window.setTimeout(resolve, 250))
-        await refreshBackgroundStatus()
-      }
-      const existingShareIds = new Set(backgroundStatus.value?.shares.map(({ shareId }) => shareId))
-      locationSource.stop()
-      backgroundStatus.value = await backgroundSharing.start(
-        draft,
-        shareBaseUrl,
-        document.visibilityState === 'visible',
-      )
-      deadline = Date.now() + 30_000
-      while (
-        !backgroundStatus.value.shares.some(({ shareId }) => !existingShareIds.has(shareId)) &&
-        backgroundStatus.value.state !== 'error' &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => window.setTimeout(resolve, 250))
-        await refreshBackgroundStatus()
-      }
-      const created = backgroundStatus.value.shares.find(
-        ({ shareId }) => !existingShareIds.has(shareId),
-      )
-      if (!created) {
-        throw new Error(backgroundStatus.value.message || 'Could not create the location link.')
-      }
-      // Adopt the foreground owner proof before the link is presented so a
-      // return offer can never be bound to the unattended native identity.
-      const binding =
-        shareBackTarget && returnFollow?.peerId
-          ? ({ mode: 'recipient', recipientPeerId: returnFollow.peerId } as const)
-          : ({ mode: 'source' } as const)
-      try {
-        const source = parseShareInvitation(created.url)
-        const owner = await runtime.signReturnOwnership(source.shareId, source.sourcePeerId)
-        const adopted = await backgroundSharing.replaceBackgroundOwner(
-          source.shareId,
-          source.sourcePeerId,
-          owner.ownerPeerId,
-          owner.ownerProof,
-          binding,
-        )
-        const updated = adopted.shares.find(({ shareId }) => shareId === source.shareId)
-        if (!updated) throw new Error('Background ownership change was not confirmed.')
-        const updatedCapability = parseShareInvitation(updated.url)
-        if (
-          updatedCapability.sourcePeerId !== source.sourcePeerId ||
-          updatedCapability.secret !== source.secret ||
-          !(await verifyReturnOwner(updatedCapability, owner.ownerPeerId))
-        ) {
-          throw new Error('The background link failed ownership verification.')
-        }
-        backgroundStatus.value = adopted
-        readyShare.value = updated
-      } catch (error) {
-        // Never serve or offer a native-owned link whose returns cannot reach
-        // the foreground owner.
-        await backgroundSharing.stop(created.shareId).catch(() => undefined)
-        throw error
-      }
-    } else {
-      readyShare.value = await runtime.createShare(draft)
-    }
-    if (shareBackTarget && readyShare.value) {
-      try {
-        await runtime.offerReturnShare(
-          shareBackTarget,
-          readyShare.value.url,
-          useBackground ? { externalBoundRecipientPeerId: returnFollow?.peerId } : undefined,
-        )
-        await runtime.markReturnPromptSeen(shareBackTarget)
-        readyShare.value = undefined
-      } catch (error) {
-        localError.value =
-          error instanceof Error ? error.message : 'Send this return link to the sender manually.'
-      }
-    }
-    shareSheetOpen.value = false
-    if (returnTarget.value === shareBackTarget) returnTarget.value = undefined
-    shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
-    collapseActions()
-    sessionLog.record({ level: 'info', event: 'sharing.share.create.succeeded' })
+    const source = parseShareInvitation(created.url)
+    const owner = await runtime.signReturnOwnership(source.shareId, source.sourcePeerId)
+    const adopted = await sharing.replaceBackgroundOwner(
+      source.shareId,
+      source.sourcePeerId,
+      owner.ownerPeerId,
+      owner.ownerProof,
+      binding,
+    )
+    const updated = adopted.shares.find(({ shareId }) => shareId === source.shareId)
+    if (!updated) throw new Error('Background ownership change was not confirmed.')
+    await verifyBackgroundOwnership(updated, source, owner)
+    backgroundStatus.value = adopted
+    return updated
+  } catch (error) {
+    // Never serve or offer a native-owned link whose returns cannot reach
+    // the foreground owner.
+    await sharing.stop(created.shareId).catch(() => undefined)
+    throw error
+  }
+}
+
+const createBackgroundShare = async (
+  context: ShareCreationContext,
+  sharing: NonNullable<typeof backgroundSharing>,
+): Promise<ShareSummary> => {
+  const created = await startBackgroundShare(context, sharing)
+  return adoptBackgroundOwnership(created, context, sharing)
+}
+
+const sendReturnShare = async (context: ShareCreationContext): Promise<void> => {
+  if (!context.shareBackTarget || !readyShare.value) return
+  try {
+    await runtime.offerReturnShare(
+      context.shareBackTarget,
+      readyShare.value.url,
+      context.useBackground
+        ? { externalBoundRecipientPeerId: context.returnFollow?.peerId }
+        : undefined,
+    )
+    await runtime.markReturnPromptSeen(context.shareBackTarget)
+    readyShare.value = undefined
+  } catch (error) {
+    localError.value =
+      error instanceof Error ? error.message : 'Send this return link to the sender manually.'
+  }
+}
+
+const completeShareCreation = (context: ShareCreationContext): void => {
+  shareSheetOpen.value = false
+  if (returnTarget.value === context.shareBackTarget) returnTarget.value = undefined
+  shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
+  collapseActions()
+  sessionLog.record({ level: 'info', event: 'sharing.share.create.succeeded' })
+}
+
+const createShare = async (): Promise<void> => {
+  if (behaviorReviewRequired.value || settingsBusy.value) {
+    openSettings()
+    return
+  }
+  if (creatingShare.value) return
+  const context = beginShareCreation()
+  try {
+    validateReturnShareTarget(context)
+    readyShare.value =
+      context.useBackground && backgroundSharing
+        ? await createBackgroundShare(context, backgroundSharing)
+        : await runtime.createShare(context.draft)
+    await sendReturnShare(context)
+    completeShareCreation(context)
   } catch (error) {
     sessionLog.record({ level: 'error', event: 'sharing.share.create.failed' })
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'

@@ -531,6 +531,13 @@ import type { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import { FOLLOW_COLORS, type FollowSummary, type ShareSummary } from '../sharing/sharingRuntime.ts'
 
 type PeerFilter = 'all' | 'sharing' | 'viewing' | 'both' | 'group'
+type OldPeerRecord = {
+  shareId: string
+  peerId?: string
+  name?: string
+  endedAt: number
+  reason: 'revoked' | 'expired'
+}
 type PeerLink = { share: ShareSummary; viewer?: NonNullable<ShareSummary['viewers']>[number] }
 type PeerEntry = {
   key: string
@@ -565,20 +572,8 @@ const props = defineProps<{
   pauseBusy?: boolean
   revokeAllBusy?: boolean
   stoppedViewers: readonly StoppedViewerRecord[]
-  oldShares: readonly {
-    shareId: string
-    peerId?: string
-    name?: string
-    endedAt: number
-    reason: 'revoked' | 'expired'
-  }[]
-  oldFollowing: readonly {
-    shareId: string
-    peerId?: string
-    name?: string
-    endedAt: number
-    reason: 'revoked' | 'expired'
-  }[]
+  oldShares: readonly OldPeerRecord[]
+  oldFollowing: readonly OldPeerRecord[]
 }>()
 const emit = defineEmits<{
   clearOld: []
@@ -706,30 +701,37 @@ const showEnded = ref(false)
 const totalConnectedViewers = computed(() =>
   props.shares.reduce((count, share) => count + share.viewerCount, 0),
 )
-const peers = computed(() => {
-  const entries = new Map<string, PeerEntry>()
-  const getEntry = (key: string, peerId?: string): PeerEntry => {
-    const existing = entries.get(key)
-    if (existing) return existing
-    const created: PeerEntry = {
-      key,
-      peerId,
-      shares: [],
-      following: [],
-      name: 'Unknown peer',
-      color: '#438ec9',
-      waiting: false,
-      stopped: [],
-      ended: [],
-    }
-    entries.set(key, created)
-    return created
+const getPeerEntry = (
+  entries: Map<string, PeerEntry>,
+  key: string,
+  peerId?: string,
+): PeerEntry => {
+  const existing = entries.get(key)
+  if (existing) return existing
+  const created: PeerEntry = {
+    key,
+    peerId,
+    shares: [],
+    following: [],
+    name: 'Unknown peer',
+    color: '#438ec9',
+    waiting: false,
+    stopped: [],
+    ended: [],
   }
+  entries.set(key, created)
+  return created
+}
 
-  for (const share of props.shares) {
+const addShareEntries = (
+  entries: Map<string, PeerEntry>,
+  shares: readonly ShareSummary[],
+): void => {
+  for (const share of shares) {
     const viewers = share.viewers ?? []
     if (viewers.length === 0) {
-      getEntry(
+      getPeerEntry(
+        entries,
         share.recipientPeerId ? `peer:${share.recipientPeerId}` : `share:${share.shareId}`,
         share.recipientPeerId,
       ).shares.push({ share })
@@ -739,16 +741,28 @@ const peers = computed(() => {
       const key = viewer.peerId
         ? `peer:${viewer.peerId}`
         : `connection:${share.shareId}:${viewer.fingerprint}`
-      getEntry(key, viewer.peerId).shares.push({ share, viewer })
+      getPeerEntry(entries, key, viewer.peerId).shares.push({ share, viewer })
     }
   }
-  for (const follow of props.following) {
-    const key = follow.peerId ? `peer:${follow.peerId}` : `follow:${follow.shareId}`
-    getEntry(key, follow.peerId).following.push(follow)
-  }
+}
 
-  for (const ended of props.oldShares) {
-    getEntry(
+const addFollowingEntries = (
+  entries: Map<string, PeerEntry>,
+  following: readonly FollowSummary[],
+): void => {
+  for (const follow of following) {
+    const key = follow.peerId ? `peer:${follow.peerId}` : `follow:${follow.shareId}`
+    getPeerEntry(entries, key, follow.peerId).following.push(follow)
+  }
+}
+
+const addOldShareEntries = (
+  entries: Map<string, PeerEntry>,
+  oldShares: readonly OldPeerRecord[],
+): void => {
+  for (const ended of oldShares) {
+    getPeerEntry(
+      entries,
       ended.peerId ? `peer:${ended.peerId}` : `share:${ended.shareId}`,
       ended.peerId,
     ).ended.push({
@@ -759,8 +773,15 @@ const peers = computed(() => {
       reason: ended.reason,
     })
   }
-  for (const ended of props.oldFollowing) {
-    getEntry(
+}
+
+const addOldFollowingEntries = (
+  entries: Map<string, PeerEntry>,
+  oldFollowing: readonly OldPeerRecord[],
+): void => {
+  for (const ended of oldFollowing) {
+    getPeerEntry(
+      entries,
       ended.peerId ? `peer:${ended.peerId}` : `follow:${ended.shareId}`,
       ended.peerId,
     ).ended.push({
@@ -771,76 +792,126 @@ const peers = computed(() => {
       reason: ended.reason,
     })
   }
+}
 
-  for (const record of props.stoppedViewers) {
-    getEntry(`peer:${record.peerId}`, record.peerId).stopped.push(record)
+const addStoppedViewerEntries = (
+  entries: Map<string, PeerEntry>,
+  stoppedViewers: readonly StoppedViewerRecord[],
+): void => {
+  for (const record of stoppedViewers) {
+    getPeerEntry(entries, `peer:${record.peerId}`, record.peerId).stopped.push(record)
   }
+}
 
+const collectPeerEntries = (
+  shares: readonly ShareSummary[],
+  following: readonly FollowSummary[],
+  oldShares: readonly OldPeerRecord[],
+  oldFollowing: readonly OldPeerRecord[],
+  stoppedViewers: readonly StoppedViewerRecord[],
+): Map<string, PeerEntry> => {
+  const entries = new Map<string, PeerEntry>()
+  addShareEntries(entries, shares)
+  addFollowingEntries(entries, following)
+  addOldShareEntries(entries, oldShares)
+  addOldFollowingEntries(entries, oldFollowing)
+  addStoppedViewerEntries(entries, stoppedViewers)
+  return entries
+}
+
+const primaryPeerName = (entry: PeerEntry): string | undefined =>
+  entry.following[0]?.displayName ||
+  entry.following[0]?.localName ||
+  entry.shares.find((connection) => connection.viewer?.displayName)?.viewer?.displayName ||
+  entry.shares.find((connection) => connection.viewer?.localName)?.viewer?.localName
+
+const sourcePeerName = (entry: PeerEntry): string | undefined =>
+  entry.shares.find((connection) => connection.viewer?.sourceName)?.viewer?.sourceName
+
+const defaultPeerName = (entry: PeerEntry): string => {
+  if (entry.shares.some((connection) => connection.viewer)) return 'Connected peer'
+  if (entry.peerId) {
+    if (entry.stopped.length) return 'Stopped sharing'
+    return entry.shares.length ? 'Known peer' : 'Former peer'
+  }
+  return entry.ended[0]?.name || 'Waiting for a viewer'
+}
+
+const peerDisplayName = (
+  entry: PeerEntry,
+  preferences: readonly PeerNamePreference[] | undefined,
+): string => {
+  const preference = preferences?.find(({ peerId }) => peerId === entry.peerId)
+  return (
+    primaryPeerName(entry) ||
+    preference?.nickname ||
+    preference?.acceptedName ||
+    sourcePeerName(entry) ||
+    defaultPeerName(entry)
+  )
+}
+
+const decoratePeerEntry = (
+  entry: PeerEntry,
+  preferences: readonly PeerNamePreference[] | undefined,
+): PeerEntry => {
+  entry.name = peerDisplayName(entry, preferences)
+  entry.waiting =
+    entry.shares.length > 0 &&
+    entry.shares.every(({ viewer }) => !viewer) &&
+    !entry.following.length
+  entry.color = entry.following[0]?.color ?? '#438ec9'
+  return entry
+}
+
+const matchesSharingFilter = (entry: PeerEntry, showEnded: boolean): boolean =>
+  entry.stopped.some(({ dismissed }) => !dismissed) ||
+  (showEnded && entry.stopped.length > 0) ||
+  entry.shares.length > 0 ||
+  (showEnded && entry.ended.some(({ kind }) => kind === 'sharing'))
+
+const matchesViewingFilter = (entry: PeerEntry, showEnded: boolean): boolean =>
+  entry.following.length > 0 ||
+  (showEnded && entry.ended.some(({ kind }) => kind === 'viewing'))
+
+const matchesPeerFilter = (
+  entry: PeerEntry,
+  filter: PeerFilter,
+  showEnded: boolean,
+  limitedIds: readonly string[] | undefined,
+): boolean => {
+  if (limitedIds && !entry.following.some(({ shareId }) => limitedIds.includes(shareId))) {
+    return false
+  }
+  if (
+    !showEnded &&
+    !entry.shares.length &&
+    !entry.following.length &&
+    !entry.stopped.some(({ dismissed }) => !dismissed)
+  ) {
+    return false
+  }
+  if (filter === 'sharing') return matchesSharingFilter(entry, showEnded)
+  if (filter === 'viewing') return matchesViewingFilter(entry, showEnded)
+  if (filter === 'both') {
+    return matchesSharingFilter(entry, showEnded) && matchesViewingFilter(entry, showEnded)
+  }
+  return true
+}
+
+const peers = computed(() => {
+  const entries = collectPeerEntries(
+    props.shares,
+    props.following,
+    props.oldShares,
+    props.oldFollowing,
+    props.stoppedViewers,
+  )
   return [...entries.values()]
-    .map((entry) => {
-      const peerPreference = props.peerNamePreferences?.find(
-        ({ peerId }) => peerId === entry.peerId,
-      )
-      entry.name =
-        entry.following[0]?.displayName ||
-        entry.following[0]?.localName ||
-        entry.shares.find((connection) => connection.viewer?.displayName)?.viewer?.displayName ||
-        entry.shares.find((connection) => connection.viewer?.localName)?.viewer?.localName ||
-        peerPreference?.nickname ||
-        peerPreference?.acceptedName ||
-        entry.shares.find((connection) => connection.viewer?.sourceName)?.viewer?.sourceName ||
-        (entry.shares.some((connection) => connection.viewer)
-          ? 'Connected peer'
-          : entry.peerId
-            ? entry.stopped.length
-              ? 'Stopped sharing'
-              : entry.shares.length
-                ? 'Known peer'
-                : 'Former peer'
-            : entry.ended[0]?.name || 'Waiting for a viewer')
-      entry.waiting =
-        entry.shares.length > 0 &&
-        entry.shares.every(({ viewer }) => !viewer) &&
-        !entry.following.length
-      entry.color = entry.following[0]?.color ?? '#438ec9'
-      return entry
-    })
-    .filter((entry) => {
-      if (
-        props.limitedIds &&
-        !entry.following.some(({ shareId }) => props.limitedIds?.includes(shareId))
-      )
-        return false
-      if (
-        !showEnded.value &&
-        !entry.shares.length &&
-        !entry.following.length &&
-        !entry.stopped.some(({ dismissed }) => !dismissed)
-      )
-        return false
-      if (props.filter === 'sharing')
-        return (
-          entry.stopped.some(({ dismissed }) => !dismissed) ||
-          (showEnded.value && entry.stopped.length > 0) ||
-          entry.shares.length > 0 ||
-          (showEnded.value && entry.ended.some(({ kind }) => kind === 'sharing'))
-        )
-      if (props.filter === 'viewing')
-        return (
-          entry.following.length > 0 ||
-          (showEnded.value && entry.ended.some(({ kind }) => kind === 'viewing'))
-        )
-      if (props.filter === 'both') {
-        const sharing =
-          entry.shares.length > 0 ||
-          (showEnded.value && entry.ended.some(({ kind }) => kind === 'sharing'))
-        const viewing =
-          entry.following.length > 0 ||
-          (showEnded.value && entry.ended.some(({ kind }) => kind === 'viewing'))
-        return sharing && viewing
-      }
-      return true
-    })
+    .map((entry) => decoratePeerEntry(entry, props.peerNamePreferences))
+    .filter((entry) =>
+      matchesPeerFilter(entry, props.filter, showEnded.value, props.limitedIds),
+    )
     .sort((left, right) => left.name.localeCompare(right.name))
 })
 

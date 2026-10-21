@@ -134,336 +134,458 @@ const draftFor = (request: CreateRequest): ShareDraft => ({
   network: request.network ?? 'always',
 })
 
-const start = (): void => {
-  let positionObserver: ((position: BrowserPosition) => void) | undefined
-  let refreshObserver: ((position: BrowserPosition) => void) | undefined
-  let errorObserver: ((error: { code: number }) => void) | undefined
-  let latestState: SharingRuntimeState | undefined
-  let previousShareCount = 0
-  let requestCounter = 0
-  let commandQueue = Promise.resolve()
-  const pendingStoreRequests = new Map<
+interface StoreState {
+  readonly pendingStoreRequests: Map<
     string,
     { resolve: (state: string | null | undefined) => void; reject: (error: Error) => void }
-  >()
+  >
+  requestCounter: number
+}
 
-  const storeRequest = (action: 'load' | 'save', state?: PrivateState) =>
-    new Promise<string | null | undefined>((resolve, reject) => {
-      const requestId = `${Date.now()}-${++requestCounter}`
-      pendingStoreRequests.set(requestId, { resolve, reject })
-      post({
-        type: 'private-state',
-        action,
-        requestId,
-        ...(state ? { state: JSON.stringify(state) } : {}),
-      })
+interface LocationObservers {
+  positionObserver?: (position: BrowserPosition) => void
+  refreshObserver?: (position: BrowserPosition) => void
+  errorObserver?: (error: { code: number }) => void
+}
+
+interface BackgroundEntryState extends StoreState {
+  readonly observers: LocationObservers
+  readonly location: ReturnType<typeof createBrowserLocationSource>
+  readonly runtime: ReturnType<typeof createSharingRuntime>
+  latestState?: SharingRuntimeState
+  previousShareCount: number
+  commandQueue: Promise<void>
+}
+
+const createStoreState = (): StoreState => ({
+  pendingStoreRequests: new Map(),
+  requestCounter: 0,
+})
+
+const storeRequest = (
+  state: StoreState,
+  action: 'load' | 'save',
+  privateState?: PrivateState,
+) =>
+  new Promise<string | null | undefined>((resolve, reject) => {
+    const requestId = `${Date.now()}-${++state.requestCounter}`
+    state.pendingStoreRequests.set(requestId, { resolve, reject })
+    post({
+      type: 'private-state',
+      action,
+      requestId,
+      ...(privateState ? { state: JSON.stringify(privateState) } : {}),
     })
+  })
 
-  const privateStore: PrivateStateStore = {
-    load: async () => {
-      const encoded = await storeRequest('load')
-      return encoded ? parsePrivateStateJson(encoded) : undefined
-    },
-    save: async (state) => {
-      await storeRequest('save', state)
-    },
-  }
+const createPrivateStore = (state: StoreState): PrivateStateStore => ({
+  load: async () => {
+    const encoded = await storeRequest(state, 'load')
+    return encoded ? parsePrivateStateJson(encoded) : undefined
+  },
+  save: async (next) => {
+    await storeRequest(state, 'save', next)
+  },
+})
 
+const createBackgroundEntryState = (): BackgroundEntryState => {
+  const observers: LocationObservers = {}
   const location = createBrowserLocationSource({
     sourceId: crypto.randomUUID(),
     geolocation: {
       watchPosition: (success, error) => {
-        positionObserver = success
-        errorObserver = error
+        observers.positionObserver = success
+        observers.errorObserver = error
         post({ type: 'location-watch-start' })
         return 1
       },
       clearWatch: () => post({ type: 'location-watch-stop' }),
       getCurrentPosition: (success) => {
-        refreshObserver = success
+        observers.refreshObserver = success
         post({ type: 'location-refresh' })
       },
     },
   })
-  const runtime = createSharingRuntime(location, undefined, privateStore, 'external')
+  const store = createStoreState()
+  const runtime = createSharingRuntime(location, undefined, createPrivateStore(store), 'external')
   runtime.setVisible(false, false)
   runtime.setNetworkState('unknown')
-
-  const report = (state: SharingRuntimeState): void => {
-    const shareCount = state.shares.length
-    const workCount = shareCount + state.endNotifications.length
-    const becameIdle = shouldSignalIdleAfterShareUpdate(previousShareCount, workCount)
-    previousShareCount = workCount
-    latestState = state
-    post({
-      type: 'status',
-      status: backgroundRuntimeStatus(state, runtime.networkDiagnostics(), state.location),
-    })
-    if (becameIdle) post({ type: 'idle' })
+  return {
+    ...store,
+    observers,
+    location,
+    runtime,
+    previousShareCount: 0,
+    commandQueue: Promise.resolve(),
   }
+}
 
-  const sendError = (error: unknown, fallback: string): void =>
-    post({
-      type: 'status',
-      status: backgroundRuntimeStatus(
-        latestState,
-        runtime.networkDiagnostics(),
-        location.getState(),
-        error instanceof Error ? error.message : fallback,
-      ),
-    })
+const report = (state: BackgroundEntryState, next: SharingRuntimeState): void => {
+  const shareCount = next.shares.length
+  const workCount = shareCount + next.endNotifications.length
+  const becameIdle = shouldSignalIdleAfterShareUpdate(state.previousShareCount, workCount)
+  state.previousShareCount = workCount
+  state.latestState = next
+  post({
+    type: 'status',
+    status: backgroundRuntimeStatus(
+      next,
+      state.runtime.networkDiagnostics(),
+      next.location,
+    ),
+  })
+  if (becameIdle) post({ type: 'idle' })
+}
 
-  const runCommand = async (command: BackgroundCommand): Promise<void> => {
-    if (command.type === 'private-state-result') {
-      const pending = pendingStoreRequests.get(command.requestId)
-      if (!pending) return
-      pendingStoreRequests.delete(command.requestId)
-      if (command.error) pending.reject(new Error(command.error))
-      else pending.resolve(command.state)
+const sendError = (
+  state: BackgroundEntryState,
+  error: unknown,
+  fallback: string,
+): void => {
+  post({
+    type: 'status',
+    status: backgroundRuntimeStatus(
+      state.latestState,
+      state.runtime.networkDiagnostics(),
+      state.location.getState(),
+      error instanceof Error ? error.message : fallback,
+    ),
+  })
+}
+
+const resolveStoreResult = (
+  state: StoreState,
+  command: Extract<BackgroundCommand, { type: 'private-state-result' }>,
+): void => {
+  const pending = state.pendingStoreRequests.get(command.requestId)
+  if (!pending) return
+  state.pendingStoreRequests.delete(command.requestId)
+  if (command.error) pending.reject(new Error(command.error))
+  else pending.resolve(command.state)
+}
+
+const handleTransientCommand = (
+  state: BackgroundEntryState,
+  command: BackgroundCommand,
+): boolean => {
+  switch (command.type) {
+    case 'private-state-result':
+      resolveStoreResult(state, command)
+      return true
+    case 'location':
+      state.observers.positionObserver?.(command.position)
+      return true
+    case 'location-refresh-result':
+      state.observers.refreshObserver?.(command.position)
+      state.observers.refreshObserver = undefined
+      return true
+    case 'location-error':
+      state.observers.errorObserver?.({ code: command.code })
+      return true
+    default:
+      return false
+  }
+}
+
+const isTransientCommandType = (type: BackgroundCommand['type']): boolean =>
+  type === 'private-state-result' ||
+  type === 'location' ||
+  type === 'location-refresh-result' ||
+  type === 'location-error'
+
+const isShareCommandType = (type: BackgroundCommand['type']): boolean =>
+  type === 'create-share' ||
+  type === 'stop-share' ||
+  type === 'stop-all' ||
+  type === 'stop-foreground-only' ||
+  type === 'set-visible' ||
+  type === 'set-paused' ||
+  type === 'network-state'
+
+const isViewerCommandType = (type: BackgroundCommand['type']): boolean =>
+  type === 'block-viewer' ||
+  type === 'device-comparison' ||
+  type === 'approve-viewer' ||
+  type === 'set-viewer-name'
+
+const isReturnCommandType = (
+  command: BackgroundCommand,
+): command is BackgroundReturnCommand =>
+  command.type === 'approve-return-link' ||
+  command.type === 'dismiss-return-offer' ||
+  command.type === 'dismiss-stopped-viewer'
+
+const runCompletion = async (
+  requestId: string,
+  errorMessage: string,
+  action: () => Promise<unknown>,
+): Promise<void> => {
+  try {
+    await action()
+    post({ type: 'command-complete', requestId })
+  } catch {
+    post({ type: 'command-complete', requestId, error: errorMessage })
+  }
+}
+
+const createShareCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'create-share' }>,
+): Promise<void> => {
+  try {
+    state.runtime.setVisible(command.request.visible, command.request.visible)
+    await state.runtime.createShare(
+      draftFor(command.request),
+      command.request.expiresAt,
+      command.request.shareBaseUrl,
+    )
+  } catch (error) {
+    sendError(state, error, 'P2P sharing failed.')
+  } finally {
+    post({ type: 'create-complete', requestId: command.requestId })
+  }
+}
+
+const stopShareCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'stop-share' }>,
+): Promise<void> => {
+  try {
+    await state.runtime.stopShare(command.shareId)
+  } catch (error) {
+    sendError(state, error, 'Could not revoke this location link.')
+  }
+}
+
+const stopAllCommand = async (state: BackgroundEntryState): Promise<void> => {
+  try {
+    const shares = state.latestState?.shares ?? []
+    for (const { shareId } of shares) await state.runtime.stopShare(shareId)
+    await state.runtime.stopEndNotifications()
+  } catch (error) {
+    sendError(state, error, 'Could not stop all location links.')
+  }
+  if (!state.latestState?.shares.length && !state.latestState?.endNotifications.length) {
+    post({ type: 'idle' })
+  }
+}
+
+const pauseForegroundOnly = async (state: BackgroundEntryState): Promise<void> => {
+  if (
+    state.latestState?.shares.some((share) => share.publication === 'background') ||
+    state.latestState?.endNotifications.some((share) => share.publication === 'background')
+  ) {
+    return
+  }
+  await state.runtime.stop()
+  post({ type: 'paused' })
+}
+
+const runShareCommand = async (
+  state: BackgroundEntryState,
+  command: BackgroundCommand,
+): Promise<void> => {
+  switch (command.type) {
+    case 'create-share':
+      return createShareCommand(state, command)
+    case 'stop-share':
+      return stopShareCommand(state, command)
+    case 'stop-all':
+      return stopAllCommand(state)
+    case 'stop-foreground-only':
+      state.runtime.setVisible(false, false)
+      return pauseForegroundOnly(state)
+    case 'set-visible':
+      state.runtime.setVisible(command.visible, command.visible)
+      if (!command.visible) await pauseForegroundOnly(state)
       return
-    }
-    if (command.type === 'location') return positionObserver?.(command.position)
-    if (command.type === 'location-refresh-result') {
-      refreshObserver?.(command.position)
-      refreshObserver = undefined
-      return
-    }
-    if (command.type === 'location-error') return errorObserver?.({ code: command.code })
-    if (command.type === 'create-share') {
-      try {
-        runtime.setVisible(command.request.visible, command.request.visible)
-        await runtime.createShare(
-          draftFor(command.request),
-          command.request.expiresAt,
-          command.request.shareBaseUrl,
-        )
-        post({ type: 'create-complete', requestId: command.requestId })
-      } catch (error) {
-        sendError(error, 'P2P sharing failed.')
-        post({ type: 'create-complete', requestId: command.requestId })
-      }
-      return
-    }
-    if (command.type === 'stop-share') {
-      try {
-        await runtime.stopShare(command.shareId)
-      } catch (error) {
-        sendError(error, 'Could not revoke this location link.')
-      }
-      return
-    }
-    if (command.type === 'stop-all') {
-      try {
-        const shares = latestState?.shares ?? []
-        for (const { shareId } of shares) await runtime.stopShare(shareId)
-        await runtime.stopEndNotifications()
-      } catch (error) {
-        sendError(error, 'Could not stop all location links.')
-      }
-      if (!latestState?.shares.length && !latestState?.endNotifications.length)
-        post({ type: 'idle' })
-      return
-    }
-    const pauseForegroundOnly = async (): Promise<void> => {
-      if (
-        latestState?.shares.some((share) => share.publication === 'background') ||
-        latestState?.endNotifications.some((share) => share.publication === 'background')
+    case 'set-paused':
+      return runCompletion(
+        command.requestId,
+        'Could not save the sharing pause. Try again.',
+        () => state.runtime.setPaused(command.paused),
       )
-        return
-      await runtime.stop()
-      post({ type: 'paused' })
-    }
-    if (command.type === 'stop-foreground-only') {
-      runtime.setVisible(false, false)
-      await pauseForegroundOnly()
+    case 'network-state':
+      state.runtime.setNetworkState(command.state === 'unmetered' ? undefined : command.state)
       return
-    }
-    if (command.type === 'set-visible') {
-      runtime.setVisible(command.visible, command.visible)
-      if (!command.visible) await pauseForegroundOnly()
-      return
-    }
-    if (command.type === 'set-paused') {
-      try {
-        await runtime.setPaused(command.paused)
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not save the sharing pause. Try again.',
-        })
-      }
-      return
-    }
-    if (command.type === 'network-state') {
-      runtime.setNetworkState(command.state === 'unmetered' ? undefined : command.state)
-      return
-    }
-    if (command.type === 'block-viewer') {
-      try {
-        await runtime.blockViewer(command.shareId, command.fingerprint)
-      } catch (error) {
-        sendError(error, 'Could not block this device.')
-      }
-      return
-    }
-    if (command.type === 'replace-background-owner') {
-      try {
-        await runtime.replaceBackgroundShareOwner(
-          command.shareId,
-          command.sourcePeerId,
-          command.ownerPeerId,
-          command.ownerProof,
-          command.mode === 'recipient' && command.recipientPeerId
-            ? { mode: 'recipient', recipientPeerId: command.recipientPeerId }
-            : { mode: 'source' },
-        )
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not authenticate the foreground location owner.',
-        })
-      }
-      return
-    }
-    if (command.type === 'device-comparison') {
-      try {
-        if (command.action === 'confirm')
-          await runtime.confirmDeviceComparison(command.shareId, command.challenge)
-        else await runtime.cancelDeviceComparison(command.shareId, command.challenge)
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Device comparison expired, cancelled or could not be saved.',
-        })
-      }
-      return
-    }
-    if (command.type === 'approve-viewer') {
-      try {
-        await runtime.approveViewer(command.shareId, command.peerId)
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not approve this device.',
-        })
-      }
-      return
-    }
-    if (command.type === 'import-source-state') {
-      try {
-        await runtime.importSourceShares(parsePrivateStateJson(command.state))
-        await runtime.initialize()
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not import protected source links.',
-        })
-      }
-      return
-    }
-    if (command.type === 'set-sharing-behavior') {
-      try {
-        await runtime.setSharingBehavior(command.behavior)
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not save sharing behavior.',
-        })
-      }
-      return
-    }
-    if (command.type === 'clear-old-peers') {
-      try {
-        await runtime.clearOldPeers(command.protection)
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not clear old peers.',
-        })
-      }
-      return
-    }
-    if (command.type === 'adopt-peer-name') {
-      try {
-        await runtime.adoptPeerName(command.peerId, command.name)
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Name changed or could not be saved. Review it and retry.',
-        })
-      }
-      return
-    }
-    if (command.type === 'set-peer-names') {
-      try {
-        await runtime.setPeerNamePreferences(
-          command.peerId,
-          command.associateNames,
-          command.sharedName,
-        )
-        post({ type: 'command-complete', requestId: command.requestId })
-      } catch {
-        post({
-          type: 'command-complete',
-          requestId: command.requestId,
-          error: 'Could not save peer name preferences.',
-        })
-      }
-      return
-    }
-    if (
-      command.type === 'approve-return-link' ||
-      command.type === 'dismiss-return-offer' ||
-      command.type === 'dismiss-stopped-viewer'
-    ) {
-      await executeBackgroundReturnCommand(runtime, command, post)
-      return
-    }
-    try {
-      await runtime.setViewerLabel(command.shareId, command.fingerprint, command.name)
-    } catch (error) {
-      sendError(error, 'Could not save this device name.')
-    }
   }
+}
 
-  window.__constellationBackgroundCommand = (encoded) => {
-    const command = JSON.parse(encoded) as BackgroundCommand
-    if (
-      command.type === 'private-state-result' ||
-      command.type === 'location' ||
-      command.type === 'location-refresh-result' ||
-      command.type === 'location-error'
-    ) {
-      void runCommand(command)
-      return
-    }
-    commandQueue = commandQueue
-      .then(() => runCommand(command))
-      .catch((error) => {
-        sendError(error, 'The background sharing command failed.')
-      })
+const blockViewerCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'block-viewer' }>,
+): Promise<void> => {
+  try {
+    await state.runtime.blockViewer(command.shareId, command.fingerprint)
+  } catch (error) {
+    sendError(state, error, 'Could not block this device.')
   }
+}
 
-  runtime.subscribe(report)
-  void runtime
+const ownerHandoffCommand = async (
+  state: BackgroundEntryState,
+  command: ReplaceOwnerCommand,
+): Promise<void> => {
+  await runCompletion(
+    command.requestId,
+    'Could not authenticate the foreground location owner.',
+    () =>
+      state.runtime.replaceBackgroundShareOwner(
+        command.shareId,
+        command.sourcePeerId,
+        command.ownerPeerId,
+        command.ownerProof,
+        command.mode === 'recipient' && command.recipientPeerId
+          ? { mode: 'recipient', recipientPeerId: command.recipientPeerId }
+          : { mode: 'source' },
+      ),
+  )
+}
+
+const deviceComparisonCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'device-comparison' }>,
+): Promise<void> => {
+  await runCompletion(
+    command.requestId,
+    'Device comparison expired, cancelled or could not be saved.',
+    () =>
+      command.action === 'confirm'
+        ? state.runtime.confirmDeviceComparison(command.shareId, command.challenge)
+        : state.runtime.cancelDeviceComparison(command.shareId, command.challenge),
+  )
+}
+
+const approveViewerCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'approve-viewer' }>,
+): Promise<void> => {
+  await runCompletion(command.requestId, 'Could not approve this device.', () =>
+    state.runtime.approveViewer(command.shareId, command.peerId),
+  )
+}
+
+const setViewerLabelCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'set-viewer-name' }>,
+): Promise<void> => {
+  try {
+    await state.runtime.setViewerLabel(command.shareId, command.fingerprint, command.name)
+  } catch (error) {
+    sendError(state, error, 'Could not save this device name.')
+  }
+}
+
+const runViewerCommand = async (
+  state: BackgroundEntryState,
+  command: BackgroundCommand,
+): Promise<void> => {
+  switch (command.type) {
+    case 'block-viewer':
+      return blockViewerCommand(state, command)
+    case 'device-comparison':
+      return deviceComparisonCommand(state, command)
+    case 'approve-viewer':
+      return approveViewerCommand(state, command)
+    case 'set-viewer-name':
+      return setViewerLabelCommand(state, command)
+  }
+}
+
+const importSourceStateCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'import-source-state' }>,
+): Promise<void> => {
+  await runCompletion(
+    command.requestId,
+    'Could not import protected source links.',
+    async () => {
+      await state.runtime.importSourceShares(parsePrivateStateJson(command.state))
+      await state.runtime.initialize()
+    },
+  )
+}
+
+const sharingBehaviorCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'set-sharing-behavior' }>,
+): Promise<void> => {
+  await runCompletion(command.requestId, 'Could not save sharing behavior.', () =>
+    state.runtime.setSharingBehavior(command.behavior),
+  )
+}
+
+const clearOldPeersCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'clear-old-peers' }>,
+): Promise<void> => {
+  await runCompletion(command.requestId, 'Could not clear old peers.', () =>
+    state.runtime.clearOldPeers(command.protection),
+  )
+}
+
+const adoptPeerNameCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'adopt-peer-name' }>,
+): Promise<void> => {
+  await runCompletion(
+    command.requestId,
+    'Name changed or could not be saved. Review it and retry.',
+    () => state.runtime.adoptPeerName(command.peerId, command.name),
+  )
+}
+
+const setPeerNamesCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'set-peer-names' }>,
+): Promise<void> => {
+  await runCompletion(command.requestId, 'Could not save peer name preferences.', () =>
+    state.runtime.setPeerNamePreferences(
+      command.peerId,
+      command.associateNames,
+      command.sharedName,
+    ),
+  )
+}
+
+const runCommand = async (
+  state: BackgroundEntryState,
+  command: BackgroundCommand,
+): Promise<void> => {
+  if (handleTransientCommand(state, command)) return
+  if (isShareCommandType(command.type)) return runShareCommand(state, command)
+  if (isViewerCommandType(command.type)) return runViewerCommand(state, command)
+  if (command.type === 'replace-background-owner') return ownerHandoffCommand(state, command)
+  if (command.type === 'import-source-state') return importSourceStateCommand(state, command)
+  if (command.type === 'set-sharing-behavior') return sharingBehaviorCommand(state, command)
+  if (command.type === 'clear-old-peers') return clearOldPeersCommand(state, command)
+  if (command.type === 'adopt-peer-name') return adoptPeerNameCommand(state, command)
+  if (command.type === 'set-peer-names') return setPeerNamesCommand(state, command)
+  if (isReturnCommandType(command)) {
+    await executeBackgroundReturnCommand(state.runtime, command, post)
+  }
+}
+
+const enqueueCommand = (state: BackgroundEntryState, encoded: string): void => {
+  const command = JSON.parse(encoded) as BackgroundCommand
+  if (isTransientCommandType(command.type)) {
+    void runCommand(state, command)
+    return
+  }
+  state.commandQueue = state.commandQueue
+    .then(() => runCommand(state, command))
+    .catch((error) => {
+      sendError(state, error, 'The background sharing command failed.')
+    })
+}
+
+const start = (): void => {
+  const state = createBackgroundEntryState()
+  window.__constellationBackgroundCommand = (encoded) => enqueueCommand(state, encoded)
+  state.runtime.subscribe((next) => report(state, next))
+  void state.runtime
     .initialize()
-    .catch((error) => sendError(error, 'Could not restore protected sharing state.'))
+    .catch((error) => sendError(state, error, 'Could not restore protected sharing state.'))
     .finally(() => post({ type: 'ready' }))
 }
 

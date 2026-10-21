@@ -113,6 +113,94 @@ const joinLifecycle = async (
   await session.runtime.stopShare(returned.shareId)
 }
 
+const runExpiryHost = async (
+  session: DiagnosticSession,
+  shareId: string,
+  signal: AbortSignal,
+): Promise<void> => {
+  await session.wait(
+    (state) =>
+      state.oldSharing.some(
+        (entry) => entry.shareId === shareId && entry.reason === 'expired',
+      ),
+    signal,
+  )
+}
+
+const runReconnectHost = async (
+  session: DiagnosticSession,
+  shareId: string,
+  signal: AbortSignal,
+): Promise<void> => {
+  await session.wait(
+    (state) => state.shares.some((entry) => entry.shareId === shareId && entry.viewerCount === 0),
+    signal,
+  )
+  await session.wait(
+    (state) => state.shares.some((entry) => entry.shareId === shareId && entry.viewerCount > 0),
+    signal,
+  )
+  const resumed = session.state().location
+  const sequence = 'observation' in resumed ? resumed.observation.sequence : 0
+  await session.wait(
+    (state) =>
+      'observation' in state.location && state.location.observation.sequence > sequence + 4,
+    signal,
+  )
+  await session.runtime.stopShare(shareId)
+}
+
+const runHostTimedDiagnostic = async (
+  kind: 'expiry' | 'reconnect',
+  session: DiagnosticSession,
+  dependencies: SharingDiagnosticDependencies,
+  signal: AbortSignal,
+): Promise<void> => {
+  const share = await session.runtime.createShare(
+    draft(),
+    Date.now() + (kind === 'expiry' ? 60_000 : 600_000),
+  )
+  dependencies.invitation(share.url)
+  dependencies.stage(
+    kind === 'expiry'
+      ? 'Ask the other device to run Link expiry with this new link.'
+      : 'Ask the other device to run Network reconnect with this new link and temporarily disconnect its network.',
+  )
+  await session.wait(
+    (state) =>
+      state.shares.some((entry) => entry.shareId === share.shareId && entry.viewerCount > 0),
+    signal,
+  )
+  if (kind === 'expiry') await runExpiryHost(session, share.shareId, signal)
+  else await runReconnectHost(session, share.shareId, signal)
+}
+
+const runJoinTimedDiagnostic = async (
+  kind: 'expiry' | 'reconnect',
+  session: DiagnosticSession,
+  dependencies: SharingDiagnosticDependencies,
+  signal: AbortSignal,
+): Promise<void> => {
+  const id = parseShareInvitation(dependencies.pairing().url).shareId
+  await session.runtime.acceptShare(dependencies.pairing().url, { saved: true })
+  await waitForUpdates(session, signal)
+  if (kind === 'reconnect') {
+    dependencies.stage(
+      'Disconnect this device’s network until it shows disconnected; restore it to check reconnection.',
+    )
+    await session.wait(
+      (state) => state.following.some((entry) => entry.shareId === id && !entry.connected),
+      signal,
+    )
+    await session.wait(
+      (state) => state.following.some((entry) => entry.shareId === id && entry.connected),
+      signal,
+    )
+    await waitForUpdates(session, signal)
+  }
+  await waitForTerminal(session, id, kind === 'expiry' ? 'expired' : 'revoked', signal)
+}
+
 export const runPairedDiagnostic = async (
   kind: 'lifecycle' | 'expiry' | 'reconnect',
   session: DiagnosticSession,
@@ -124,68 +212,9 @@ export const runPairedDiagnostic = async (
     if (pairing.role === 'host') await hostLifecycle(session, dependencies, signal)
     else await joinLifecycle(session, pairing.url, dependencies, signal)
   } else if (pairing.role === 'host') {
-    const share = await session.runtime.createShare(
-      draft(),
-      Date.now() + (kind === 'expiry' ? 60_000 : 600_000),
-    )
-    dependencies.invitation(share.url)
-    dependencies.stage(
-      kind === 'expiry'
-        ? 'Ask the other device to run Link expiry with this new link.'
-        : 'Ask the other device to run Network reconnect with this new link and temporarily disconnect its network.',
-    )
-    await session.wait(
-      (state) =>
-        state.shares.some((entry) => entry.shareId === share.shareId && entry.viewerCount > 0),
-      signal,
-    )
-    if (kind === 'expiry')
-      await session.wait(
-        (state) =>
-          state.oldSharing.some(
-            (entry) => entry.shareId === share.shareId && entry.reason === 'expired',
-          ),
-        signal,
-      )
-    else {
-      await session.wait(
-        (state) =>
-          state.shares.some((entry) => entry.shareId === share.shareId && entry.viewerCount === 0),
-        signal,
-      )
-      await session.wait(
-        (state) =>
-          state.shares.some((entry) => entry.shareId === share.shareId && entry.viewerCount > 0),
-        signal,
-      )
-      const resumed = session.state().location
-      const sequence = 'observation' in resumed ? resumed.observation.sequence : 0
-      await session.wait(
-        (state) =>
-          'observation' in state.location && state.location.observation.sequence > sequence + 4,
-        signal,
-      )
-      await session.runtime.stopShare(share.shareId)
-    }
+    await runHostTimedDiagnostic(kind, session, dependencies, signal)
   } else {
-    const id = parseShareInvitation(pairing.url).shareId
-    await session.runtime.acceptShare(pairing.url, { saved: true })
-    await waitForUpdates(session, signal)
-    if (kind === 'reconnect') {
-      dependencies.stage(
-        'Disconnect this device’s network until it shows disconnected; restore it to check reconnection.',
-      )
-      await session.wait(
-        (state) => state.following.some((entry) => entry.shareId === id && !entry.connected),
-        signal,
-      )
-      await session.wait(
-        (state) => state.following.some((entry) => entry.shareId === id && entry.connected),
-        signal,
-      )
-      await waitForUpdates(session, signal)
-    }
-    await waitForTerminal(session, id, kind === 'expiry' ? 'expired' : 'revoked', signal)
+    await runJoinTimedDiagnostic(kind, session, dependencies, signal)
   }
   return { transports: session.transports() }
 }
@@ -215,85 +244,146 @@ export const waitForDiagnosticValue = async <T>(
   throw new Error('Diagnostic cancelled.')
 }
 
+interface NativeDiagnosticState {
+  readonly native: NonNullable<SharingDiagnosticDependencies['native']>
+  readonly existingIds: Set<string>
+  readonly ownedIds: Set<string>
+  readonly diagnosticName: string
+  readonly visibility: NonNullable<SharingDiagnosticDependencies['visibility']>
+  wasHidden: boolean
+  hiddenAt: number
+  resumedAt: number
+  unsubscribeVisibility: () => void
+}
+
+const prepareNativeDiagnostic = async (
+  dependencies: SharingDiagnosticDependencies,
+): Promise<NativeDiagnosticState> => {
+  const native = dependencies.native!
+  const visibility = dependencies.visibility!
+  const before = await native.status()
+  const state: NativeDiagnosticState = {
+    native,
+    existingIds: new Set(before.shares.map((entry) => entry.shareId)),
+    ownedIds: new Set(),
+    diagnosticName: `Diagnostics ${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`,
+    visibility,
+    wasHidden: false,
+    hiddenAt: 0,
+    resumedAt: 0,
+    unsubscribeVisibility: () => undefined,
+  }
+  state.unsubscribeVisibility = visibility.subscribe((hidden) => {
+    if (hidden) {
+      state.wasHidden = true
+      state.hiddenAt = Date.now()
+    } else if (state.wasHidden) {
+      state.resumedAt = Date.now()
+    }
+  })
+  return state
+}
+
+const rememberOwnedShares = (
+  state: NativeDiagnosticState,
+  status: AndroidBackgroundStatus,
+) => {
+  const owned = status.shares.filter(
+    (entry) => !state.existingIds.has(entry.shareId) && entry.name === state.diagnosticName,
+  )
+  owned.forEach((entry) => state.ownedIds.add(entry.shareId))
+  return owned
+}
+
+const startNativeShare = async (
+  state: NativeDiagnosticState,
+  dependencies: SharingDiagnosticDependencies,
+): Promise<string> => {
+  const started = await state.native.start(
+    { ...draft(), name: state.diagnosticName, duration: '1h', publication: 'background' },
+    dependencies.shareBaseUrl,
+    !state.visibility.isHidden(),
+  )
+  const owned = rememberOwnedShares(state, started)
+  check(owned.length === 1, 'Expected exactly one new background link.')
+  const ownedId = owned[0]!.shareId
+  dependencies.invitation(owned[0]!.url)
+  dependencies.stage(
+    'This temporary share uses your real location. On the other device, choose Join and run Android background check. Then lock and unlock this phone.',
+  )
+  return ownedId
+}
+
+const waitForNativeBackgroundFix = async (
+  state: NativeDiagnosticState,
+  ownedId: string,
+  signal: AbortSignal,
+): Promise<boolean> => {
+  const connected = await waitForDiagnosticValue(
+    state.native.status,
+    (status) =>
+      status.shares.some((entry) => entry.shareId === ownedId && entry.viewerCount > 0) &&
+      'observation' in status.location,
+    signal,
+  )
+  const initialSequence =
+    'observation' in connected.location ? connected.location.observation.sequence : 0
+  const resumed = await waitForDiagnosticValue(
+    state.native.status,
+    (status) =>
+      state.wasHidden &&
+      !state.visibility.isHidden() &&
+      status.shares.some((entry) => entry.shareId === ownedId && entry.viewerCount > 0),
+    signal,
+  )
+  return (
+    'observation' in resumed.location &&
+    resumed.location.observation.sequence > initialSequence &&
+    resumed.location.observation.capturedAt >= state.hiddenAt &&
+    resumed.location.observation.capturedAt <= state.resumedAt
+  )
+}
+
+const runNativeDiagnosticSession = async (
+  state: NativeDiagnosticState,
+  dependencies: SharingDiagnosticDependencies,
+  signal: AbortSignal,
+) => {
+  const ownedId = await startNativeShare(state, dependencies)
+  const observedHiddenFix = await waitForNativeBackgroundFix(state, ownedId, signal)
+  await state.native.stop(ownedId)
+  state.ownedIds.delete(ownedId)
+  return observedHiddenFix
+    ? { code: 'background-lock-resume-verified' }
+    : { skipped: true as const, reason: 'background-fix-evidence-unavailable' }
+}
+
+const cleanupNativeShares = async (
+  state: NativeDiagnosticState,
+): Promise<PromiseRejectedResult | undefined> => {
+  // A start can create a link even when its returned status cannot be parsed.
+  const reconciled = await Promise.allSettled([
+    state.native.status().then((status) => rememberOwnedShares(state, status)),
+  ])
+  const stopped = await Promise.allSettled(
+    [...state.ownedIds].map((id) => state.native.stop(id)),
+  )
+  return [...reconciled, ...stopped].find((entry) => entry.status === 'rejected')
+}
+
 export const runNativeDiagnostic = async (
   dependencies: SharingDiagnosticDependencies,
   signal: AbortSignal,
 ) => {
-  const native = dependencies.native!
-  const before = await native.status()
-  const existingIds = new Set(before.shares.map((entry) => entry.shareId))
-  const ownedIds = new Set<string>()
-  const diagnosticName = `Diagnostics ${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`
-  const rememberOwned = (status: AndroidBackgroundStatus) => {
-    const owned = status.shares.filter(
-      (entry) => !existingIds.has(entry.shareId) && entry.name === diagnosticName,
-    )
-    owned.forEach((entry) => ownedIds.add(entry.shareId))
-    return owned
-  }
-  let ownedId: string | undefined
-  let result: { code: string } | { skipped: true; reason: string }
+  const state = await prepareNativeDiagnostic(dependencies)
   let cleanupFailure: PromiseRejectedResult | undefined
-  let wasHidden = false
-  const visibility = dependencies.visibility!
-  let hiddenAt = 0
-  let resumedAt = 0
-  const unsubscribeVisibility = visibility.subscribe((hidden) => {
-    if (hidden) {
-      wasHidden = true
-      hiddenAt = Date.now()
-    } else if (wasHidden) resumedAt = Date.now()
-  })
   try {
-    const started = await native.start(
-      { ...draft(), name: diagnosticName, duration: '1h', publication: 'background' },
-      dependencies.shareBaseUrl,
-      !visibility.isHidden(),
-    )
-    const owned = rememberOwned(started)
-    check(owned.length === 1, 'Expected exactly one new background link.')
-    ownedId = owned[0]!.shareId
-    dependencies.invitation(owned[0]!.url)
-    dependencies.stage(
-      'This temporary share uses your real location. On the other device, choose Join and run Android background check. Then lock and unlock this phone.',
-    )
-    const connected = await waitForDiagnosticValue(
-      native.status,
-      (status) =>
-        status.shares.some((entry) => entry.shareId === ownedId && entry.viewerCount > 0) &&
-        'observation' in status.location,
-      signal,
-    )
-    const initialSequence =
-      'observation' in connected.location ? connected.location.observation.sequence : 0
-    const resumed = await waitForDiagnosticValue(
-      native.status,
-      (status) =>
-        wasHidden &&
-        !visibility.isHidden() &&
-        status.shares.some((entry) => entry.shareId === ownedId && entry.viewerCount > 0),
-      signal,
-    )
-    const observedHiddenFix =
-      'observation' in resumed.location &&
-      resumed.location.observation.sequence > initialSequence &&
-      resumed.location.observation.capturedAt >= hiddenAt &&
-      resumed.location.observation.capturedAt <= resumedAt
-    await native.stop(ownedId)
-    ownedIds.delete(ownedId)
-    ownedId = undefined
-    result = observedHiddenFix
-      ? { code: 'background-lock-resume-verified' }
-      : { skipped: true, reason: 'background-fix-evidence-unavailable' }
+    return await runNativeDiagnosticSession(state, dependencies, signal)
   } finally {
-    unsubscribeVisibility()
-    // A start can create a link even when its returned status cannot be parsed.
-    const reconciled = await Promise.allSettled([native.status().then(rememberOwned)])
-    const stopped = await Promise.allSettled([...ownedIds].map((id) => native.stop(id)))
-    cleanupFailure = [...reconciled, ...stopped].find((result) => result.status === 'rejected')
+    state.unsubscribeVisibility()
+    cleanupFailure = await cleanupNativeShares(state)
+    if (cleanupFailure) throw cleanupFailure.reason
   }
-  if (cleanupFailure) throw cleanupFailure.reason
-  return result
 }
 
 export const joinNativeDiagnostic = async (

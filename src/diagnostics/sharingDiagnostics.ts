@@ -2,6 +2,7 @@ import {
   getDiagnosticsSkipReason,
   runDiagnosticsTests,
   type DiagnosticsRunResult,
+  type DiagnosticsTestContext,
   type TaskyonTestFn,
 } from '@taskyon/diagnostics'
 import { parseShareInvitation } from '../sharing/shareLink.ts'
@@ -72,182 +73,354 @@ export const summarizeDiagnostics = (results: readonly SharingDiagnosticResult[]
   cancelled: results.filter((result) => result.status === 'cancelled').length,
 })
 
-export const createSharingDiagnostics = (
-  dependencies: SharingDiagnosticDependencies & { includeGuided?: () => boolean },
-) => {
-  let phase = ''
-  const usedPartnerUrls = new Set<string>()
-  const nextPairing = async (signal: AbortSignal) => {
-    const pairing = dependencies.pairing()
-    if (pairing.role !== 'join' || !usedPartnerUrls.has(pairing.url)) {
-      if (pairing.role === 'join') usedPartnerUrls.add(pairing.url)
-      return pairing
-    }
-    caseDependencies.stage('Paste or scan the host’s fresh link for this next check.')
-    const next = await waitForDiagnosticValue(
-      () => Promise.resolve(dependencies.pairing()),
-      (candidate) => {
-        if (usedPartnerUrls.has(candidate.url)) return false
-        try {
-          parseShareInvitation(candidate.url)
-          return true
-        } catch {
-          return false
-        }
-      },
-      signal,
-    )
-    usedPartnerUrls.add(next.url)
-    return next
+interface SharingDiagnosticCatalogEntry {
+  id: string
+  name: string
+  category: string
+  description: string
+  guided?: boolean
+  timeoutMs?: number
+  fn: TaskyonTestFn
+}
+
+type SharingDiagnosticDependencySet = SharingDiagnosticDependencies & {
+  includeGuided?: () => boolean
+}
+
+interface SharingDiagnosticState {
+  readonly dependencies: SharingDiagnosticDependencySet
+  phase: string
+  readonly usedPartnerUrls: Set<string>
+  readonly activeCases: Set<Promise<unknown>>
+  caseDependencies: SharingDiagnosticDependencies
+}
+
+const createDiagnosticState = (
+  dependencies: SharingDiagnosticDependencySet,
+): SharingDiagnosticState => {
+  const state: SharingDiagnosticState = {
+    dependencies,
+    phase: '',
+    usedPartnerUrls: new Set(),
+    activeCases: new Set(),
+    caseDependencies: dependencies,
   }
-  const caseDependencies = {
+  state.caseDependencies = {
     ...dependencies,
     stage: (message: string) => {
-      phase = message
+      state.phase = message
       dependencies.stage(message)
     },
   }
-  const activeCases = new Set<Promise<unknown>>()
-  const inSession = (
-    run: (session: ReturnType<SharingDiagnosticDependencies['createSession']>) => Promise<unknown>,
-  ) => {
-    const session = dependencies.createSession()
-    const task = (async () => {
-      try {
-        return await run(session)
-      } finally {
-        await session.close()
-        dependencies.invitation('')
-      }
-    })()
-    activeCases.add(task)
-    void task.finally(() => activeCases.delete(task)).catch(() => undefined)
-    return task
+  return state
+}
+
+const nextPairing = async (state: SharingDiagnosticState, signal: AbortSignal) => {
+  const pairing = state.dependencies.pairing()
+  if (pairing.role !== 'join' || !state.usedPartnerUrls.has(pairing.url)) {
+    if (pairing.role === 'join') state.usedPartnerUrls.add(pairing.url)
+    return pairing
   }
-  const paired =
-    (kind: 'lifecycle' | 'expiry' | 'reconnect'): TaskyonTestFn =>
-    async (context) => {
-      if (dependencies.pairing().role === 'none')
-        return { skipped: true, reason: 'partner-required' }
-      const signal = context!.abortSignal!
-      const pairing = await nextPairing(signal)
-      return inSession((session) =>
-        runPairedDiagnostic(kind, session, { ...caseDependencies, pairing: () => pairing }, signal),
-      )
+  state.caseDependencies.stage('Paste or scan the host’s fresh link for this next check.')
+  const next = await waitForDiagnosticValue(
+    () => Promise.resolve(state.dependencies.pairing()),
+    (candidate) => {
+      if (state.usedPartnerUrls.has(candidate.url)) return false
+      try {
+        parseShareInvitation(candidate.url)
+        return true
+      } catch {
+        return false
+      }
+    },
+    signal,
+  )
+  state.usedPartnerUrls.add(next.url)
+  return next
+}
+
+const trackActiveCase = <T extends Promise<unknown>>(
+  state: SharingDiagnosticState,
+  task: T,
+): T => {
+  state.activeCases.add(task)
+  void task.finally(() => state.activeCases.delete(task)).catch(() => undefined)
+  return task
+}
+
+const inDiagnosticSession = (
+  state: SharingDiagnosticState,
+  run: (session: ReturnType<SharingDiagnosticDependencies['createSession']>) => Promise<unknown>,
+) => {
+  const session = state.dependencies.createSession()
+  const task = (async () => {
+    try {
+      return await run(session)
+    } finally {
+      await session.close()
+      state.dependencies.invitation('')
     }
-  const catalog = [
-    {
-      id: 'local.capabilities',
-      name: 'Browser capabilities',
-      category: 'local',
-      description: 'Check secure context, encryption and real-time transport support.',
-      fn: () => {
-        const capabilities = dependencies.capabilities()
-        if (!capabilities.secureContext || !capabilities.crypto || !capabilities.webRTC)
-          throw new Error('Required capability unavailable.')
-      },
-    },
-    {
-      id: 'local.markers',
-      name: 'Location markers',
-      category: 'local',
-      description: 'Check own and followed area/dot transitions and colors.',
-      fn: () => {
-        const location = {
-          id: 'synthetic-peer',
-          latitude: 40,
-          longitude: 20,
-          precision: 'approximate' as const,
-          radiusMeters: 500,
-          color: '#289a82',
-        }
-        for (const zoom of [8, 13]) {
-          const features = createLocationFeatureCollection(
-            [location, { ...location, id: 'synthetic-own', isOwn: true }],
-            zoom,
-          ).features
-          if (
-            features.length !== 2 ||
-            features.some(
-              (feature) =>
-                feature.geometry.type !== (zoom === 8 ? 'Point' : 'Polygon') ||
-                feature.properties.color !== location.color,
-            )
-          )
-            throw new Error('Map behavior mismatch.')
-        }
-      },
-    },
-    {
-      id: 'network.reachability',
-      name: 'Sharing network reachability',
-      category: 'network',
-      description: 'Create and close a temporary synthetic source through the configured network.',
-      fn: () =>
-        inSession(async (session) => {
-          const share = await session.runtime.createShare(createShareDraft(), Date.now() + 60_000)
-          await session.runtime.stopShare(share.shareId)
-          return { transports: session.transports() }
-        }),
-    },
-    {
-      id: 'paired.lifecycle',
-      name: 'Two-way sharing and revocation',
-      category: 'paired',
-      description:
-        'Pair two devices; check updates, presence, private return sharing and revocation.',
-      fn: paired('lifecycle'),
-      timeoutMs: 180_000,
-    },
-    {
-      id: 'paired.expiry',
-      name: 'Link expiry',
-      category: 'paired',
-      description: 'Pair using a new link that expires after one minute.',
-      fn: paired('expiry'),
-      timeoutMs: 180_000,
-      guided: true,
-    },
-    {
-      id: 'paired.reconnect',
-      name: 'Network reconnect',
-      category: 'paired',
-      description: 'Temporarily disconnect the joining device, then restore its network.',
-      fn: paired('reconnect'),
-      timeoutMs: 180_000,
-      guided: true,
-    },
-    {
-      id: 'android.background',
-      name: 'Android background check',
-      category: 'android',
-      description:
-        'Explicit real-location test: pair, lock/unlock Android, verify delivery and revoke.',
-      fn: async (context: Parameters<TaskyonTestFn>[0]) => {
-        if (dependencies.pairing().role === 'join') {
-          const pairing = await nextPairing(context!.abortSignal!)
-          return inSession((session) =>
-            joinNativeDiagnostic(
-              session,
-              { ...caseDependencies, pairing: () => pairing },
-              context!.abortSignal!,
-            ),
-          )
-        }
-        if (!dependencies.native) return { skipped: true, reason: 'android-required' }
-        if (dependencies.pairing().role !== 'host')
-          return { skipped: true, reason: 'partner-required' }
-        if (!dependencies.nativeConsent?.())
-          return { skipped: true, reason: 'real-location-consent-required' }
-        const task = runNativeDiagnostic(caseDependencies, context!.abortSignal!)
-        activeCases.add(task)
-        void task.finally(() => activeCases.delete(task)).catch(() => undefined)
-        return task
-      },
-      timeoutMs: 180_000,
-      guided: true,
-    },
-  ]
+  })()
+  return trackActiveCase(state, task)
+}
+
+const createPairedTest = (
+  state: SharingDiagnosticState,
+  kind: 'lifecycle' | 'expiry' | 'reconnect',
+): TaskyonTestFn => {
+  return async (context) => {
+    if (state.dependencies.pairing().role === 'none') {
+      return { skipped: true, reason: 'partner-required' }
+    }
+    const signal = context!.abortSignal!
+    const pairing = await nextPairing(state, signal)
+    return inDiagnosticSession(state, (session) =>
+      runPairedDiagnostic(kind, session, { ...state.caseDependencies, pairing: () => pairing }, signal),
+    )
+  }
+}
+
+const checkCapabilities = (
+  capabilities: ReturnType<SharingDiagnosticDependencies['capabilities']>,
+): void => {
+  if (!capabilities.secureContext || !capabilities.crypto || !capabilities.webRTC) {
+    throw new Error('Required capability unavailable.')
+  }
+}
+
+const assertMarkerZoom = (
+  location: {
+    id: string
+    latitude: number
+    longitude: number
+    precision: 'approximate'
+    radiusMeters: number
+    color: string
+  },
+  zoom: number,
+): void => {
+  const features = createLocationFeatureCollection(
+    [location, { ...location, id: 'synthetic-own', isOwn: true }],
+    zoom,
+  ).features
+  if (
+    features.length !== 2 ||
+    features.some(
+      (feature) =>
+        feature.geometry.type !== (zoom === 8 ? 'Point' : 'Polygon') ||
+        feature.properties.color !== location.color,
+    )
+  ) {
+    throw new Error('Map behavior mismatch.')
+  }
+}
+
+const checkLocationMarkers = (): void => {
+  const location = {
+    id: 'synthetic-peer',
+    latitude: 40,
+    longitude: 20,
+    precision: 'approximate' as const,
+    radiusMeters: 500,
+    color: '#289a82',
+  }
+  for (const zoom of [8, 13]) assertMarkerZoom(location, zoom)
+}
+
+const capabilitiesEntry = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry => ({
+  id: 'local.capabilities',
+  name: 'Browser capabilities',
+  category: 'local',
+  description: 'Check secure context, encryption and real-time transport support.',
+  fn: () => checkCapabilities(state.dependencies.capabilities()),
+})
+
+const markersEntry = (): SharingDiagnosticCatalogEntry => ({
+  id: 'local.markers',
+  name: 'Location markers',
+  category: 'local',
+  description: 'Check own and followed area/dot transitions and colors.',
+  fn: () => checkLocationMarkers(),
+})
+
+const networkEntry = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry => ({
+  id: 'network.reachability',
+  name: 'Sharing network reachability',
+  category: 'network',
+  description: 'Create and close a temporary synthetic source through the configured network.',
+  fn: () =>
+    inDiagnosticSession(state, async (session) => {
+      const share = await session.runtime.createShare(createShareDraft(), Date.now() + 60_000)
+      await session.runtime.stopShare(share.shareId)
+      return { transports: session.transports() }
+    }),
+})
+
+const pairedEntry = (
+  state: SharingDiagnosticState,
+  kind: 'lifecycle' | 'expiry' | 'reconnect',
+  name: string,
+  description: string,
+  guided = false,
+): SharingDiagnosticCatalogEntry => ({
+  id: `paired.${kind}`,
+  name,
+  category: 'paired',
+  description,
+  fn: createPairedTest(state, kind),
+  timeoutMs: 180_000,
+  ...(guided ? { guided: true } : {}),
+})
+
+const androidSkipReason = (dependencies: SharingDiagnosticDependencySet): string | undefined => {
+  if (!dependencies.native) return 'android-required'
+  if (dependencies.pairing().role !== 'host') return 'partner-required'
+  if (!dependencies.nativeConsent?.()) return 'real-location-consent-required'
+  return undefined
+}
+
+const runAndroidDiagnostic = async (
+  state: SharingDiagnosticState,
+  context: Parameters<TaskyonTestFn>[0],
+): Promise<unknown> => {
+  if (state.dependencies.pairing().role === 'join') {
+    const pairing = await nextPairing(state, context!.abortSignal!)
+    return inDiagnosticSession(state, (session) =>
+      joinNativeDiagnostic(
+        session,
+        { ...state.caseDependencies, pairing: () => pairing },
+        context!.abortSignal!,
+      ),
+    )
+  }
+  const reason = androidSkipReason(state.dependencies)
+  if (reason) return { skipped: true, reason }
+  return trackActiveCase(
+    state,
+    runNativeDiagnostic(state.caseDependencies, context!.abortSignal!),
+  )
+}
+
+const androidEntry = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry => ({
+  id: 'android.background',
+  name: 'Android background check',
+  category: 'android',
+  description:
+    'Explicit real-location test: pair, lock/unlock Android, verify delivery and revoke.',
+  fn: (context) => runAndroidDiagnostic(state, context),
+  timeoutMs: 180_000,
+  guided: true,
+})
+
+const createCatalog = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry[] => [
+  capabilitiesEntry(state),
+  markersEntry(),
+  networkEntry(state),
+  pairedEntry(
+    state,
+    'lifecycle',
+    'Two-way sharing and revocation',
+    'Pair two devices; check updates, presence, private return sharing and revocation.',
+  ),
+  pairedEntry(
+    state,
+    'expiry',
+    'Link expiry',
+    'Pair using a new link that expires after one minute.',
+    true,
+  ),
+  pairedEntry(
+    state,
+    'reconnect',
+    'Network reconnect',
+    'Temporarily disconnect the joining device, then restore its network.',
+    true,
+  ),
+  androidEntry(state),
+]
+
+const selectedDiagnosticTests = (
+  catalog: readonly SharingDiagnosticCatalogEntry[],
+  selection: string,
+): Record<string, TaskyonTestFn> => {
+  const tests: Record<string, TaskyonTestFn> = {}
+  for (const entry of catalog) {
+    if (selection !== 'all' && entry.id !== selection && entry.category !== selection) continue
+    tests[entry.id] = Object.assign(entry.fn, {
+      timeoutMs: entry.timeoutMs,
+      requiresLongRun: entry.guided,
+    })
+  }
+  if (!Object.keys(tests).length) throw new Error('Unknown diagnostic selection.')
+  return tests
+}
+
+const createRunOptions = (
+  state: SharingDiagnosticState,
+  catalog: readonly SharingDiagnosticCatalogEntry[],
+  selection: string,
+  signal: AbortSignal,
+  results: SharingDiagnosticResult[],
+  timing: { startedAt: number },
+  onResult: (result: SharingDiagnosticResult) => void,
+) => ({
+  details: true,
+  contextForTest: async (
+    _name: string,
+    _test: TaskyonTestFn,
+    context: DiagnosticsTestContext,
+  ) => {
+    await Promise.allSettled([...state.activeCases])
+    return context
+  },
+  context: {
+    abortSignal: signal,
+    allowLongRun:
+      state.dependencies.includeGuided?.() ||
+      catalog.some((entry) => entry.id === selection),
+  },
+  onProgress: (progress: { phase: string; test: string }) => {
+    if (progress.phase !== 'start') return
+    timing.startedAt = Date.now()
+    state.caseDependencies.stage(`Running ${progress.test}.`)
+  },
+  onResult: (result: DiagnosticsRunResult) => {
+    const safe = diagnosticResult(result, Date.now() - timing.startedAt, signal.aborted)
+    safe.phase = state.phase
+    results.push(safe)
+    onResult(safe)
+  },
+})
+
+const runCatalogSelection = async (
+  state: SharingDiagnosticState,
+  catalog: readonly SharingDiagnosticCatalogEntry[],
+  selection: string,
+  signal: AbortSignal,
+  onResult: (result: SharingDiagnosticResult) => void,
+): Promise<SharingDiagnosticResult[]> => {
+  state.usedPartnerUrls.clear()
+  const tests = selectedDiagnosticTests(catalog, selection)
+  const results: SharingDiagnosticResult[] = []
+  const timing = { startedAt: Date.now() }
+  try {
+    await runDiagnosticsTests(
+      tests,
+      createRunOptions(state, catalog, selection, signal, results, timing, onResult),
+    )
+  } finally {
+    if (state.activeCases.size) state.dependencies.stage('Closing temporary diagnostic sessions…')
+    await Promise.allSettled([...state.activeCases])
+    state.dependencies.invitation('')
+  }
+  return results
+}
+
+export const createSharingDiagnostics = (
+  dependencies: SharingDiagnosticDependencies & { includeGuided?: () => boolean },
+) => {
+  const state = createDiagnosticState(dependencies)
+  const catalog = createCatalog(state)
   return {
     catalog: catalog.map(({ id, name, category, description, guided }) => ({
       id,
@@ -256,55 +429,7 @@ export const createSharingDiagnostics = (
       description,
       guided: Boolean(guided),
     })),
-    run: async (
-      selection: string,
-      signal: AbortSignal,
-      onResult: (result: SharingDiagnosticResult) => void,
-    ) => {
-      usedPartnerUrls.clear()
-      const tests: Record<string, TaskyonTestFn> = {}
-      for (const entry of catalog.filter(
-        (test) => selection === 'all' || test.id === selection || test.category === selection,
-      )) {
-        tests[entry.id] = Object.assign(entry.fn, {
-          timeoutMs: entry.timeoutMs,
-          requiresLongRun: entry.guided,
-        })
-      }
-      if (!Object.keys(tests).length) throw new Error('Unknown diagnostic selection.')
-      const results: SharingDiagnosticResult[] = []
-      let startedAt = Date.now()
-      try {
-        await runDiagnosticsTests(tests, {
-          details: true,
-          contextForTest: async (_name, _test, context) => {
-            await Promise.allSettled([...activeCases])
-            return context
-          },
-          context: {
-            abortSignal: signal,
-            allowLongRun:
-              dependencies.includeGuided?.() || catalog.some((entry) => entry.id === selection),
-          },
-          onProgress: (progress) => {
-            if (progress.phase === 'start') {
-              startedAt = Date.now()
-              caseDependencies.stage(`Running ${progress.test}.`)
-            }
-          },
-          onResult: (result) => {
-            const safe = diagnosticResult(result, Date.now() - startedAt, signal.aborted)
-            safe.phase = phase
-            results.push(safe)
-            onResult(safe)
-          },
-        })
-      } finally {
-        if (activeCases.size) dependencies.stage('Closing temporary diagnostic sessions…')
-        await Promise.allSettled([...activeCases])
-        dependencies.invitation('')
-      }
-      return results
-    },
+    run: (selection: string, signal: AbortSignal, onResult: (result: SharingDiagnosticResult) => void) =>
+      runCatalogSelection(state, catalog, selection, signal, onResult),
   }
 }

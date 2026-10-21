@@ -117,7 +117,13 @@
 </template>
 
 <script setup lang="ts">
-import { AttributionControl, Map, NavigationControl, type GeoJSONSource } from 'maplibre-gl'
+import {
+  AttributionControl,
+  Map,
+  NavigationControl,
+  type GeoJSONSource,
+  type MapMouseEvent,
+} from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -245,6 +251,61 @@ const showMapUnavailable = (): void => {
   emit('diagnostic', { level: 'error', event: 'map.webgl.unavailable' })
 }
 
+const handleMapClick = (target: Map, event: MapMouseEvent): void => {
+  if (map !== target) return
+  const layers = [`${LOCATION_SOURCE_ID}-points`, `${LOCATION_SOURCE_ID}-areas`].filter((id) =>
+    target.getLayer(id),
+  )
+  if (layers.length === 0) return
+  const feature = target.queryRenderedFeatures(event.point, { layers })[0]
+  const id = feature?.properties?.id
+  if (typeof id !== 'string') return
+  if (feature?.properties?.isOwn === true) emit('selectOwn')
+  else emit('select', id)
+}
+
+const handleStyleLoad = (target: Map): void => {
+  if (map === target) {
+    addLocationLayers(target)
+    refreshPresentation()
+  }
+  emit('diagnostic', { level: 'info', event: 'map.style.loaded' })
+}
+
+const handleMapIdle = (target: Map): void => {
+  if (map !== target) return
+  mapRendered.value = Boolean(
+    target.loaded() && target.queryRenderedFeatures().some((feature) => feature.source === 'world'),
+  )
+}
+
+const handleMapError = (error: unknown): void => {
+  const detail = describeDiagnosticError(error)
+  mapNotice.value = `Map error (${detail.category}): ${detail.message}`
+  emit('diagnostic', { level: 'error', event: 'map.error', ...detail })
+}
+
+const verifyMapArchive = (): void => {
+  void runtime.verifyArchive(props.pmtilesUrl).then(
+    () => emit('diagnostic', { level: 'info', event: 'map.archive.verified' }),
+    (error: unknown) => {
+      const detail = describeDiagnosticError(error)
+      mapNotice.value = `Basemap error (${detail.category}): ${detail.message}`
+      emit('diagnostic', { level: 'error', event: 'map.archive.failed', ...detail })
+    },
+  )
+}
+
+const configureMapEvents = (target: Map): void => {
+  target.on('click', (event) => handleMapClick(target, event))
+  target.on('style.load', () => handleStyleLoad(target))
+  target.on('idle', () => handleMapIdle(target))
+  target.on('move', schedulePresentation)
+  target.on('zoom', refreshPresentation)
+  target.on('resize', schedulePresentation)
+  target.on('error', ({ error }) => handleMapError(error))
+}
+
 const initialize = (): void => {
   if (!mapElement.value || map) return
   try {
@@ -266,46 +327,8 @@ const initialize = (): void => {
       new AttributionControl({ compact: false, customAttribution: MAP_ATTRIBUTION }),
       'bottom-right',
     )
-    map.on('click', (event) => {
-      if (!map) return
-      const layers = [`${LOCATION_SOURCE_ID}-points`, `${LOCATION_SOURCE_ID}-areas`].filter((id) =>
-        map?.getLayer(id),
-      )
-      if (layers.length === 0) return
-      const feature = map.queryRenderedFeatures(event.point, { layers })[0]
-      const id = feature?.properties?.id
-      if (typeof id !== 'string') return
-      if (feature?.properties?.isOwn === true) emit('selectOwn')
-      else emit('select', id)
-    })
-    map.on('style.load', () => {
-      if (map) {
-        addLocationLayers(map)
-        refreshPresentation()
-      }
-      emit('diagnostic', { level: 'info', event: 'map.style.loaded' })
-    })
-    map.on('idle', () => {
-      mapRendered.value = Boolean(
-        map?.loaded() && map.queryRenderedFeatures().some((feature) => feature.source === 'world'),
-      )
-    })
-    map.on('move', schedulePresentation)
-    map.on('zoom', refreshPresentation)
-    map.on('resize', schedulePresentation)
-    map.on('error', ({ error }) => {
-      const detail = describeDiagnosticError(error)
-      mapNotice.value = `Map error (${detail.category}): ${detail.message}`
-      emit('diagnostic', { level: 'error', event: 'map.error', ...detail })
-    })
-    void runtime.verifyArchive(props.pmtilesUrl).then(
-      () => emit('diagnostic', { level: 'info', event: 'map.archive.verified' }),
-      (error: unknown) => {
-        const detail = describeDiagnosticError(error)
-        mapNotice.value = `Basemap error (${detail.category}): ${detail.message}`
-        emit('diagnostic', { level: 'error', event: 'map.archive.failed', ...detail })
-      },
-    )
+    configureMapEvents(map)
+    verifyMapArchive()
   } catch (error) {
     map?.remove()
     map = null

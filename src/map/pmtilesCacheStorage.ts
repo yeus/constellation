@@ -19,50 +19,83 @@ const cacheKey = async (key: string): Promise<string> => {
 const isNotFound = (error: unknown): boolean =>
   error instanceof DOMException && error.name === 'NotFoundError'
 
+const readOpfsFile = async (
+  directory: FileSystemDirectoryHandle,
+  key: string,
+): Promise<Uint8Array | undefined> => {
+  try {
+    const handle = await directory.getFileHandle(await cacheKey(key))
+    return new Uint8Array(await (await handle.getFile()).arrayBuffer())
+  } catch (error) {
+    if (isNotFound(error)) return undefined
+    throw error
+  }
+}
+
+const writeOpfsChunk = async (
+  writable: FileSystemWritableFileStream,
+  data: Uint8Array,
+): Promise<void> => {
+  const copy = new Uint8Array(data.length)
+  copy.set(data)
+  await writable.write(copy)
+}
+
+const commitOpfsWrite = async (
+  directory: FileSystemDirectoryHandle,
+  name: string,
+  temporaryName: string,
+  writable: FileSystemWritableFileStream,
+): Promise<void> => {
+  await writable.close()
+  try {
+    const source = await (await directory.getFileHandle(temporaryName)).getFile()
+    const destination = await directory.getFileHandle(name, { create: true })
+    const stream = await destination.createWritable()
+    await stream.write(source)
+    await stream.close()
+  } finally {
+    await directory.removeEntry(temporaryName).catch(() => undefined)
+  }
+}
+
+const abortOpfsWrite = async (
+  directory: FileSystemDirectoryHandle,
+  temporaryName: string,
+  writable: FileSystemWritableFileStream,
+): Promise<void> => {
+  await writable.abort().catch(() => undefined)
+  await directory.removeEntry(temporaryName).catch(() => undefined)
+}
+
+const beginOpfsWrite = async (
+  directory: FileSystemDirectoryHandle,
+  key: string,
+): Promise<PmTilesCacheWrite> => {
+  const name = await cacheKey(key)
+  const temporaryName = `${name}.${crypto.randomUUID()}.tmp`
+  const temporary = await directory.getFileHandle(temporaryName, { create: true })
+  const writable = await temporary.createWritable()
+  return {
+    write: (data) => writeOpfsChunk(writable, data),
+    commit: () => commitOpfsWrite(directory, name, temporaryName, writable),
+    abort: () => abortOpfsWrite(directory, temporaryName, writable),
+  }
+}
+
+const removeOpfsFile = async (
+  directory: FileSystemDirectoryHandle,
+  key: string,
+): Promise<void> => {
+  await directory.removeEntry(await cacheKey(key)).catch((error: unknown) => {
+    if (!isNotFound(error)) throw error
+  })
+}
+
 const createOpfsStorage = (directory: FileSystemDirectoryHandle): PmTilesCacheStorage => ({
-  read: async (key) => {
-    try {
-      const handle = await directory.getFileHandle(await cacheKey(key))
-      return new Uint8Array(await (await handle.getFile()).arrayBuffer())
-    } catch (error) {
-      if (isNotFound(error)) return undefined
-      throw error
-    }
-  },
-  beginWrite: async (key): Promise<PmTilesCacheWrite> => {
-    const name = await cacheKey(key)
-    const temporaryName = `${name}.${crypto.randomUUID()}.tmp`
-    const temporary = await directory.getFileHandle(temporaryName, { create: true })
-    const writable = await temporary.createWritable()
-    return {
-      write: async (data) => {
-        const copy = new Uint8Array(data.length)
-        copy.set(data)
-        await writable.write(copy)
-      },
-      commit: async () => {
-        await writable.close()
-        try {
-          const source = await (await directory.getFileHandle(temporaryName)).getFile()
-          const destination = await directory.getFileHandle(name, { create: true })
-          const stream = await destination.createWritable()
-          await stream.write(source)
-          await stream.close()
-        } finally {
-          await directory.removeEntry(temporaryName).catch(() => undefined)
-        }
-      },
-      abort: async () => {
-        await writable.abort().catch(() => undefined)
-        await directory.removeEntry(temporaryName).catch(() => undefined)
-      },
-    }
-  },
-  remove: async (key) => {
-    await directory.removeEntry(await cacheKey(key)).catch((error: unknown) => {
-      if (!isNotFound(error)) throw error
-    })
-  },
+  read: (key) => readOpfsFile(directory, key),
+  beginWrite: (key) => beginOpfsWrite(directory, key),
+  remove: (key) => removeOpfsFile(directory, key),
 })
 
 const openIndexedDb = (): Promise<IDBDatabase> =>
@@ -90,46 +123,73 @@ const transactionDone = (transaction: IDBTransaction): Promise<void> =>
     transaction.onabort = () => reject(transaction.error ?? new Error('Map cache write aborted.'))
   })
 
+const readIndexedDbValue = async (
+  database: IDBDatabase,
+  key: string,
+): Promise<Uint8Array | undefined> => {
+  const transaction = database.transaction(INDEXED_DB_STORE, 'readonly')
+  const stored = await requestResult(
+    transaction.objectStore(INDEXED_DB_STORE).get(key) as IDBRequest<ArrayBuffer | undefined>,
+  )
+  return stored === undefined ? undefined : new Uint8Array(stored)
+}
+
+const concatChunks = (chunks: readonly Uint8Array[]): Uint8Array => {
+  const total = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
+  let offset = 0
+  for (const chunk of chunks) {
+    total.set(chunk, offset)
+    offset += chunk.length
+  }
+  return total
+}
+
+const writeIndexedDbValue = async (
+  database: IDBDatabase,
+  key: string,
+  value: Uint8Array,
+): Promise<void> => {
+  const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite')
+  const completed = transactionDone(transaction)
+  transaction.objectStore(INDEXED_DB_STORE).put(value.buffer, key)
+  await completed
+}
+
+const beginIndexedDbWrite = (
+  database: IDBDatabase,
+  key: string,
+): PmTilesCacheWrite => {
+  let chunks: Uint8Array[] = []
+  return {
+    write: (data) => {
+      chunks.push(data.slice())
+      return Promise.resolve()
+    },
+    commit: async () => {
+      await writeIndexedDbValue(database, key, concatChunks(chunks))
+      chunks = []
+    },
+    abort: () => {
+      chunks = []
+      return Promise.resolve()
+    },
+  }
+}
+
+const removeIndexedDbValue = async (
+  database: IDBDatabase,
+  key: string,
+): Promise<void> => {
+  const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite')
+  const completed = transactionDone(transaction)
+  transaction.objectStore(INDEXED_DB_STORE).delete(key)
+  await completed
+}
+
 const createIndexedDbStorage = (database: IDBDatabase): PmTilesCacheStorage => ({
-  read: async (key) => {
-    const transaction = database.transaction(INDEXED_DB_STORE, 'readonly')
-    const stored = await requestResult(
-      transaction.objectStore(INDEXED_DB_STORE).get(key) as IDBRequest<ArrayBuffer | undefined>,
-    )
-    return stored === undefined ? undefined : new Uint8Array(stored)
-  },
-  beginWrite: (key): Promise<PmTilesCacheWrite> => {
-    let chunks: Uint8Array[] = []
-    return Promise.resolve({
-      write: (data) => {
-        chunks.push(data.slice())
-        return Promise.resolve()
-      },
-      commit: async () => {
-        const total = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
-        let offset = 0
-        for (const chunk of chunks) {
-          total.set(chunk, offset)
-          offset += chunk.length
-        }
-        const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite')
-        const completed = transactionDone(transaction)
-        transaction.objectStore(INDEXED_DB_STORE).put(total.buffer, key)
-        await completed
-        chunks = []
-      },
-      abort: () => {
-        chunks = []
-        return Promise.resolve()
-      },
-    })
-  },
-  remove: async (key) => {
-    const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite')
-    const completed = transactionDone(transaction)
-    transaction.objectStore(INDEXED_DB_STORE).delete(key)
-    await completed
-  },
+  read: (key) => readIndexedDbValue(database, key),
+  beginWrite: (key) => Promise.resolve(beginIndexedDbWrite(database, key)),
+  remove: (key) => removeIndexedDbValue(database, key),
 })
 
 export const createPmtilesCacheStorage = async (): Promise<
