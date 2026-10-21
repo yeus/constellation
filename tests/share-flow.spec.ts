@@ -866,6 +866,12 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
         notifications: false,
         servicesEnabled: true,
       },
+      devicePolicies: {
+        batteryOptimizationExempt: false,
+        powerSaverEnabled: true,
+        backgroundRestricted: false,
+        dataSaverEnabled: true,
+      },
       busy: false,
       error: '',
     })
@@ -879,6 +885,9 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
           review: true,
           hasShares: false,
           ...state,
+          onOpenSystemSettings: (target: string) => {
+            container.dataset.systemSettings = target
+          },
           onEnablePermissions: () => {
             state.permissions = {
               location: true,
@@ -896,6 +905,11 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
   })
   const setup = page.getByRole('dialog', { name: 'Set up sharing' })
   await expect(setup).toContainText('Background sharing is the Android default')
+  await expect(setup).toContainText('Battery saver')
+  await expect(setup).toContainText('Data Saver')
+  await expect(setup).toContainText('Optimized — may delay updates')
+  await setup.getByRole('button', { name: 'Change Battery saver' }).click()
+  await expect(page.locator('[data-system-settings="power-saver"]')).toHaveCount(1)
   await expect(setup.getByRole('button', { name: /In background/ })).toBeDisabled()
   await expect(setup.getByRole('button', { name: 'Save settings' })).toBeDisabled()
   await setup.getByRole('button', { name: 'Use while app is open' }).click()

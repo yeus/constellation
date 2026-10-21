@@ -1,5 +1,9 @@
 package space.taskyon.constellation.plugin
 
+import android.app.ActivityManager
+import android.net.ConnectivityManager
+import android.os.PowerManager
+import androidx.core.app.NotificationManagerCompat
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
@@ -139,6 +143,11 @@ class ProjectLinkArgs {
   var target: String = ""
 }
 
+@InvokeArg
+class SystemSettingsArgs {
+  var target: String = ""
+}
+
 
 @TauriPlugin(permissions = [Permission(
   strings = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION],
@@ -168,21 +177,57 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
 
   private fun sharingSetupResult(): JSObject {
     val saved = store.loadPrivateState()?.let(::JSONObject)
+    val power = activity.getSystemService(PowerManager::class.java)
+    val connectivity = activity.getSystemService(ConnectivityManager::class.java)
+    val processes = activity.getSystemService(ActivityManager::class.java)
     return JSObject().put("behavior", saved?.optJSONObject("sharingBehavior") ?: JSONObject.NULL)
       .put("hasShares", (saved?.optJSONArray("shares")?.length() ?: 0) > 0)
       .put("permissions", JSONObject()
         .put("location", locationGrant(activity) != "none")
         .put("background", Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
           ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED)
-        .put("notifications", Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-          ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+        .put("notifications", NotificationManagerCompat.from(activity).areNotificationsEnabled() &&
+          (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED))
         .put("servicesEnabled", locationManager.isLocationEnabled))
+      .put("devicePolicies", JSONObject()
+        .put("batteryOptimizationExempt", power?.isIgnoringBatteryOptimizations(activity.packageName) ?: false)
+        .put("powerSaverEnabled", power?.isPowerSaveMode ?: false)
+        .put("backgroundRestricted", Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+          processes?.isBackgroundRestricted == true)
+        .put("dataSaverEnabled", Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+          connectivity?.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED))
   }
 
   @Command
   fun sharingSetup(invoke: Invoke) {
     try { invoke.resolve(sharingSetupResult()) }
     catch (_: Exception) { invoke.reject("Could not read protected sharing settings.") }
+  }
+
+  @Command
+  fun openSharingSystemSettings(invoke: Invoke) {
+    try {
+      val target = invoke.parseArgs(SystemSettingsArgs::class.java).target
+      val appDetails = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:${activity.packageName}"))
+      val intent = when (target) {
+        "app", "location" -> appDetails
+        "device-location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+        "notifications" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+          .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+        "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        "power-saver" -> Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
+        "data-saver" -> Intent(Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS,
+          Uri.parse("package:${activity.packageName}"))
+        else -> throw IllegalArgumentException("Unknown Android settings destination.")
+      }
+      runCatching { activity.startActivity(intent) }
+        .getOrElse { activity.startActivity(appDetails) }
+      invoke.resolve(JSObject())
+    } catch (_: Exception) {
+      invoke.reject("Could not open Android settings on this device.")
+    }
   }
 
   @Command

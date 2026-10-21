@@ -246,10 +246,15 @@ assert.match(locationService, /listOf\("oldSharing", "stoppedViewers", "peerName
 for (const command of [
   'android_sharing_setup',
   'android_enable_sharing_permissions',
+  'android_open_sharing_system_settings',
   'android_set_sharing_behavior',
 ]) {
   assert.ok(tauriCommands.includes(command), `${command} must be registered`)
 }
+assert.match(mobileBridge, /run_mobile_plugin_async\("openSharingSystemSettings"/)
+assert.match(androidPlugin, /fun openSharingSystemSettings\(invoke: Invoke\)/)
+assert.match(androidPlugin, /isIgnoringBatteryOptimizations/)
+assert.match(androidPlugin, /restrictBackgroundStatus/)
 assert.match(androidPlugin, /requestPermissionForAlias\("backgroundLocation"/)
 assert.match(androidPlugin, /requestPermissionForAlias\("notifications"/)
 assert.match(androidPlugin, /ACTION_SET_SHARING_BEHAVIOR && locationGrant\(activity\) == "none"/)

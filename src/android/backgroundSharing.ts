@@ -11,6 +11,15 @@ import { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import { PeerNamePreference } from '../sharing/peerNames.ts'
 import { parseShareInvitation, verifyReturnOwner } from '../sharing/shareLink.ts'
 
+export type AndroidSystemSettingsTarget =
+  | 'app'
+  | 'location'
+  | 'device-location'
+  | 'notifications'
+  | 'battery'
+  | 'power-saver'
+  | 'data-saver'
+
 export const AndroidSharingSetup = z.object({
   behavior: SharingBehavior.nullable(),
   hasShares: z.boolean(),
@@ -20,6 +29,14 @@ export const AndroidSharingSetup = z.object({
     notifications: z.boolean(),
     servicesEnabled: z.boolean(),
   }),
+  devicePolicies: z
+    .object({
+      batteryOptimizationExempt: z.boolean(),
+      powerSaverEnabled: z.boolean(),
+      backgroundRestricted: z.boolean(),
+      dataSaverEnabled: z.boolean(),
+    })
+    .optional(),
 })
 export type AndroidSharingSetup = z.infer<typeof AndroidSharingSetup>
 
@@ -204,6 +221,7 @@ interface AndroidBackgroundSharing {
   blockViewer: (shareId: string, fingerprint: string) => Promise<AndroidBackgroundStatus>
   setup: () => Promise<AndroidSharingSetup>
   enablePermissions: () => Promise<AndroidSharingSetup>
+  openSystemSettings: (target: AndroidSystemSettingsTarget) => Promise<void>
   setSharingBehavior: (behavior: SharingBehavior) => Promise<AndroidBackgroundStatus>
   clearOldPeers: (protection: PeerHistoryProtection) => Promise<AndroidBackgroundStatus>
   adoptPeerName: (peerId: string, name: string) => Promise<AndroidBackgroundStatus>
@@ -356,6 +374,9 @@ const createSetupActions = (dependencies: AndroidBackgroundSharingDependencies) 
   setup: async () => AndroidSharingSetup.parse(await dependencies.invoke('android_sharing_setup')),
   enablePermissions: async () =>
     AndroidSharingSetup.parse(await dependencies.invoke('android_enable_sharing_permissions')),
+  openSystemSettings: async (target: AndroidSystemSettingsTarget) => {
+    await dependencies.invoke('android_open_sharing_system_settings', { target })
+  },
   setSharingBehavior: async (behavior: SharingBehavior) =>
     invokeStatusAfter(dependencies, 'android_set_sharing_behavior', { behavior }),
   clearOldPeers: async (protection: PeerHistoryProtection) =>

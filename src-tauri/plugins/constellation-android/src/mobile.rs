@@ -171,6 +171,9 @@ impl<R: Runtime> ConstellationAndroid<R> {
     pub async fn sharing_setup(&self) -> crate::Result<Value> {
         self.0.run_mobile_plugin_async("sharingSetup", json!({})).await.map_err(Into::into)
     }
+    pub async fn open_sharing_system_settings(&self, target: &str) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("openSharingSystemSettings", json!({ "target": target })).await.map_err(Into::into)
+    }
     pub async fn enable_sharing_permissions(&self) -> crate::Result<Value> {
         self.0.run_mobile_plugin_async("enableSharingPermissions", json!({})).await.map_err(Into::into)
     }

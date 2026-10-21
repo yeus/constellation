@@ -137,6 +137,38 @@
         networks, Data Saver and Doze can delay updates. Pausing updates keeps the link active;
         updates resume automatically when the restriction ends.
       </p>
+      <section
+        v-if="isAndroid"
+        class="android-readiness"
+        aria-label="Android permissions and restrictions"
+      >
+        <h3>Android permissions &amp; restrictions</h3>
+        <p class="field-help">
+          Android controls these settings. Select Change to open the corresponding system page;
+          return to Constellation to refresh the results. Battery optimization is optional, but may
+          delay locations while the phone sleeps.
+        </p>
+        <div v-for="item in policyRows" :key="item.label" class="android-policy-row">
+          <div>
+            <strong>{{ item.label }}</strong>
+            <p :class="{ 'policy-warning': item.warning }" class="field-help">{{ item.status }}</p>
+          </div>
+          <button
+            class="secondary-action"
+            type="button"
+            :aria-label="`Change ${item.label}`"
+            :disabled="busy"
+            @click="emit('openSystemSettings', item.target)"
+          >
+            Change
+          </button>
+        </div>
+        <p class="field-help">
+          Doze, a force-stop, device-specific power restrictions and loss of network access can
+          still interrupt peer updates. Active outgoing sharing uses a notification; receiving peers
+          while this app sleeps is not yet guaranteed.
+        </p>
+      </section>
       <p v-if="error" role="alert" class="settings-error">{{ error }}</p>
       <button
         class="primary-action"
@@ -160,17 +192,26 @@ import {
 } from '@lucide/vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { SharingBehavior } from '../sharing/sharingBehavior.ts'
-import type { AndroidSharingSetup } from '../android/backgroundSharing.ts'
+import type {
+  AndroidSharingSetup,
+  AndroidSystemSettingsTarget,
+} from '../android/backgroundSharing.ts'
 const props = defineProps<{
   behavior: SharingBehavior
   isAndroid: boolean
   permissions?: AndroidSharingSetup['permissions']
+  devicePolicies?: AndroidSharingSetup['devicePolicies']
   review: boolean
   hasShares: boolean
   busy: boolean
   error?: string
 }>()
-const emit = defineEmits<{ close: []; save: [behavior: SharingBehavior]; enablePermissions: [] }>()
+const emit = defineEmits<{
+  close: []
+  save: [behavior: SharingBehavior]
+  enablePermissions: []
+  openSystemSettings: [target: AndroidSystemSettingsTarget]
+}>()
 const dialog = ref<HTMLElement>()
 const previousFocus =
   document.activeElement instanceof HTMLElement ? document.activeElement : undefined
@@ -183,6 +224,74 @@ const draft = ref({ ...props.behavior })
 const backgroundAllowed = computed(
   () => props.isAndroid && !!props.permissions && Object.values(props.permissions).every(Boolean),
 )
+const policyRows = computed(() => {
+  const permissions = props.permissions
+  const policies = props.devicePolicies
+  const rows: {
+    label: string
+    target: AndroidSystemSettingsTarget
+    status: string
+    warning: boolean
+  }[] = [
+    {
+      label: 'Location permission',
+      target: 'location',
+      status: permissions?.location ? 'Allowed' : 'Not allowed',
+      warning: !permissions?.location,
+    },
+    {
+      label: 'Background location',
+      target: 'location',
+      status: permissions?.background ? 'Allowed all the time' : 'Not allowed all the time',
+      warning: !permissions?.background,
+    },
+    {
+      label: 'Device location',
+      target: 'device-location',
+      status: permissions?.servicesEnabled ? 'Enabled' : 'Disabled',
+      warning: !permissions?.servicesEnabled,
+    },
+    {
+      label: 'Notifications',
+      target: 'notifications',
+      status: permissions?.notifications ? 'Enabled' : 'Disabled',
+      warning: !permissions?.notifications,
+    },
+    ...(policies
+      ? [
+          {
+            label: 'Background app restriction',
+            target: 'app' as const,
+            status: policies.backgroundRestricted
+              ? 'Restricted — may stop updates'
+              : 'Not restricted',
+            warning: policies.backgroundRestricted,
+          },
+          {
+            label: 'Battery optimization',
+            target: 'battery' as const,
+            status: policies.batteryOptimizationExempt
+              ? 'Unrestricted'
+              : 'Optimized — may delay updates',
+            warning: false,
+          },
+          {
+            label: 'Battery saver',
+            target: 'power-saver' as const,
+            status: policies.powerSaverEnabled ? 'On — may delay updates' : 'Off',
+            warning: policies.powerSaverEnabled,
+          },
+          {
+            label: 'Data Saver',
+            target: 'data-saver' as const,
+            status: policies.dataSaverEnabled ? 'On — may restrict traffic' : 'Off',
+            warning: policies.dataSaverEnabled,
+          },
+        ]
+      : []),
+  ]
+  return rows
+})
 </script>
 <style scoped>
 .settings-sheet {
@@ -222,5 +331,33 @@ fieldset:disabled {
 .settings-error {
   color: var(--text);
   font-size: 0.85rem;
+}
+.android-readiness {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.android-readiness h3 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+.android-policy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.45rem 0;
+}
+.android-policy-row strong {
+  font-size: 0.85rem;
+}
+.android-policy-row p {
+  margin: 0.1rem 0 0;
+}
+.android-policy-row button {
+  flex-shrink: 0;
+}
+.policy-warning {
+  color: var(--danger, var(--text));
 }
 </style>

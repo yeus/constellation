@@ -289,6 +289,14 @@ async fn android_sharing_setup(app: tauri::AppHandle) -> Result<serde_json::Valu
 }
 
 #[tauri::command]
+async fn android_open_sharing_system_settings(app: tauri::AppHandle, target: String) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().open_sharing_system_settings(&target).await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    { let _ = (app, target); Err("Android system settings are unavailable.".into()) }
+}
+
+#[tauri::command]
 async fn android_enable_sharing_permissions(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     return app.constellation_android().enable_sharing_permissions().await.map_err(|error| error.to_string());
@@ -527,6 +535,7 @@ pub fn run() {
             android_set_background_peer_names,
             android_sharing_setup,
             android_enable_sharing_permissions,
+            android_open_sharing_system_settings,
             android_set_sharing_behavior,
             android_clear_old_peers,
             android_adopt_background_peer_name,

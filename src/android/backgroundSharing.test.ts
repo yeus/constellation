@@ -610,3 +610,21 @@ test('global Android behavior waits for native acknowledgement before reading st
   })
   assert.deepEqual(calls, ['android_set_sharing_behavior', 'android_background_share_status'])
 })
+
+test('Android system policy actions open system settings without changing grants', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return {}
+    },
+  })!
+  await controller.openSystemSettings('battery')
+  await controller.openSystemSettings('data-saver')
+  assert.deepEqual(calls, [
+    { command: 'android_open_sharing_system_settings', args: { target: 'battery' } },
+    { command: 'android_open_sharing_system_settings', args: { target: 'data-saver' } },
+  ])
+})

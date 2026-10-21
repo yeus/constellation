@@ -152,6 +152,7 @@
       :behavior="sharingBehavior"
       :is-android="isAndroid"
       :permissions="sharingSetup?.permissions"
+      :device-policies="sharingSetup?.devicePolicies"
       :review="behaviorReviewRequired"
       :has-shares="activeShares.length > 0"
       :busy="settingsBusy"
@@ -159,6 +160,7 @@
       @close="settingsOpen = false"
       @save="saveSharingBehavior"
       @enable-permissions="enableSharingPermissions"
+      @open-system-settings="openAndroidSystemSettings"
     />
     <AboutSheet v-if="aboutOpen" @close="aboutOpen = false" />
     <DiagnosticsSheet
@@ -621,7 +623,10 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import SettingsSheet from '../components/SettingsSheet.vue'
 import { defaultSharingBehavior, type SharingBehavior } from '../sharing/sharingBehavior.ts'
-import type { AndroidSharingSetup } from '../android/backgroundSharing.ts'
+import type {
+  AndroidSharingSetup,
+  AndroidSystemSettingsTarget,
+} from '../android/backgroundSharing.ts'
 import type { PmtilesCacheStats } from '../map/pmtiles.ts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -892,10 +897,29 @@ const behaviorReviewRequired = ref(isAndroid)
 const settingsOpen = ref(false)
 const settingsBusy = ref(false)
 const settingsError = ref('')
+const openAndroidSystemSettings = async (target: AndroidSystemSettingsTarget): Promise<void> => {
+  if (!backgroundSharing) return
+  try {
+    await backgroundSharing.openSystemSettings(target)
+  } catch {
+    settingsError.value =
+      'Could not open Android settings. Open Constellation in Android App info instead.'
+  }
+}
 const openSettings = (): void => {
   menuOpen.value = false
   settingsError.value = ''
   settingsOpen.value = true
+  if (backgroundSharing) {
+    void backgroundSharing
+      .setup()
+      .then((setup) => {
+        sharingSetup.value = setup
+      })
+      .catch(() => {
+        settingsError.value = 'Could not refresh Android permissions and restrictions.'
+      })
+  }
 }
 const loadSharingSettings = async (): Promise<void> => {
   if (backgroundSharing) {
