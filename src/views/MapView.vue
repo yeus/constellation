@@ -318,6 +318,37 @@
       </button>
     </section>
 
+    <section v-if="showAppHandoff" class="app-handoff" aria-label="Open in the Constellation app">
+      <strong>Open this link in the Android app?</strong>
+      <p>
+        Use the app to keep following in the background. Opening the app does not start sharing your
+        location.
+      </p>
+      <p>
+        If the app is not installed, get it and then reopen this link. Copy the link first so you
+        can return to it.
+      </p>
+      <div class="preview-actions">
+        <button class="secondary-action" type="button" @click="openInviteInApp">Open in app</button>
+        <button class="secondary-action" type="button" @click="copyHandoffLink">Copy link</button>
+        <a
+          class="secondary-action"
+          href="https://github.com/yeus/constellation/releases/latest"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Get the app
+        </a>
+        <button class="secondary-action" type="button" @click="dismissAppHandoff">
+          Continue in browser
+        </button>
+      </div>
+      <p class="field-help">
+        Continue in browser starts the preview here. The app redeems the link separately and may
+        need the sender's approval.
+      </p>
+    </section>
+
     <section v-if="previewFollow" class="accept-card" aria-label="Location preview">
       <p class="eyebrow">Private preview</p>
       <strong>{{ previewFollow.localName }}</strong>
@@ -357,33 +388,6 @@
       <p v-if="!runtimeState.canSave">
         Protected storage is unavailable on this device; preview only.
       </p>
-      <section v-if="showAppHandoff" class="app-handoff" aria-label="Open in the Constellation app">
-        <strong>Have the Constellation app?</strong>
-        <p>
-          Open this same link in the Android app. If you already previewed here, the sender may need
-          to approve this device again in the app.
-        </p>
-        <div class="preview-actions">
-          <button class="secondary-action" type="button" @click="openInviteInApp">
-            Open in app
-          </button>
-          <a
-            class="secondary-action"
-            href="https://github.com/yeus/constellation/releases/latest"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Get the app
-          </a>
-          <button class="secondary-action" type="button" @click="dismissAppHandoff">
-            Continue in browser
-          </button>
-        </div>
-        <p class="field-help">
-          Not installed yet? Install it, then reopen the original link. Your browser preview stays
-          available.
-        </p>
-      </section>
     </section>
 
     <section
@@ -985,6 +989,7 @@ const readyShareIsReturn = ref(false)
 const invitationPending = ref(false)
 const invitationUrl = ref<string>()
 const previewInvite = ref<{ shareId: string; url: string }>()
+const pendingBrowserInvite = ref<{ shareId: string; url: string }>()
 const browserLocationDeferred = ref(!isNative && window.location.hash.startsWith('#share='))
 const nicknamePrompt = ref<{ shareId: string; name: string }>()
 const shareBackPrompt = ref<{ shareId: string; name: string }>()
@@ -1046,11 +1051,20 @@ const dismissReadyShareOnNewRecipient = (
 
 const offerInvitation = (url: string): void => {
   try {
-    parseShareInvitation(url)
+    const { shareId } = parseShareInvitation(url)
     introOpen.value = false
     invitationUrl.value = url
-    if (isNative) invitationPending.value = true
-    else void previewInvitation(url)
+    if (isNative) {
+      invitationPending.value = true
+    } else if (isAndroidBrowser && !appHandoffDismissed.value.includes(shareId)) {
+      // Do not redeem the link before the visitor chooses a destination. A
+      // browser redemption can enter single-recipient approval with the browser
+      // identity and leave the offered native destination unable to connect.
+      pendingBrowserInvite.value = { shareId, url }
+    } else {
+      pendingBrowserInvite.value = undefined
+      void previewInvitation(url)
+    }
   } catch {
     if (url.split('#')[1]?.startsWith('share=')) {
       localError.value = 'This location link is invalid or expired.'
@@ -1289,17 +1303,19 @@ const readAppHandoffDismissed = (): readonly string[] => {
   }
 }
 const appHandoffDismissed = ref<readonly string[]>(readAppHandoffDismissed())
+const appHandoffInvite = computed(() => pendingBrowserInvite.value ?? previewInvite.value)
 const showAppHandoff = computed(
   () =>
     isAndroidBrowser &&
-    previewFollow.value !== undefined &&
-    previewInvite.value?.shareId === previewFollow.value.shareId &&
-    !appHandoffDismissed.value.includes(previewFollow.value.shareId),
+    appHandoffInvite.value !== undefined &&
+    !appHandoffDismissed.value.includes(appHandoffInvite.value.shareId),
 )
 const dismissAppHandoff = (): void => {
-  const shareId = previewInvite.value?.shareId
-  if (!shareId) return
-  appHandoffDismissed.value = [...new Set([...appHandoffDismissed.value, shareId])].slice(-50)
+  const invite = appHandoffInvite.value
+  if (!invite) return
+  appHandoffDismissed.value = [...new Set([...appHandoffDismissed.value, invite.shareId])].slice(
+    -50,
+  )
   try {
     window.localStorage.setItem(
       APP_HANDOFF_DISMISSED_KEY,
@@ -1308,10 +1324,29 @@ const dismissAppHandoff = (): void => {
   } catch {
     // A dismissed prompt may reappear when storage is unavailable.
   }
+  pendingBrowserInvite.value = undefined
   sessionLog.record({ level: 'info', event: 'sharing.app_handoff.dismissed' })
+  if (previewFollow.value?.shareId !== invite.shareId) void previewInvitation(invite.url)
+}
+const copyHandoffLink = async (): Promise<void> => {
+  const url = appHandoffInvite.value?.url
+  if (!url) return
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable.')
+    await navigator.clipboard.writeText(url)
+    copyNotice.value = 'Link copied. Reopen it after installing the app.'
+    if (copyNoticeTimeout !== undefined) window.clearTimeout(copyNoticeTimeout)
+    copyNoticeTimeout = window.setTimeout(() => {
+      copyNotice.value = ''
+      copyNoticeTimeout = undefined
+    }, 6_000)
+    sessionLog.record({ level: 'info', event: 'sharing.app_handoff.copy' })
+  } catch {
+    localError.value = 'Could not copy the link. Use the address bar instead.'
+  }
 }
 const openInviteInApp = (): void => {
-  const url = previewInvite.value?.url
+  const url = appHandoffInvite.value?.url
   if (!url) return
   sessionLog.record({ level: 'info', event: 'sharing.app_handoff.launch' })
   window.location.assign(url)
@@ -2020,6 +2055,7 @@ const previewInvitation = async (url: string): Promise<void> => {
   accepting.value = true
   localError.value = ''
   const shareId = parseShareInvitation(url).shareId
+  if (pendingBrowserInvite.value?.shareId === shareId) pendingBrowserInvite.value = undefined
   previewInvite.value = { shareId, url }
   try {
     await runtime.acceptShare(url, { saved: false })

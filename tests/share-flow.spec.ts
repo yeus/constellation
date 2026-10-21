@@ -816,6 +816,15 @@ test('offers an Android app handoff on incoming links without starting own shari
     const source = await sourceContext.newPage()
     const androidViewer = await androidViewerContext.newPage()
     const desktopViewer = await desktopViewerContext.newPage()
+    await androidViewer.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {
+          writeText: async (value: string) => {
+            ;(window as typeof window & { copiedHandoffLink?: string }).copiedHandoffLink = value
+          },
+        },
+      })
+    })
     await source.goto('/')
     await openShareCreator(source)
     await source.getByRole('button', { name: '10', exact: true }).click()
@@ -827,28 +836,55 @@ test('offers an Android app handoff on incoming links without starting own shari
     const handoff = androidViewer.getByRole('region', {
       name: 'Open in the Constellation app',
     })
+    const preview = androidViewer.getByRole('region', { name: 'Location preview' })
     await expect(handoff).toBeVisible({ timeout: 30_000 })
-    await expect(handoff).toContainText('same link')
-    await expect(handoff).toContainText('approve this device again')
+    await expect(handoff).toContainText('does not start sharing your location')
+    await expect(handoff).toContainText('Copy the link')
     await expect(handoff.getByRole('button', { name: 'Open in app' })).toBeVisible()
+    await expect(handoff.getByRole('button', { name: 'Copy link' })).toBeVisible()
     await expect(handoff.getByRole('link', { name: 'Get the app' })).toHaveAttribute(
       'href',
       'https://github.com/yeus/constellation/releases/latest',
     )
-    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toBeVisible()
+    await expect(handoff.getByRole('button', { name: 'Continue in browser' })).toBeVisible()
+    await expect(preview).toHaveCount(0)
     expect(
       await androidViewer.evaluate(
         async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
       ),
     ).toBe('prompt')
 
+    await handoff.getByRole('button', { name: 'Copy link' }).click()
+    await expect(
+      androidViewer.getByText('Link copied. Reopen it after installing the app.'),
+    ).toBeVisible()
+    expect(
+      await androidViewer.evaluate(
+        () => (window as typeof window & { copiedHandoffLink?: string }).copiedHandoffLink,
+      ),
+    ).toBe(url)
+    expect(
+      await androidViewer.evaluate(
+        async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
+      ),
+    ).toBe('prompt')
+
+    await handoff.getByRole('button', { name: 'Open in app' }).click()
+    await expect(androidViewer).toHaveURL(url)
+    await expect(handoff).toBeVisible({ timeout: 30_000 })
+    await expect(preview).toHaveCount(0)
+
     await handoff.getByRole('button', { name: 'Continue in browser' }).click()
     await expect(handoff).toHaveCount(0)
-    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toBeVisible()
+    await expect(preview).toBeVisible({ timeout: 30_000 })
+    expect(
+      await androidViewer.evaluate(
+        async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
+      ),
+    ).toBe('prompt')
+
     await androidViewer.goto(url)
-    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toBeVisible({
-      timeout: 30_000,
-    })
+    await expect(preview).toBeVisible({ timeout: 30_000 })
     await expect(handoff).toHaveCount(0)
 
     await desktopViewer.goto(url)

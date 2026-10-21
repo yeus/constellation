@@ -491,10 +491,14 @@ The app menu exposes 64/128/256 MB limits and a clear action. Peer locations,
 links and history are never cached, and the map falls back to the online reader
 when storage is unavailable.
 
-On an Android browser, opening a valid share offers an optional app handoff
-prompt with Open in app, Get the app and Continue in browser. It never requests
-the visitor's location, does not migrate keys or auto-save a preview, warns that
-the app may need a fresh source approval, and keeps the browser preview intact.
+On an Android browser, opening a valid share first offers an optional app
+handoff with Open in app, Copy link, Get the app and Continue in browser. The
+browser does not redeem the link or request sender approval until Continue in
+browser, so the browser identity cannot consume a single-recipient admission
+before the visitor chooses the app. Copy link preserves the bearer fragment for
+the install-return flow; Get the app opens the latest release. It never requests
+the visitor's location, does not migrate keys or auto-save a preview, and the app
+redeems the link independently, so the sender may need to approve that device.
 
 Android also declares a `text/plain` share target: sharing a Constellation link
 from a messenger opens a one-time in-app approval before the recipient connects.

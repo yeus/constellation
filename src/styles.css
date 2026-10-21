@@ -431,7 +431,8 @@ button {
   background: #36a269;
 }
 
-.accept-card {
+.accept-card,
+.app-handoff {
   position: absolute;
   z-index: 3;
   left: 50%;
@@ -445,20 +446,16 @@ button {
   transform: translateX(-50%);
 }
 
-.map-screen--actions-open .accept-card {
+.map-screen--actions-open .accept-card,
+.map-screen--actions-open .app-handoff {
   bottom: calc(10.6rem + env(safe-area-inset-bottom));
 }
 
-.accept-card p:not(.eyebrow) {
+.accept-card p:not(.eyebrow),
+.app-handoff p:not(.eyebrow) {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.45;
-}
-
-.app-handoff {
-  margin-top: 0.8rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
 }
 
 .app-handoff strong {
