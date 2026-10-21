@@ -4,6 +4,7 @@ import type { ApproximationState } from '../location/approximation.ts'
 import type { LocationObservationV1 } from '../location/locationObservation.ts'
 import type { ShareBatteryPolicy, ShareDraft, ShareNetworkPolicy } from '../shareDraft.ts'
 import type { DeviceComparison } from './deviceComparison.ts'
+import type { FollowTraceEvent } from './followTrace.ts'
 import type { PeerNamePreference } from './peerNames.ts'
 import type { PrivateState, StoppedViewerRecord } from './privateStore.ts'
 import type { NetworkRestriction, SharePauseState } from './sharePolicy.ts'
@@ -59,6 +60,8 @@ export interface FollowSummary {
   readonly followedAt?: number
   readonly lastLocationAt?: number
   readonly updatesReceived: number
+  readonly traceEnabled?: boolean
+  readonly trace?: readonly FollowTraceEvent[]
   readonly expiresAt: number | null
   readonly returnPromptSeen: boolean
   readonly approvalPending?: boolean
@@ -206,6 +209,8 @@ export interface FollowEntry {
   returnPromptSeen: boolean
   endedAt?: number
   updatesReceived: number
+  traceEnabled?: boolean
+  trace?: FollowTraceEvent[]
   expiresAt: number | null
 }
 
@@ -281,6 +286,8 @@ export interface SharingRuntime {
     options?: { localName?: string; saved?: boolean; returnOwnerPeerId?: string },
   ) => Promise<void>
   saveFollowing: (shareId: string, localName: string) => Promise<void>
+  setFollowTraceEnabled: (shareId: string, enabled: boolean) => Promise<void>
+  clearFollowTrace: (shareId: string) => Promise<void>
   stopFollowing: (shareId: string) => Promise<void>
   setFollowName: (shareId: string, name: string) => void
   setFollowColor: (shareId: string, color: string) => void

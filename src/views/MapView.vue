@@ -557,6 +557,7 @@
       :pause-busy="changingSharingPause"
       :revoke-all-busy="revokingAllShares"
       :peer-name-preferences="peerNamePreferences"
+      :trace-error="traceError"
       @compare-device="openDeviceComparison"
       @clear-old="clearOldPeers"
       @open-local-settings="openSettings"
@@ -578,6 +579,8 @@
       @focus="focusFollowing"
       @focus-all="focusAllFollowing"
       @unfollow="stopFollowing"
+      @trace-enabled="setFollowTraceEnabled"
+      @trace-clear="clearFollowTrace"
       @keep="keepFollowing"
       @dismiss-stopped="dismissStoppedViewer"
       @share-back="shareBackFromFollowing"
@@ -2098,6 +2101,24 @@ const previewInvitation = async (url: string): Promise<void> => {
 const keepFollowing = (shareId: string): void => {
   const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
   if (follow) nicknamePrompt.value = { shareId, name: follow.localName }
+}
+
+const traceError = ref('')
+const setFollowTraceEnabled = async (shareId: string, enabled: boolean): Promise<void> => {
+  traceError.value = ''
+  try {
+    await runtime.setFollowTraceEnabled(shareId, enabled)
+  } catch (error) {
+    traceError.value = error instanceof Error ? error.message : 'Could not update recording.'
+  }
+}
+const clearFollowTrace = async (shareId: string): Promise<void> => {
+  traceError.value = ''
+  try {
+    await runtime.clearFollowTrace(shareId)
+  } catch (error) {
+    traceError.value = error instanceof Error ? error.message : 'Could not clear history.'
+  }
 }
 
 const saveNickname = async (): Promise<void> => {

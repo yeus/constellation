@@ -613,6 +613,17 @@ test('peer list uses distinct main actions, one filter menu, and compact details
       focused: false,
       compared: '',
       sharedName: null as string | null,
+      traceEnabled: false,
+      trace: [] as {
+        type: 'location'
+        receivedAt: number
+        capturedAt: number
+        latitude: number
+        longitude: number
+        accuracyMeters: number
+        precision: 'approximate'
+        sequence: number
+      }[],
     })
     ;(window as Window & { __peerCompareTest?: typeof state }).__peerCompareTest = state
     const container = document.createElement('div')
@@ -662,6 +673,8 @@ test('peer list uses distinct main actions, one filter menu, and compact details
               saved: true,
               expiresAt: null,
               updatesReceived: 1,
+              traceEnabled: state.traceEnabled,
+              trace: state.trace,
               returnPromptSeen: true,
             },
           ],
@@ -676,6 +689,26 @@ test('peer list uses distinct main actions, one filter menu, and compact details
           },
           onCompareDevice: (shareId: string, peerId?: string) => {
             state.compared = `${shareId}:${peerId}`
+          },
+          onTraceEnabled: (_shareId: string, enabled: boolean) => {
+            state.traceEnabled = enabled
+            state.trace = enabled
+              ? [
+                  {
+                    type: 'location',
+                    receivedAt: Date.now(),
+                    capturedAt: Date.now() - 1_000,
+                    latitude: 32.7,
+                    longitude: -117.1,
+                    accuracyMeters: 1_000,
+                    precision: 'approximate',
+                    sequence: 3,
+                  },
+                ]
+              : []
+          },
+          onTraceClear: () => {
+            state.trace = []
           },
           onProfile: (_peerId: string, _associateNames: boolean, sharedName: string | null) => {
             state.sharedName = sharedName
@@ -714,6 +747,19 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   await peer.getByRole('button', { name: 'Save name preferences' }).click()
   await expect(nameSwitch).toHaveAttribute('aria-checked', 'true')
   await sections.nth(2).locator(':scope > summary').click()
+  await peer.getByRole('button', { name: 'View received messages from River' }).click()
+  const traceDialog = page.getByRole('dialog', { name: 'Received messages from River' })
+  await expect(traceDialog).toContainText('Recording is off')
+  await traceDialog
+    .getByRole('checkbox', { name: 'Record received messages and locations' })
+    .check()
+  await expect(traceDialog).toContainText('Validated update #3')
+  await traceDialog.getByRole('button', { name: 'Clear history' }).click()
+  await expect(traceDialog).toContainText('No messages received')
+  await traceDialog.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(
+    peer.getByRole('button', { name: 'View received messages from River' }),
+  ).toBeFocused()
   await peer.getByRole('button', { name: 'Verify connection to River' }).click()
   expect(
     await page.evaluate(

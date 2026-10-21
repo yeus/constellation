@@ -21,6 +21,7 @@ import type {
   SharingRuntimeState,
   SourceShare,
 } from './sharingContracts.ts'
+import { pruneFollowTrace, type FollowTraceEvent } from './followTrace.ts'
 import type { SharingBehavior } from './sharingBehavior.ts'
 
 export const followStatusFor = (options: {
@@ -53,6 +54,8 @@ type SavedFollowEntry = {
   approvalDenied?: boolean
   terminal?: 'expired' | 'revoked' | 'unavailable'
   endedAt?: number
+  traceEnabled?: boolean
+  trace?: readonly FollowTraceEvent[]
 }
 
 const savedFollowRecord = (entry: SavedFollowEntry): PrivateState['followed'][number] => ({
@@ -68,6 +71,7 @@ const savedFollowRecord = (entry: SavedFollowEntry): PrivateState['followed'][nu
     ? { endReason: entry.terminal }
     : {}),
   ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
+  ...(entry.traceEnabled ? { traceEnabled: true, trace: pruneFollowTrace(entry.trace ?? []) } : {}),
 })
 
 export const savedFollowRecords = (
@@ -189,6 +193,8 @@ const projectFollow = (
     ...(entry.followedAt ? { followedAt: entry.followedAt } : {}),
     ...(observation ? { lastLocationAt: observation.capturedAt } : {}),
     updatesReceived: entry.updatesReceived,
+    traceEnabled: entry.traceEnabled === true,
+    ...(entry.traceEnabled ? { trace: pruneFollowTrace(entry.trace ?? [], input.now) } : {}),
     expiresAt: entry.expiresAt,
     returnPromptSeen: entry.returnPromptSeen,
     ...(entry.approvalPending ? { approvalPending: true } : {}),

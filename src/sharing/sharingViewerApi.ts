@@ -1,6 +1,7 @@
 import type { FollowEntry, SharingRuntime, SourceShare } from './sharingContracts.ts'
 
 import { hasEndedPeerShare } from './peerHistory.ts'
+import { appendFollowTrace } from './followTrace.ts'
 import { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
 export { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
 import {
@@ -69,6 +70,8 @@ export const createViewerApi = (
   | 'stopFollowing'
   | 'saveFollowing'
   | 'setFollowName'
+  | 'setFollowTraceEnabled'
+  | 'clearFollowTrace'
   | 'setFollowColor'
 > => ({
   setPeerNamePreferences: createSetPeerNamePreferences(ctx),
@@ -83,6 +86,8 @@ export const createViewerApi = (
   stopFollowing: createStopFollowing(ctx),
   saveFollowing: createSaveFollowing(ctx),
   setFollowName: createSetFollowName(ctx),
+  setFollowTraceEnabled: createSetFollowTraceEnabled(ctx),
+  clearFollowTrace: createClearFollowTrace(ctx),
   setFollowColor: createSetFollowColor(ctx),
 })
 
@@ -637,6 +642,8 @@ const pendingFollowEntry = (
     followedAt: existing?.followedAt ?? Date.now(),
     returnPromptSeen: existing?.returnPromptSeen ?? Boolean(state.options.returnOwnerPeerId),
     updatesReceived: existing?.updatesReceived ?? 0,
+    traceEnabled: existing?.traceEnabled ?? false,
+    ...(existing?.traceEnabled ? { trace: existing.trace } : {}),
     expiresAt: state.capability.expiresAt,
   }
 }
@@ -687,6 +694,8 @@ const activeFollowEntry = (
     followedAt: existing ? existing.followedAt : Date.now(),
     returnPromptSeen: existing?.returnPromptSeen ?? Boolean(state.options.returnOwnerPeerId),
     updatesReceived: existing?.updatesReceived ?? 0,
+    traceEnabled: existing?.traceEnabled ?? false,
+    ...(existing?.traceEnabled ? { trace: existing.trace } : {}),
     expiresAt: state.capability.expiresAt,
   }
 }
@@ -724,6 +733,14 @@ const receiveObservation = async (
     ctx.received.set(state.capability.shareId, observation)
     const entry = ctx.followed.get(state.capability.shareId)
     if (entry) entry.updatesReceived += 1
+    if (entry?.traceEnabled) {
+      entry.trace = appendFollowTrace(entry.trace ?? [], {
+        type: 'location',
+        observation,
+        receivedAt: Date.now(),
+      })
+      scheduleTracePersist(ctx)
+    }
     ctx.publish({ message: '' })
   } catch {
     // Invalid or unauthenticated location payloads are ignored without retaining their data.
@@ -738,6 +755,14 @@ const receiveClosedMessage = (
 ) => {
   const entry = ctx.followed.get(state.capability.shareId)
   if (entry) {
+    if (entry?.traceEnabled) {
+      entry.trace = appendFollowTrace(entry.trace ?? [], {
+        type: 'closed',
+        receivedAt: Date.now(),
+        reason: closed.reason,
+      })
+      scheduleTracePersist(ctx)
+    }
     entry.connected = false
     if (closed.reason === 'expired' || closed.reason === 'revoked') {
       entry.terminal = closed.reason
@@ -1177,6 +1202,61 @@ const createSaveFollowing =
       entry.localName = previousName
       entry.usesPrivateName = previousUsesPrivateName
       entry.saved = wasSaved
+      throw error
+    }
+    ctx.publish()
+  }
+
+const scheduleTracePersist = (ctx: SharingContext): void => {
+  if (
+    !ctx.store ||
+    !ctx.privateStateAvailable ||
+    ctx.runtimeClosed ||
+    ctx.traceSaveTimer !== undefined
+  )
+    return
+  const delay = Math.max(0, 30_000 - (Date.now() - ctx.lastTraceSavedAt))
+  ctx.traceSaveTimer = window.setTimeout(() => {
+    ctx.traceSaveTimer = undefined
+    ctx.lastTraceSavedAt = Date.now()
+    void ctx.persist().catch(() => ctx.publish({ message: 'Received history could not be saved.' }))
+  }, delay)
+}
+
+const createSetFollowTraceEnabled =
+  (ctx: SharingContext): SharingRuntime['setFollowTraceEnabled'] =>
+  async (shareId, enabled) => {
+    await ctx.prepareState()
+    const entry = ctx.followed.get(shareId)
+    if (!entry || !entry.saved)
+      throw new Error('Save this subscription before recording its history.')
+    if (!ctx.store || !ctx.privateStateAvailable)
+      throw new Error('Protected storage is unavailable.')
+    if (entry.traceEnabled === enabled) return
+    const previous = { traceEnabled: entry.traceEnabled, trace: entry.trace }
+    entry.traceEnabled = enabled
+    entry.trace = []
+    try {
+      await ctx.persist()
+    } catch (error) {
+      Object.assign(entry, previous)
+      throw error
+    }
+    ctx.publish()
+  }
+
+const createClearFollowTrace =
+  (ctx: SharingContext): SharingRuntime['clearFollowTrace'] =>
+  async (shareId) => {
+    await ctx.prepareState()
+    const entry = ctx.followed.get(shareId)
+    if (!entry) return
+    const previous = entry.trace
+    entry.trace = []
+    try {
+      await ctx.persist()
+    } catch (error) {
+      entry.trace = previous
       throw error
     }
     ctx.publish()

@@ -11,6 +11,7 @@ import { projectRuntimeState, snapshotPrivateState } from './sharingProjection.t
 import { restoredEndedSourceShare, restoredSourceShare } from './sharingRestore.ts'
 import { acceptReturnShare } from './sharingReturn.ts'
 import { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
+import { pruneFollowTrace } from './followTrace.ts'
 
 import { hasEndedPeerShare } from './peerHistory.ts'
 import {
@@ -435,6 +436,8 @@ const restoreFollow = async (ctx: SharingContext, record: PrivateState['followed
     connected: false,
     saved: true,
     followedAt: record.followedAt,
+    traceEnabled: record.traceEnabled === true,
+    ...(record.traceEnabled ? { trace: pruneFollowTrace(record.trace ?? []) } : {}),
     returnPromptSeen: record.returnPromptSeen ?? false,
     approvalDenied: record.approvalDenied ?? false,
     ...(record.endReason ? { terminal: record.endReason } : {}),
@@ -457,6 +460,8 @@ const restoreExpiredFollow = (ctx: SharingContext, record: PrivateState['followe
       connected: false,
       saved: true,
       returnPromptSeen: record.returnPromptSeen ?? true,
+      traceEnabled: record.traceEnabled === true,
+      ...(record.traceEnabled ? { trace: pruneFollowTrace(record.trace ?? []) } : {}),
       terminal: 'expired',
       endedAt,
       updatesReceived: 0,
@@ -1679,6 +1684,18 @@ const sweepFollows = (ctx: SharingContext, now: number) => {
   }
 }
 
+const pruneRecordedFollows = (ctx: SharingContext, now: number): boolean => {
+  let changed = false
+  for (const entry of ctx.followed.values()) {
+    if (!entry.traceEnabled || !entry.trace?.length) continue
+    const retained = pruneFollowTrace(entry.trace, now)
+    if (retained.length === entry.trace.length) continue
+    entry.trace = retained
+    changed = true
+  }
+  return changed
+}
+
 const sweepSharingState = (ctx: SharingContext) => {
   const now = Date.now()
   for (const share of ctx.shares.values()) sweepShareSessions(ctx, share, now)
@@ -1689,7 +1706,10 @@ const sweepSharingState = (ctx: SharingContext) => {
     ctx.stopRetryAt = Date.now() + 30_000
     void ctx.retryPendingStopNotices()
   }
-  if (pendingReturnStateChanged) void ctx.persist()
+  const tracePruned = pruneRecordedFollows(ctx, now)
+  if (pendingReturnStateChanged || tracePruned) {
+    void ctx.persist().catch(() => ctx.publish({ message: 'Private history could not be pruned.' }))
+  }
   ctx.publish()
 }
 

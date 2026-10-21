@@ -1,7 +1,7 @@
 <template>
   <div class="sheet-backdrop" @click.self="emit('close')">
     <section
-      v-show="!pendingAdoption"
+      v-show="!pendingAdoption && !traceShareId"
       class="share-sheet peer-list"
       role="dialog"
       aria-modal="true"
@@ -491,6 +491,33 @@
                     follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt)
                   }}</span
                 >
+                <label class="peer-trace-optin">
+                  <input
+                    type="checkbox"
+                    :checked="follow.traceEnabled === true"
+                    :disabled="!follow.saved"
+                    :aria-label="`Record received history for ${follow.displayName || follow.localName}`"
+                    @change="
+                      emit(
+                        'traceEnabled',
+                        follow.shareId,
+                        ($event.target as HTMLInputElement).checked,
+                      )
+                    "
+                  />
+                  Record received history for 24 hours
+                </label>
+                <small v-if="!follow.saved" class="field-help"
+                  >Save this subscription to enable local recording.</small
+                >
+                <button
+                  type="button"
+                  class="peer-text-action"
+                  :aria-label="`View received messages from ${follow.displayName || follow.localName}`"
+                  @click="openTraceDialog(follow.shareId, $event)"
+                >
+                  <ListIcon aria-hidden="true" /> Received messages
+                </button>
                 <p class="field-help">
                   Optional device verification compares the connection with a trusted call or in
                   person.
@@ -621,11 +648,108 @@
         Keep current name
       </button>
     </section>
+    <section
+      v-if="traceShareId && selectedTraceFollow"
+      class="share-sheet peer-trace-dialog"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="`Received messages from ${selectedTraceFollow.displayName || selectedTraceFollow.localName}`"
+      @keydown.esc.stop.prevent="closeTraceDialog"
+    >
+      <header class="sheet-header">
+        <h2>Received messages</h2>
+        <button
+          ref="traceCloseButton"
+          type="button"
+          class="icon-button"
+          aria-label="Close received messages"
+          @click="closeTraceDialog"
+        >
+          <CloseIcon />
+        </button>
+      </header>
+      <p class="field-help">
+        {{ selectedTraceFollow.displayName || selectedTraceFollow.localName }} · Local history,
+        newest messages last. Maximum 288 events over 24 hours.
+      </p>
+      <label class="peer-trace-optin">
+        <input
+          type="checkbox"
+          :checked="selectedTraceFollow.traceEnabled === true"
+          :disabled="!selectedTraceFollow.saved"
+          @change="
+            emit(
+              'traceEnabled',
+              selectedTraceFollow.shareId,
+              ($event.target as HTMLInputElement).checked,
+            )
+          "
+        />
+        Record received messages and locations
+      </label>
+      <p v-if="traceError" class="field-help" role="alert">{{ traceError }}</p>
+      <p v-if="!selectedTraceFollow.saved" class="field-help">
+        Save the subscription first. Temporary previews cannot store history.
+      </p>
+      <p v-else-if="!selectedTraceFollow.traceEnabled" class="field-help">
+        Recording is off. Turn it on to start a private 24-hour trace. Earlier messages cannot be
+        recovered.
+      </p>
+      <p v-else-if="!selectedTraceFollow.trace?.length" class="field-help">
+        No messages received since recording was enabled.
+      </p>
+      <ol v-else class="peer-trace-list" aria-label="Received message history">
+        <li
+          v-for="(event, index) in selectedTraceFollow.trace"
+          :key="`${event.receivedAt}:${index}`"
+        >
+          <div class="peer-trace-list__heading">
+            <strong>{{ event.type === 'location' ? 'Location received' : 'Session closed' }}</strong
+            ><time :datetime="new Date(event.receivedAt).toISOString()">{{
+              new Date(event.receivedAt).toLocaleString()
+            }}</time>
+          </div>
+          <span
+            v-if="
+              index &&
+              event.receivedAt - selectedTraceFollow.trace![index - 1]!.receivedAt > 5 * 60_000
+            "
+            class="field-help"
+            >Gap since previous message:
+            {{
+              Math.round(
+                (event.receivedAt - selectedTraceFollow.trace![index - 1]!.receivedAt) / 60_000,
+              )
+            }}
+            min</span
+          >
+          <span v-if="event.type === 'location'" class="field-help"
+            >Validated update #{{ event.sequence }} · source
+            {{ new Date(event.capturedAt).toLocaleString() }} · {{ event.precision }} · ±{{
+              Math.round(event.accuracyMeters)
+            }}
+            m · {{ event.latitude.toFixed(5) }}, {{ event.longitude.toFixed(5) }}</span
+          >
+          <span v-else class="field-help">Reason: {{ event.reason }}</span>
+        </li>
+      </ol>
+      <div class="peer-trace-dialog__actions">
+        <button
+          type="button"
+          class="peer-text-action"
+          :disabled="!selectedTraceFollow.trace?.length"
+          @click="emit('traceClear', selectedTraceFollow.shareId)"
+        >
+          Clear history
+        </button>
+        <button type="button" class="secondary-action" @click="closeTraceDialog">Close</button>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import {
   LucideMapPin as MapPin,
   LucidePause as PauseIcon,
@@ -639,6 +763,7 @@ import {
   LucideLink2 as Link2,
   LucideSmartphone as Smartphone,
   LucideClock3 as Clock3,
+  LucideList as ListIcon,
   LucideChevronDown as ChevronDown,
 } from '@lucide/vue'
 import type { DeviceComparison } from '../sharing/deviceComparison.ts'
@@ -694,6 +819,7 @@ const props = defineProps<{
   stoppedViewers: readonly StoppedViewerRecord[]
   oldShares: readonly OldPeerRecord[]
   oldFollowing: readonly OldPeerRecord[]
+  traceError?: string
 }>()
 const emit = defineEmits<{
   clearOld: []
@@ -717,10 +843,27 @@ const emit = defineEmits<{
   unfollow: [shareId: string]
   keep: [shareId: string]
   shareBack: [shareId: string]
+  traceEnabled: [shareId: string, enabled: boolean]
+  traceClear: [shareId: string]
   compareDevice: [shareId: string, peerId?: string]
   adoptName: [peerId: string, name: string]
   profile: [peerId: string, associateNames: boolean, sharedName: string | null]
 }>()
+const traceShareId = ref<string>()
+const selectedTraceFollow = computed(() =>
+  props.following.find((entry) => entry.shareId === traceShareId.value),
+)
+const traceCloseButton = ref<HTMLButtonElement>()
+let traceTrigger: HTMLElement | null = null
+const openTraceDialog = (shareId: string, event: MouseEvent): void => {
+  traceTrigger = event.currentTarget as HTMLElement
+  traceShareId.value = shareId
+  void nextTick(() => traceCloseButton.value?.focus())
+}
+const closeTraceDialog = (): void => {
+  traceShareId.value = undefined
+  void nextTick(() => traceTrigger?.focus())
+}
 const filters: readonly { value: PeerFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'sharing', label: 'Sharing' },
@@ -1706,5 +1849,55 @@ const remaining = (timestamp: number): string => {
 
 .peer-link-item__colors button[aria-pressed='true'] {
   border-color: var(--text);
+}
+.peer-trace-optin {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.peer-trace-optin input {
+  accent-color: var(--accent);
+}
+.peer-trace-dialog {
+  max-width: min(34rem, 96vw);
+  max-height: 85vh;
+  overflow: auto;
+}
+.peer-trace-dialog .sheet-header h2 {
+  font-size: 1rem;
+}
+.peer-trace-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 48vh;
+  overflow-y: auto;
+}
+.peer-trace-list li {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.peer-trace-list__heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+.peer-trace-list__heading time {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.peer-trace-dialog__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 </style>

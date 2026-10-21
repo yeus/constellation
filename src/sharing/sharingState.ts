@@ -84,6 +84,8 @@ const createRuntimeFlags = () => {
   const stopRetryAt = 0
   const runtimeClosed = false
   let noticeTimer: number | undefined
+  let traceSaveTimer: number | undefined
+  const lastTraceSavedAt = 0
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
   const visible = true
@@ -103,6 +105,8 @@ const createRuntimeFlags = () => {
     runtimeClosed,
     noticeTimer,
     peer,
+    traceSaveTimer,
+    lastTraceSavedAt,
     handlerNode,
     visible,
     paused,

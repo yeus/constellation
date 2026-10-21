@@ -117,6 +117,13 @@ const createSetVisible =
       for (const share of ctx.shares.values()) {
         if (share.publication === 'foreground') share.latest = undefined
       }
+      if (ctx.traceSaveTimer !== undefined) {
+        window.clearTimeout(ctx.traceSaveTimer)
+        ctx.traceSaveTimer = undefined
+        void ctx
+          .persist()
+          .catch(() => ctx.publish({ message: 'Received history could not be saved.' }))
+      }
       if (![...ctx.shares.values()].some((share) => share.publication === 'background')) {
         ctx.locationSource.stop()
       }
@@ -152,6 +159,11 @@ const createStop =
     }
     window.clearInterval(ctx.heartbeatSweep)
     if (ctx.noticeTimer !== undefined) window.clearTimeout(ctx.noticeTimer)
+    if (ctx.traceSaveTimer !== undefined) {
+      window.clearTimeout(ctx.traceSaveTimer)
+      ctx.traceSaveTimer = undefined
+      await ctx.persist().catch(() => undefined)
+    }
     ctx.unsubscribeLocationState()
     ctx.unsubscribeLocationObservation()
     ctx.locationSource.stop()

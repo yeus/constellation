@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { DeviceComparison, ComparisonBudget } from './deviceComparison.ts'
 import { PeerNamePreference } from './peerNames.ts'
+import { FollowTraceEventSchema, MAX_FOLLOW_TRACE_EVENTS } from './followTrace.ts'
 
 const ShareRecord = z.object({
   url: z.string().url().max(4_096),
@@ -43,6 +44,8 @@ const FollowRecord = z.object({
   returnPromptSeen: z.boolean().optional(),
   approvalDenied: z.boolean().optional(),
   endedAt: z.number().int().positive().optional(),
+  traceEnabled: z.boolean().optional(),
+  trace: z.array(FollowTraceEventSchema).max(MAX_FOLLOW_TRACE_EVENTS).optional(),
   endReason: z.enum(['revoked', 'expired']).optional(),
 })
 
