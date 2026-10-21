@@ -5,7 +5,7 @@ import test from 'node:test'
 test('loads Android compatibility before the bundled MapLibre 6 ESM worker', () => {
   const source = fs.readFileSync('src/map/pmtiles.ts', 'utf8')
   assert.match(source, /maplibre-gl-worker\.mjs\?worker&url/)
-  assert.match(source, /setWorkerUrl\(workerBootstrapUrl\)/)
+  assert.match(source, /setWorkerUrl\(state\.workerBootstrapUrl\)/)
   const compatibilityImport = source.indexOf('import ${JSON.stringify(compatibilityUrl)};')
   const workerImport = source.indexOf('import ${JSON.stringify(compiledWorkerUrl)};')
   assert.ok(

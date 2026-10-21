@@ -56,7 +56,7 @@ assert.ok(
 )
 assert.match(legacyCompat, /Object\.prototype\.hasOwnProperty\.call/)
 assert.match(pmtilesRuntime, /maplibre-gl-worker\.mjs\?worker&url/)
-assert.match(pmtilesRuntime, /setWorkerUrl\(workerBootstrapUrl\)/)
+assert.match(pmtilesRuntime, /setWorkerUrl\(state\.workerBootstrapUrl\)/)
 assert.match(pmtilesRuntime, /JSON\.stringify\(compatibilityUrl\)/)
 assert.match(pmtilesRuntime, /JSON\.stringify\(compiledWorkerUrl\)/)
 assert.doesNotMatch(pmtilesRuntime, /maplibre-gl-csp-worker|importScripts/)
@@ -172,8 +172,8 @@ assert.match(androidPlugin, /fun dismissBackgroundReturnOffer\(invoke: Invoke\)/
 assert.match(locationService, /"approve-return-link"/)
 assert.match(locationService, /"approve-viewer"/)
 assert.match(locationService, /"dismiss-return-offer"/)
-assert.match(backgroundEntry, /await executeBackgroundReturnCommand\(runtime, command, post\)/)
-assert.match(backgroundEntry, /await runtime\.approveViewer\(command\.shareId, command\.peerId\)/)
+assert.match(backgroundEntry, /await executeBackgroundReturnCommand\(state\.runtime, command, post\)/)
+assert.match(backgroundEntry, /state\.runtime\.approveViewer\(command\.shareId, command\.peerId\)/)
 assert.match(returnCommand, /await runtime\.approveReturnLink\(command\.shareId\)/)
 assert.match(
   returnCommand,
@@ -190,7 +190,7 @@ assert.match(
 assert.match(androidPlugin, /postDelayed\(timeout, 30_000L\)/)
 assert.match(locationService, /"command-complete"/)
 assert.match(locationService, /sendBroadcast\(result\)/)
-assert.match(backgroundEntry, /shareCount \+ state.endNotifications.length/)
+assert.match(backgroundEntry, /shareCount \+ next.endNotifications.length/)
 assert.match(locationService, /status.optInt\("endNotificationCount", 0\) > 0/)
 assert.match(mobileBridge, /"approveBackgroundReturnLink"/)
 assert.match(mobileBridge, /"approveBackgroundViewer"/)
@@ -229,12 +229,12 @@ assert.match(androidPlugin, /fun adoptBackgroundPeerName\(invoke: Invoke\)/)
 assert.match(androidPlugin, /ACTION_ADOPT_PEER_NAME/)
 assert.match(shareNotification, /ACTION_ADOPT_PEER_NAME/)
 assert.match(locationService, /ACTION_ADOPT_PEER_NAME -> "adopt-peer-name"/)
-assert.match(backgroundEntry, /await runtime\.adoptPeerName\(command\.peerId, command\.name\)/)
+assert.match(backgroundEntry, /state\.runtime\.adoptPeerName\(command\.peerId, command\.name\)/)
 
 assert.match(tauriCommands, /android_clear_old_peers/)
 assert.match(mobileBridge, /run_mobile_plugin_async\(\s*"clearOldPeers"/)
 assert.match(androidPlugin, /fun clearOldPeers\(invoke: Invoke\)/)
-assert.match(backgroundEntry, /await runtime\.clearOldPeers\(command\.protection\)/)
+assert.match(backgroundEntry, /state\.runtime\.clearOldPeers\(command\.protection\)/)
 assert.match(locationService, /pendingCommandIds\.isNotEmpty\(\)/)
 assert.match(locationService, /"idle", "stopped" -> stopWhenIdle\(\)/)
 
@@ -252,10 +252,10 @@ assert.match(androidPlugin, /requestPermissionForAlias\("notifications"/)
 assert.match(androidPlugin, /ACTION_SET_SHARING_BEHAVIOR && locationGrant\(activity\) == "none"/)
 assert.match(androidPlugin, /activity\.startService\(intent\)/)
 assert.match(locationService, /if \(locationGrant\(this\) != "none"\)/)
-assert.match(backgroundEntry, /await runtime\.setSharingBehavior\(command\.behavior\)/)
+assert.match(backgroundEntry, /state\.runtime\.setSharingBehavior\(command\.behavior\)/)
 assert.match(
   backgroundEntry,
-  /await runtime\.importSourceShares\(parsePrivateStateJson\(command\.state\)\)/,
+  /await state\.runtime\.importSourceShares\(parsePrivateStateJson\(command\.state\)\)/,
 )
 assert.match(mobileBridge, /"sharingSetup"/)
 assert.match(mobileBridge, /"enableSharingPermissions"/)
