@@ -1981,9 +1981,8 @@ test('pausing sharing preserves the link and survives reload until resumed', asy
 test('revoke all requires confirmation and ends every active link', async ({
   browser,
   baseURL,
-}, testInfo) => {
+}) => {
   test.setTimeout(120_000)
-  test.skip(testInfo.project.name !== 'desktop')
   if (!baseURL) throw new Error('A base URL is required.')
   const sourceContext = await browser.newContext({
     baseURL,

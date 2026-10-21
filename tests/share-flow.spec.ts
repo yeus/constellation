@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { createShareInvitation } from '../src/sharing/shareLink.ts'
-import { openPeerList, openShareCreator } from './fixtures/peer-navigation.ts'
+import { expandPeerDetails, openPeerList, openShareCreator } from './fixtures/peer-navigation.ts'
 
 test('rejects an expired pasted link before opening a viewer session', async ({ page }) => {
   const expired = await createShareInvitation({
@@ -469,6 +469,123 @@ test('nests pending share-back under its peer and offers explicit name adoption'
     .filter({ has: page.locator('.peer-list__summary-name', { hasText: 'Forest' }) })
   await expect(renamed.locator('.peer-list__summary-name')).toHaveText('Forest')
   await expect(renamed.locator('.peer-avatar')).toContainText('F')
+})
+
+test('hides Share back for authenticated outgoing grants and keeps it for viewing-only peers', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const vueModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+    if (!vueModuleUrl) throw new Error('Vue module was not loaded.')
+    const { createApp, h } = await import(/* @vite-ignore */ vueModuleUrl)
+    const { default: PeerListSheet } = await import('../src/components/PeerListSheet.vue')
+    const container = document.createElement('div')
+    document.body.append(container)
+    const following = [
+      {
+        shareId: 'incoming-a',
+        peerId: 'peer-a',
+        localName: 'Alice',
+        displayName: 'Alice',
+        color: '#438ec9',
+        connected: true,
+        status: 'live',
+        saved: true,
+        expiresAt: null,
+        updatesReceived: 1,
+        returnPromptSeen: true,
+      },
+      {
+        shareId: 'incoming-b',
+        peerId: 'peer-b',
+        localName: 'Bob',
+        displayName: 'Bob',
+        color: '#438ec9',
+        connected: false,
+        status: 'delayed',
+        saved: true,
+        expiresAt: null,
+        updatesReceived: 1,
+        returnPromptSeen: true,
+      },
+      {
+        shareId: 'incoming-c',
+        peerId: 'peer-c',
+        localName: 'Cara',
+        displayName: 'Cara',
+        color: '#438ec9',
+        connected: true,
+        status: 'live',
+        saved: true,
+        expiresAt: null,
+        updatesReceived: 1,
+        returnPromptSeen: true,
+      },
+    ]
+    createApp({
+      setup: () => () =>
+        h(PeerListSheet, {
+          filter: 'all',
+          paused: false,
+          viewableIds: following.map(({ shareId }) => shareId),
+          shareBackBusy: false,
+          stoppedViewers: [],
+          oldShares: [],
+          oldFollowing: [],
+          shares: [
+            {
+              shareId: 'outgoing-a',
+              recipientPeerId: 'peer-a',
+              viewerCount: 0,
+              precision: 'approximate',
+              expiresAt: null,
+            },
+            {
+              shareId: 'outgoing-b',
+              recipientPeerId: 'peer-b',
+              viewerCount: 1,
+              precision: 'approximate',
+              expiresAt: null,
+              viewers: [
+                {
+                  peerId: 'peer-b',
+                  fingerprint: 'synthetic-viewer-b',
+                  lastSeenAt: 1,
+                },
+              ],
+            },
+          ],
+          following,
+        }),
+    }).mount(container)
+  })
+  const peer = (name: string) => page.locator('.peer-list__item').filter({ hasText: name }).first()
+  const openDetails = async (name: string) => {
+    const item = peer(name)
+    await expandPeerDetails(item)
+    return item
+  }
+  await expect(
+    (await openDetails('Alice')).getByRole('button', {
+      name: 'Share back to Alice',
+      exact: true,
+    }),
+  ).toHaveCount(0)
+  await expect(
+    (await openDetails('Bob')).getByRole('button', {
+      name: 'Share back to Bob',
+      exact: true,
+    }),
+  ).toHaveCount(0)
+  await expect(
+    (await openDetails('Cara')).getByRole('button', {
+      name: 'Share back to Cara',
+      exact: true,
+    }),
+  ).toBeVisible()
 })
 
 test('peer list uses distinct main actions, one filter menu, and compact details with header map access', async ({
