@@ -139,10 +139,7 @@ const nextPairing = async (state: SharingDiagnosticState, signal: AbortSignal) =
   return next
 }
 
-const trackActiveCase = <T extends Promise<unknown>>(
-  state: SharingDiagnosticState,
-  task: T,
-): T => {
+const trackActiveCase = <T extends Promise<unknown>>(state: SharingDiagnosticState, task: T): T => {
   state.activeCases.add(task)
   void task.finally(() => state.activeCases.delete(task)).catch(() => undefined)
   return task
@@ -175,7 +172,12 @@ const createPairedTest = (
     const signal = context!.abortSignal!
     const pairing = await nextPairing(state, signal)
     return inDiagnosticSession(state, (session) =>
-      runPairedDiagnostic(kind, session, { ...state.caseDependencies, pairing: () => pairing }, signal),
+      runPairedDiagnostic(
+        kind,
+        session,
+        { ...state.caseDependencies, pairing: () => pairing },
+        signal,
+      ),
     )
   }
 }
@@ -295,10 +297,7 @@ const runAndroidDiagnostic = async (
   }
   const reason = androidSkipReason(state.dependencies)
   if (reason) return { skipped: true, reason }
-  return trackActiveCase(
-    state,
-    runNativeDiagnostic(state.caseDependencies, context!.abortSignal!),
-  )
+  return trackActiveCase(state, runNativeDiagnostic(state.caseDependencies, context!.abortSignal!))
 }
 
 const androidEntry = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry => ({
@@ -365,19 +364,14 @@ const createRunOptions = (
   onResult: (result: SharingDiagnosticResult) => void,
 ) => ({
   details: true,
-  contextForTest: async (
-    _name: string,
-    _test: TaskyonTestFn,
-    context: DiagnosticsTestContext,
-  ) => {
+  contextForTest: async (_name: string, _test: TaskyonTestFn, context: DiagnosticsTestContext) => {
     await Promise.allSettled([...state.activeCases])
     return context
   },
   context: {
     abortSignal: signal,
     allowLongRun:
-      state.dependencies.includeGuided?.() ||
-      catalog.some((entry) => entry.id === selection),
+      state.dependencies.includeGuided?.() || catalog.some((entry) => entry.id === selection),
   },
   onProgress: (progress: { phase: string; test: string }) => {
     if (progress.phase !== 'start') return
@@ -429,7 +423,10 @@ export const createSharingDiagnostics = (
       description,
       guided: Boolean(guided),
     })),
-    run: (selection: string, signal: AbortSignal, onResult: (result: SharingDiagnosticResult) => void) =>
-      runCatalogSelection(state, catalog, selection, signal, onResult),
+    run: (
+      selection: string,
+      signal: AbortSignal,
+      onResult: (result: SharingDiagnosticResult) => void,
+    ) => runCatalogSelection(state, catalog, selection, signal, onResult),
   }
 }

@@ -284,9 +284,7 @@ const snapshotShare = (
   pendingSharingBehavior: SharingBehavior | undefined,
 ): PrivateState['shares'][number] => ({
   url: share.url,
-  ...(share.sourcePrivateKey
-    ? { sourcePrivateKey: privateKeyString(share.sourcePrivateKey) }
-    : {}),
+  ...(share.sourcePrivateKey ? { sourcePrivateKey: privateKeyString(share.sourcePrivateKey) } : {}),
   precision: share.precision,
   capacity: share.capacity,
   ...(share.requireViewerApproval === false ? { requireViewerApproval: false } : {}),
@@ -299,9 +297,7 @@ const snapshotShare = (
 })
 
 const snapshotShares = (input: SnapshotProjectionInput): PrivateState['shares'] =>
-  [...input.shares.values()].map((share) =>
-    snapshotShare(share, input.pendingSharingBehavior),
-  )
+  [...input.shares.values()].map((share) => snapshotShare(share, input.pendingSharingBehavior))
 
 const snapshotEndedShares = (
   input: SnapshotProjectionInput,

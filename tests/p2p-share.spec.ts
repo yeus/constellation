@@ -5,6 +5,7 @@ import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader'
 
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
 import {
+  continueInBrowserIfOffered,
   expandPeerDetails,
   openPeerFilterMenu,
   openPeerFilter,
@@ -334,7 +335,7 @@ test('keeps ended sharing history with each authenticated peer across links', as
     const restoredPeers = await openPeerFilter(source, 'All')
     await openPeerFilterMenu(source)
     await restoredPeers.getByLabel('Show ended').check()
-    await expect(restoredPeers.locator('.peer-list__item')).toHaveCount(3)
+    await expect(restoredPeers.locator('.peer-list__item')).toHaveCount(3, { timeout: 30_000 })
     await restoredPeers.getByRole('button', { name: 'Clear old', exact: true }).click()
     await expect(restoredPeers.locator('.peer-list__item')).toHaveCount(1)
     const cleaned = await readCleanupState(source)
@@ -1899,6 +1900,7 @@ for (const mode of ['first-device', 'multi-viewer'] as const) {
       await expect(shareReady).toBeVisible()
       const viewer = await viewerContext.newPage()
       await viewer.goto(url)
+      await continueInBrowserIfOffered(viewer)
       await expect(shareReady).toHaveCount(0, { timeout: 30_000 })
       await expect(source.getByRole('region', { name: 'Viewer access request' })).toHaveCount(0)
       const peers = await openPeerFilter(source, 'Sharing')

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { openShareCreator } from './fixtures/peer-navigation.ts'
+import { continueInBrowserIfOffered, openShareCreator } from './fixtures/peer-navigation.ts'
 for (const requireApproval of [true, false]) {
   test(`device comparison over authenticated peers: ${requireApproval ? 'manual approval' : 'first-device claim'}`, async ({
     page,
@@ -45,6 +45,7 @@ test('viewer and sender compare and independently confirm device letters through
     const url = await outgoing.getByLabel('Share link').inputValue({ timeout: 30_000 })
     const viewer = await viewerContext.newPage()
     await viewer.goto(url)
+    await continueInBrowserIfOffered(viewer)
     await expect(outgoing).toHaveCount(0, { timeout: 30_000 })
     const preview = viewer.getByRole('region', { name: 'Location preview' })
     await preview.getByRole('button', { name: 'Compare device letters' }).click()

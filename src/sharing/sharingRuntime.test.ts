@@ -75,7 +75,13 @@ const createMutableTestRuntime = (
       Object.assign(saved, value)
     },
   })
-  return { runtime, saved, setFail: (next: boolean) => { fail = next } }
+  return {
+    runtime,
+    saved,
+    setFail: (next: boolean) => {
+      fail = next
+    },
+  }
 }
 
 test('a concurrent first-device claim grants nothing before durable persistence', async () => {
@@ -303,9 +309,7 @@ const createApprovalRetryFixture = async () => {
     ],
     followed: [],
     returnOffers: [offer],
-    oldSeeing: [
-      { shareId: returned.capability.shareId, reason: 'revoked', endedAt: Date.now() },
-    ],
+    oldSeeing: [{ shareId: returned.capability.shareId, reason: 'revoked', endedAt: Date.now() }],
   }
   const { runtime, saved, setFail } = createMutableTestRuntime(initial)
   let state!: SharingRuntimeState
@@ -567,9 +571,7 @@ const createOwnerHandoffFixture = async (capacity: 1 | 10) => {
   }
 }
 
-const signOwnerHandoff = async (
-  f: Awaited<ReturnType<typeof createOwnerHandoffFixture>>,
-) => {
+const signOwnerHandoff = async (f: Awaited<ReturnType<typeof createOwnerHandoffFixture>>) => {
   const signed = await f.foreground.signReturnOwnership(
     f.invitation.capability.shareId,
     f.invitation.capability.sourcePeerId,
@@ -582,9 +584,7 @@ const signOwnerHandoff = async (
 const assertOwnerProofRejected = async (
   f: Awaited<ReturnType<typeof createOwnerHandoffFixture>>,
   signed: { ownerPeerId: string; ownerProof: string },
-  binding:
-    | { mode: 'source' }
-    | { mode: 'recipient'; recipientPeerId: string },
+  binding: { mode: 'source' } | { mode: 'recipient'; recipientPeerId: string },
 ) =>
   assert.rejects(
     f.background.replaceBackgroundShareOwner(
@@ -616,9 +616,7 @@ const assertOwnerHandoffStored = (
 const assertOwnerHandoffIdempotent = async (
   f: Awaited<ReturnType<typeof createOwnerHandoffFixture>>,
   signed: { ownerPeerId: string; ownerProof: string },
-  binding:
-    | { mode: 'source' }
-    | { mode: 'recipient'; recipientPeerId: string },
+  binding: { mode: 'source' } | { mode: 'recipient'; recipientPeerId: string },
   updated: { url: string },
 ) => {
   const saves = f.saves()

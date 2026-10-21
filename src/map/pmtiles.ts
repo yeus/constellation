@@ -152,10 +152,7 @@ const createArchiveCache = (
   })
 }
 
-const tileJsonResponse = async (
-  entry: PmtilesArchiveEntry,
-  archiveUrl: string,
-) => {
+const tileJsonResponse = async (entry: PmtilesArchiveEntry, archiveUrl: string) => {
   const header = await entry.reader.getHeader()
   const metadata = metadataRecord(await entry.reader.getMetadata())
   return {
@@ -201,9 +198,7 @@ const readTile = async (
   return data ? new Uint8Array(data) : new Uint8Array(0)
 }
 
-const createProtocolHandler = (
-  state: PmtilesRuntimeState,
-): Parameters<typeof addProtocol>[1] => {
+const createProtocolHandler = (state: PmtilesRuntimeState): Parameters<typeof addProtocol>[1] => {
   return async (params, abortController) => {
     if (params.type === 'json') return handleJsonRequest(state, params.url)
     return { data: await readTile(state, params.url, abortController.signal) }
@@ -218,10 +213,7 @@ const setupRuntime = (state: PmtilesRuntimeState): void => {
   state.installed = true
 }
 
-const verifyRuntimeArchive = async (
-  state: PmtilesRuntimeState,
-  url: string,
-): Promise<void> => {
+const verifyRuntimeArchive = async (state: PmtilesRuntimeState, url: string): Promise<void> => {
   const reader = new PMTiles(url)
   const entry: PmtilesArchiveEntry = { reader, ready: Promise.resolve() }
   entry.ready = (async () => {
@@ -251,9 +243,7 @@ const cacheStatsFor = async (state: PmtilesRuntimeState): Promise<PmtilesCacheSt
 }
 
 const clearRuntimeCache = async (state: PmtilesRuntimeState): Promise<void> => {
-  await Promise.all(
-    [...state.archives.values()].map(async (entry) => await entry.cache?.clear()),
-  )
+  await Promise.all([...state.archives.values()].map(async (entry) => await entry.cache?.clear()))
 }
 
 const setRuntimeCacheMaxBytes = (state: PmtilesRuntimeState, next: number): void => {

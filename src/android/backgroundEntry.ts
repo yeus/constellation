@@ -162,11 +162,7 @@ const createStoreState = (): StoreState => ({
   requestCounter: 0,
 })
 
-const storeRequest = (
-  state: StoreState,
-  action: 'load' | 'save',
-  privateState?: PrivateState,
-) =>
+const storeRequest = (state: StoreState, action: 'load' | 'save', privateState?: PrivateState) =>
   new Promise<string | null | undefined>((resolve, reject) => {
     const requestId = `${Date.now()}-${++state.requestCounter}`
     state.pendingStoreRequests.set(requestId, { resolve, reject })
@@ -228,20 +224,12 @@ const report = (state: BackgroundEntryState, next: SharingRuntimeState): void =>
   state.latestState = next
   post({
     type: 'status',
-    status: backgroundRuntimeStatus(
-      next,
-      state.runtime.networkDiagnostics(),
-      next.location,
-    ),
+    status: backgroundRuntimeStatus(next, state.runtime.networkDiagnostics(), next.location),
   })
   if (becameIdle) post({ type: 'idle' })
 }
 
-const sendError = (
-  state: BackgroundEntryState,
-  error: unknown,
-  fallback: string,
-): void => {
+const sendError = (state: BackgroundEntryState, error: unknown, fallback: string): void => {
   post({
     type: 'status',
     status: backgroundRuntimeStatus(
@@ -308,9 +296,7 @@ const isViewerCommandType = (type: BackgroundCommand['type']): boolean =>
   type === 'approve-viewer' ||
   type === 'set-viewer-name'
 
-const isReturnCommandType = (
-  command: BackgroundCommand,
-): command is BackgroundReturnCommand =>
+const isReturnCommandType = (command: BackgroundCommand): command is BackgroundReturnCommand =>
   command.type === 'approve-return-link' ||
   command.type === 'dismiss-return-offer' ||
   command.type === 'dismiss-stopped-viewer'
@@ -400,10 +386,8 @@ const runShareCommand = async (
       if (!command.visible) await pauseForegroundOnly(state)
       return
     case 'set-paused':
-      return runCompletion(
-        command.requestId,
-        'Could not save the sharing pause. Try again.',
-        () => state.runtime.setPaused(command.paused),
+      return runCompletion(command.requestId, 'Could not save the sharing pause. Try again.', () =>
+        state.runtime.setPaused(command.paused),
       )
     case 'network-state':
       state.runtime.setNetworkState(command.state === 'unmetered' ? undefined : command.state)
@@ -496,14 +480,10 @@ const importSourceStateCommand = async (
   state: BackgroundEntryState,
   command: Extract<BackgroundCommand, { type: 'import-source-state' }>,
 ): Promise<void> => {
-  await runCompletion(
-    command.requestId,
-    'Could not import protected source links.',
-    async () => {
-      await state.runtime.importSourceShares(parsePrivateStateJson(command.state))
-      await state.runtime.initialize()
-    },
-  )
+  await runCompletion(command.requestId, 'Could not import protected source links.', async () => {
+    await state.runtime.importSourceShares(parsePrivateStateJson(command.state))
+    await state.runtime.initialize()
+  })
 }
 
 const sharingBehaviorCommand = async (

@@ -86,8 +86,16 @@ const observationNumbers = (raw: Record<string, unknown>) => ({
 })
 
 const assertObservationRanges = (values: ReturnType<typeof observationNumbers>) => {
-  const { sequence, capturedAt, expiresAt, latitude, longitude, accuracyMeters, headingDegrees, speedMps } =
-    values
+  const {
+    sequence,
+    capturedAt,
+    expiresAt,
+    latitude,
+    longitude,
+    accuracyMeters,
+    headingDegrees,
+    speedMps,
+  } = values
   if (!Number.isSafeInteger(sequence) || sequence < 0) {
     throw new RangeError('sequence must be a non-negative safe integer.')
   }

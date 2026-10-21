@@ -120,9 +120,7 @@ const runExpiryHost = async (
 ): Promise<void> => {
   await session.wait(
     (state) =>
-      state.oldSharing.some(
-        (entry) => entry.shareId === shareId && entry.reason === 'expired',
-      ),
+      state.oldSharing.some((entry) => entry.shareId === shareId && entry.reason === 'expired'),
     signal,
   )
 }
@@ -284,10 +282,7 @@ const prepareNativeDiagnostic = async (
   return state
 }
 
-const rememberOwnedShares = (
-  state: NativeDiagnosticState,
-  status: AndroidBackgroundStatus,
-) => {
+const rememberOwnedShares = (state: NativeDiagnosticState, status: AndroidBackgroundStatus) => {
   const owned = status.shares.filter(
     (entry) => !state.existingIds.has(entry.shareId) && entry.name === state.diagnosticName,
   )
@@ -365,9 +360,7 @@ const cleanupNativeShares = async (
   const reconciled = await Promise.allSettled([
     state.native.status().then((status) => rememberOwnedShares(state, status)),
   ])
-  const stopped = await Promise.allSettled(
-    [...state.ownedIds].map((id) => state.native.stop(id)),
-  )
+  const stopped = await Promise.allSettled([...state.ownedIds].map((id) => state.native.stop(id)))
   return [...reconciled, ...stopped].find((entry) => entry.status === 'rejected')
 }
 
@@ -376,14 +369,19 @@ export const runNativeDiagnostic = async (
   signal: AbortSignal,
 ) => {
   const state = await prepareNativeDiagnostic(dependencies)
-  let cleanupFailure: PromiseRejectedResult | undefined
+  let outcome:
+    | { result: Awaited<ReturnType<typeof runNativeDiagnosticSession>> }
+    | { error: unknown }
   try {
-    return await runNativeDiagnosticSession(state, dependencies, signal)
-  } finally {
-    state.unsubscribeVisibility()
-    cleanupFailure = await cleanupNativeShares(state)
-    if (cleanupFailure) throw cleanupFailure.reason
+    outcome = { result: await runNativeDiagnosticSession(state, dependencies, signal) }
+  } catch (error) {
+    outcome = { error }
   }
+  state.unsubscribeVisibility()
+  const cleanupFailure = await cleanupNativeShares(state)
+  if (cleanupFailure) throw cleanupFailure.reason
+  if ('error' in outcome) throw outcome.error
+  return outcome.result
 }
 
 export const joinNativeDiagnostic = async (

@@ -1,16 +1,7 @@
-import { SharingBehavior } from './sharingBehavior.ts'
 import type {
-  EndedSourceShare,
   FollowEntry,
-  FollowStatus,
-  FollowSummary,
-  NetworkDiagnostics,
   OldShareSummary,
-  PeerStatus,
-  PendingViewerApproval,
-  ReturnOffer,
   SessionEvent,
-  ShareSummary,
   SharingRuntime,
   SharingRuntimeState,
   SourceSession,
@@ -21,96 +12,45 @@ import { restoredEndedSourceShare, restoredSourceShare } from './sharingRestore.
 import { acceptReturnShare } from './sharingReturn.ts'
 import { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
 
-
-import {
-  clearPeerHistory,
-  hasEndedPeerShare,
-  protectActivePeerHistory,
-  restoreFailedPeerHistoryClear,
-  type PeerHistoryProtection,
-} from './peerHistory.ts'
+import { hasEndedPeerShare } from './peerHistory.ts'
 import {
   DEVICE_COMPARISON_PROTOCOL,
   COMPARISON_TTL_MS,
   deviceComparisonProtocol,
   createComparisonResponder,
-  createComparisonCommit,
-  finishComparison,
   reserveComparisonAttempt,
-  requireComparisonStreamPeer,
   type DeviceComparison,
-  type ComparisonBudget,
 } from './deviceComparison.ts'
 import { createPortClient, createPortServer } from '@taskyon/protocol'
 import type { BrowserLibp2pNode } from '@taskyon/p2p-core/browser'
-import type { PrivateKey } from '@libp2p/interface'
-import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys'
-import { peerIdFromPrivateKey } from '@libp2p/peer-id'
+import { generateKeyPair, privateKeyFromProtobuf } from '@libp2p/crypto/keys'
 
 import { projectApproximateLocation, type ApproximationState } from '../location/approximation.ts'
-import type { BrowserLocationSource, BrowserLocationState } from '../location/browser.ts'
-import {
-  acceptNewerLocationObservation,
-  type LocationObservationV1,
-} from '../location/locationObservation.ts'
-import {
-  disclosedPrecisionFor,
-  shareExpiryFor,
-  VERY_COARSE_RADIUS_METERS,
-  type ShareBatteryPolicy,
-  type ShareDraft,
-  type ShareNetworkPolicy,
-} from '../shareDraft.ts'
+import type { BrowserLocationSource } from '../location/browser.ts'
+import { type LocationObservationV1 } from '../location/locationObservation.ts'
+import { disclosedPrecisionFor, VERY_COARSE_RADIUS_METERS } from '../shareDraft.ts'
 import {
   createProtocolMessagePort,
   dialShareStream,
   startPrivateBrowserPeer,
 } from './browserPeer.ts'
-import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
-import {
-  PeerNamePreference,
-  displayedPeerName,
-  advertisedPeerName,
-  receiveAdvertisedName,
-  nameAfterContact,
-  peerNamesProtocol,
-  PEER_NAMES_PROTOCOL,
-} from './peerNames.ts'
-import { createRedemptionProof, verifyRedemptionProof, verifyStopNoticeProof } from './shareAuth.ts'
-import {
-  createShareInvitation,
-  parseShareInvitation,
-  shareInvitationUrl,
-  returnOwnerMessage,
-  verifyReturnOwner,
-  type ShareCapability,
-} from './shareLink.ts'
-import {
-  backgroundSharePolicy,
-  sharePauseReason,
-  sharePauseState,
-  type NetworkRestriction,
-  type SharePauseState,
-} from './sharePolicy.ts'
-import { decryptLocationPayload, encryptLocationPayload } from './sharePayloadCrypto.ts'
-import {
-  rotatePendingNotice,
-  shouldQueueStopNotice,
-  dispatchStopDelivery,
-  preparePendingStopNotice,
-} from './stopNotice.ts'
+import { base64UrlToBytes } from './encoding.ts'
+import type { PeerNamePreference } from './peerNames.ts'
+import { receiveAdvertisedName, peerNamesProtocol, PEER_NAMES_PROTOCOL } from './peerNames.ts'
+import { verifyRedemptionProof, verifyStopNoticeProof } from './shareAuth.ts'
+import { parseShareInvitation, verifyReturnOwner } from './shareLink.ts'
+import { sharePauseReason } from './sharePolicy.ts'
+import { encryptLocationPayload } from './sharePayloadCrypto.ts'
+import { rotatePendingNotice } from './stopNotice.ts'
 import {
   constellationProtocolV2,
   SHARE_STREAM_PROTOCOL,
   parseConstellationMessage,
   type ConstellationMessage,
 } from './shareProtocol.ts'
-import { classifyTransport, type TransportKind } from './transport.ts'
 import {
-  parsePrivateState,
   type PrivateState,
   type PrivateStateStore,
-  type StoppedViewerRecord,
   type PendingStopNotice,
 } from './privateStore.ts'
 import { END_NOTICE_RETENTION_MS, retainedEndNotifications } from './shareLifecycle.ts'
@@ -118,16 +58,12 @@ import { recordStoppedViewer, STOP_NOTICE_RETENTION_MS } from './stopNotice.ts'
 
 import type { SharingState } from './sharingState.ts'
 import {
-  FOLLOW_COLORS,
   HEARTBEAT_INTERVAL_MS,
-  MAX_ACTIVE_SESSIONS,
   MAX_PENDING_VIEWER_APPROVALS_PER_SHARE,
-  MAX_REDEEMED_NONCES_PER_SHARE,
   MAX_REMEMBERED_VIEWER_PEERS,
   LOCATION_SENSOR_ID,
   DESCRIPTOR_REVISION,
   appendSessionEvent,
-  capacityFor,
   claimSingleRecipient,
   randomToken,
   rememberRedeemedNonce,
@@ -147,13 +83,13 @@ export interface SharingContext extends SharingState {
   unsubscribeLocationObservation: () => void
   namePreference: ReturnType<typeof namePreference>
   receivePeerName: ReturnType<typeof receivePeerName>
-  viewerApprovalKey: ReturnType<typeof viewerApprovalKey>
-  insertImportedEntries: ReturnType<typeof insertImportedEntries>
-  applyHistoryRecords: ReturnType<typeof applyHistoryRecords>
-  stoppedViewerKey: ReturnType<typeof stoppedViewerKey>
-  rememberLifecycleRecord: ReturnType<typeof rememberLifecycleRecord>
+  viewerApprovalKey: typeof viewerApprovalKey
+  insertImportedEntries: typeof insertImportedEntries
+  applyHistoryRecords: typeof applyHistoryRecords
+  stoppedViewerKey: typeof stoppedViewerKey
+  rememberLifecycleRecord: typeof rememberLifecycleRecord
   rememberEndedShareHistory: ReturnType<typeof rememberEndedShareHistory>
-  rememberViewerPeer: ReturnType<typeof rememberViewerPeer>
+  rememberViewerPeer: typeof rememberViewerPeer
   publish: ReturnType<typeof publish>
   snapshot: ReturnType<typeof snapshot>
   persist: ReturnType<typeof persist>
@@ -180,7 +116,8 @@ export interface SharingContext extends SharingState {
   retryPendingStopNotices: ReturnType<typeof retryPendingStopNotices>
 }
 
-export const namePreference = (ctx: SharingContext) =>
+export const namePreference =
+  (ctx: SharingContext) =>
   (peerId: string): PeerNamePreference =>
     ctx.peerNamePreferences.get(peerId) ?? {
       peerId,
@@ -189,7 +126,8 @@ export const namePreference = (ctx: SharingContext) =>
       receivedName: null,
     }
 
-export const receivePeerName = (ctx: SharingContext) =>
+export const receivePeerName =
+  (ctx: SharingContext) =>
   async (peerId: string, receivedName: string | null): Promise<void> => {
     if (ctx.peerNamePreferences.size >= 1_024 && !ctx.peerNamePreferences.has(peerId)) return
     const previous = ctx.namePreference(peerId)
@@ -221,55 +159,51 @@ export const receivePeerName = (ctx: SharingContext) =>
     ctx.publish()
   }
 
-export const viewerApprovalKey = (ctx: SharingContext) =>
-  (shareId: string, peerId: string): string =>
-    JSON.stringify([shareId, peerId])
+export const viewerApprovalKey = (shareId: string, peerId: string): string =>
+  JSON.stringify([shareId, peerId])
 
-export const insertImportedEntries = (ctx: SharingContext) =>
-  <T>(
-    target: Map<string, T>,
-    entries: Iterable<readonly [string, T]>,
-  ): (() => void) => {
-    const added: [string, T][] = []
-    for (const [key, value] of entries) {
-      if (target.has(key)) continue
-      target.set(key, value)
-      added.push([key, value])
-    }
-    return () => {
-      for (const [key, value] of added) if (target.get(key) === value) target.delete(key)
-    }
+export const insertImportedEntries = <T>(
+  target: Map<string, T>,
+  entries: Iterable<readonly [string, T]>,
+): (() => void) => {
+  const added: [string, T][] = []
+  for (const [key, value] of entries) {
+    if (target.has(key)) continue
+    target.set(key, value)
+    added.push([key, value])
   }
-
-export const applyHistoryRecords = (ctx: SharingContext) =>
-  <T>(
-    target: Map<string, T>,
-    records: ReadonlyMap<string, T>,
-  ): void => {
-    target.clear()
-    for (const [key, record] of records) target.set(key, record)
+  return () => {
+    for (const [key, value] of added) if (target.get(key) === value) target.delete(key)
   }
+}
 
-export const stoppedViewerKey = (ctx: SharingContext) =>
-  (shareId: string, peerId: string): string =>
-    JSON.stringify([shareId, peerId])
+export const applyHistoryRecords = <T>(
+  target: Map<string, T>,
+  records: ReadonlyMap<string, T>,
+): void => {
+  target.clear()
+  for (const [key, record] of records) target.set(key, record)
+}
 
-export const rememberLifecycleRecord = (ctx: SharingContext) =>
-  (
-    history: Map<string, OldShareSummary>,
-    record: OldShareSummary,
-  ): void => {
-    const key = JSON.stringify([record.shareId, record.peerId ?? null])
-    history.set(key, record)
-    while (history.size > 128) {
-      const oldest = [...history.entries()].reduce((left, right) =>
-        left[1].endedAt <= right[1].endedAt ? left : right,
-      )
-      history.delete(oldest[0])
-    }
+export const stoppedViewerKey = (shareId: string, peerId: string): string =>
+  JSON.stringify([shareId, peerId])
+
+export const rememberLifecycleRecord = (
+  history: Map<string, OldShareSummary>,
+  record: OldShareSummary,
+): void => {
+  const key = JSON.stringify([record.shareId, record.peerId ?? null])
+  history.set(key, record)
+  while (history.size > 128) {
+    const oldest = [...history.entries()].reduce((left, right) =>
+      left[1].endedAt <= right[1].endedAt ? left : right,
+    )
+    history.delete(oldest[0])
   }
+}
 
-export const rememberEndedShareHistory = (ctx: SharingContext) =>
+export const rememberEndedShareHistory =
+  (ctx: SharingContext) =>
   (
     share: { shareId: string; name?: string; viewerPeerIds: Iterable<string> },
     reason: OldShareSummary['reason'],
@@ -287,21 +221,21 @@ export const rememberEndedShareHistory = (ctx: SharingContext) =>
     }
   }
 
-export const rememberViewerPeer = (ctx: SharingContext) =>
-  (share: SourceShare, peerId: string): boolean => {
-    if (share.viewerPeerIds.has(peerId)) return false
-    share.viewerPeerIds.add(peerId)
-    if (share.viewerPeerIds.size > MAX_REMEMBERED_VIEWER_PEERS) {
-      const inactivePeer = [...share.viewerPeerIds].find(
-        (rememberedPeerId) =>
-          ![...share.sessions].some((activeSession) => activeSession.peerId === rememberedPeerId),
-      )
-      share.viewerPeerIds.delete(inactivePeer ?? peerId)
-    }
-    return share.viewerPeerIds.has(peerId)
+export const rememberViewerPeer = (share: SourceShare, peerId: string): boolean => {
+  if (share.viewerPeerIds.has(peerId)) return false
+  share.viewerPeerIds.add(peerId)
+  if (share.viewerPeerIds.size > MAX_REMEMBERED_VIEWER_PEERS) {
+    const inactivePeer = [...share.viewerPeerIds].find(
+      (rememberedPeerId) =>
+        ![...share.sessions].some((activeSession) => activeSession.peerId === rememberedPeerId),
+    )
+    share.viewerPeerIds.delete(inactivePeer ?? peerId)
   }
+  return share.viewerPeerIds.has(peerId)
+}
 
-export const publish = (ctx: SharingContext) =>
+export const publish =
+  (ctx: SharingContext) =>
   (patch: Partial<SharingRuntimeState> = {}): void => {
     if (Object.hasOwn(patch, 'message')) {
       if (ctx.noticeTimer !== undefined) window.clearTimeout(ctx.noticeTimer)
@@ -337,34 +271,34 @@ export const publish = (ctx: SharingContext) =>
     ctx.observers.forEach((observer) => observer(ctx.state))
   }
 
-export const snapshot = (ctx: SharingContext) =>
-  (): PrivateState => {
-    if (!ctx.privateKey) throw new Error('Protected peer identity is unavailable.')
-    return snapshotPrivateState({
-      privateKey: ctx.privateKey,
-      pendingSharingBehavior: ctx.pendingSharingBehavior,
-      sharingBehavior: ctx.sharingBehavior,
-      paused: ctx.paused,
-      deviceComparisons: [...ctx.deviceComparisons.values()].filter(
-        (entry) => entry.confirmedAt !== undefined && ctx.comparisonIsCurrent(entry),
-      ),
-      comparisonBudgets: ctx.comparisonBudgets,
-      shares: ctx.shares,
-      endedShares: ctx.endedShares,
-      peerNamePreferences: ctx.peerNamePreferences,
-      followed: ctx.followed,
-      approvedReturnLinks: ctx.approvedReturnLinks,
-      pendingReturns: ctx.pendingReturns,
-      returnOffers: ctx.returnOffers,
-      oldSharing: ctx.oldSharing,
-      stoppedViewers: ctx.stoppedViewers,
-      pendingStopNotices: ctx.pendingStopNotices,
-      oldSeeing: ctx.oldSeeing,
-      viewerLabels: ctx.viewerLabels,
-    })
-  }
+export const snapshot = (ctx: SharingContext) => (): PrivateState => {
+  if (!ctx.privateKey) throw new Error('Protected peer identity is unavailable.')
+  return snapshotPrivateState({
+    privateKey: ctx.privateKey,
+    pendingSharingBehavior: ctx.pendingSharingBehavior,
+    sharingBehavior: ctx.sharingBehavior,
+    paused: ctx.paused,
+    deviceComparisons: [...ctx.deviceComparisons.values()].filter(
+      (entry) => entry.confirmedAt !== undefined && ctx.comparisonIsCurrent(entry),
+    ),
+    comparisonBudgets: ctx.comparisonBudgets,
+    shares: ctx.shares,
+    endedShares: ctx.endedShares,
+    peerNamePreferences: ctx.peerNamePreferences,
+    followed: ctx.followed,
+    approvedReturnLinks: ctx.approvedReturnLinks,
+    pendingReturns: ctx.pendingReturns,
+    returnOffers: ctx.returnOffers,
+    oldSharing: ctx.oldSharing,
+    stoppedViewers: ctx.stoppedViewers,
+    pendingStopNotices: ctx.pendingStopNotices,
+    oldSeeing: ctx.oldSeeing,
+    viewerLabels: ctx.viewerLabels,
+  })
+}
 
-export const persist = (ctx: SharingContext) =>
+export const persist =
+  (ctx: SharingContext) =>
   (traceFollow = false): Promise<void> => {
     if (!ctx.store) return Promise.resolve()
     const store = ctx.store
@@ -384,12 +318,11 @@ export const persist = (ctx: SharingContext) =>
     return ctx.persistence
   }
 
-export const useEphemeralIdentity = (ctx: SharingContext) =>
-  async (): Promise<void> => {
-    ctx.privateStateAvailable = false
-    ctx.privateKey ??= await generateKeyPair('Ed25519')
-    ctx.publish({ canSave: false, message: 'Protected storage is unavailable; preview only.' })
-  }
+export const useEphemeralIdentity = (ctx: SharingContext) => async (): Promise<void> => {
+  ctx.privateStateAvailable = false
+  ctx.privateKey ??= await generateKeyPair('Ed25519')
+  ctx.publish({ canSave: false, message: 'Protected storage is unavailable; preview only.' })
+}
 
 const loadPrivateState = async (
   ctx: SharingContext,
@@ -511,10 +444,7 @@ const restoreFollow = async (ctx: SharingContext, record: PrivateState['followed
   })
 }
 
-const restoreExpiredFollow = (
-  ctx: SharingContext,
-  record: PrivateState['followed'][number],
-) => {
+const restoreExpiredFollow = (ctx: SharingContext, record: PrivateState['followed'][number]) => {
   try {
     const expired = parseShareInvitation(record.url, 0)
     if (expired.expiresAt === null || expired.expiresAt > Date.now()) return false
@@ -603,7 +533,7 @@ const pruneRestoredRelations = (ctx: SharingContext) => {
   return changed
 }
 
-const applyInitialLocation = async (ctx: SharingContext) => {
+const applyInitialLocation = (ctx: SharingContext) => {
   const currentLocation = ctx.locationSource.getState()
   if (
     (currentLocation.status !== 'live' && currentLocation.status !== 'delayed') ||
@@ -634,38 +564,42 @@ const prepareFromStore = async (
   changed = restoreRelations(ctx, saved) || changed
   changed = pruneRestoredRelations(ctx) || changed
   if (saved && changed) await ctx.persist()
-  await applyInitialLocation(ctx)
+  applyInitialLocation(ctx)
   ctx.publish()
 }
 
-export const prepareState = (ctx: SharingContext) =>
-  (): Promise<void> => {
-    if (!ctx.store) return Promise.resolve()
-    const store = ctx.store
-    if (!ctx.preparation) {
-      ctx.preparation = prepareFromStore(ctx, store).catch((error) => {
-        ctx.preparation = undefined
-        ctx.publish({
-          peerStatus: 'error',
-          message: error instanceof Error ? error.message : 'Protected shares could not be opened.',
-        })
-        throw error
+export const prepareState = (ctx: SharingContext) => (): Promise<void> => {
+  if (!ctx.store) return Promise.resolve()
+  const store = ctx.store
+  if (!ctx.preparation) {
+    ctx.preparation = prepareFromStore(ctx, store).catch((error) => {
+      ctx.preparation = undefined
+      ctx.publish({
+        peerStatus: 'error',
+        message: error instanceof Error ? error.message : 'Protected shares could not be opened.',
       })
-    }
-    return ctx.preparation
+      throw error
+    })
   }
+  return ctx.preparation
+}
 
-export const recordSessionEvent = (ctx: SharingContext) =>
+export const recordSessionEvent =
+  (ctx: SharingContext) =>
   (event: SessionEvent['event']): void => {
     ctx.sessionEvents = appendSessionEvent(ctx.sessionEvents, {
       sequence: ++ctx.sessionEventSequence,
       at: Date.now(),
       event,
-      activeSessions: [...ctx.shares.values()].reduce((count, share) => count + share.sessions.size, 0),
+      activeSessions: [...ctx.shares.values()].reduce(
+        (count, share) => count + share.sessions.size,
+        0,
+      ),
     })
   }
 
-export const removeSession = (ctx: SharingContext) =>
+export const removeSession =
+  (ctx: SharingContext) =>
   (session: SourceSession, reason: SessionEvent['event']): void => {
     let removed = false
     for (const share of ctx.shares.values()) {
@@ -675,11 +609,9 @@ export const removeSession = (ctx: SharingContext) =>
     ctx.publish()
   }
 
-export const encryptedObservationMessage = (ctx: SharingContext) =>
-  async (
-    share: SourceShare,
-    subscriptionId: string,
-  ): Promise<ConstellationMessage | undefined> => {
+export const encryptedObservationMessage =
+  (ctx: SharingContext) =>
+  async (share: SourceShare, subscriptionId: string): Promise<ConstellationMessage | undefined> => {
     if (ctx.paused || sharePauseReason(share, ctx.networkRestriction)) return undefined
     if (!share.latest) return undefined
     const observation = share.latest
@@ -703,10 +635,9 @@ export const encryptedObservationMessage = (ctx: SharingContext) =>
     })
   }
 
-export const comparisonPeerIsEligible = (ctx: SharingContext) =>
-  (
-    entry: Pick<DeviceComparison, 'shareId' | 'peerId' | 'ownPeerId' | 'role'>,
-  ): boolean => {
+export const comparisonPeerIsEligible =
+  (ctx: SharingContext) =>
+  (entry: Pick<DeviceComparison, 'shareId' | 'peerId' | 'ownPeerId' | 'role'>): boolean => {
     const share = ctx.shares.get(entry.shareId)
     if (entry.role === 'sender') {
       return Boolean(
@@ -731,12 +662,14 @@ export const comparisonPeerIsEligible = (ctx: SharingContext) =>
     )
   }
 
-export const comparisonIsCurrent = (ctx: SharingContext) =>
+export const comparisonIsCurrent =
+  (ctx: SharingContext) =>
   (entry: DeviceComparison): boolean =>
     (entry.confirmedAt !== undefined || Date.now() < entry.expiresAt) &&
     ctx.comparisonPeerIsEligible(entry)
 
-export const reserveDeviceComparison = (ctx: SharingContext) =>
+export const reserveDeviceComparison =
+  (ctx: SharingContext) =>
   (shareId: string, ownPeerId: string): Promise<void> =>
     reserveComparisonAttempt(ctx.comparisonBudgets, shareId, ownPeerId, async () => {
       for (const [key, entry] of ctx.deviceComparisons)
@@ -795,7 +728,8 @@ const completeComparison = (
   ctx.publish()
 }
 
-export const handleComparisonStream = (ctx: SharingContext) =>
+export const handleComparisonStream =
+  (ctx: SharingContext) =>
   (
     stream: Parameters<typeof createProtocolMessagePort>[0],
     connection: ComparisonConnection,
@@ -854,9 +788,7 @@ const redeemEndedShare = async (
     },
     request.proof,
   )
-  return valid
-    ? { ended: true as const, reason: ended.reason, endedAt: ended.endedAt }
-    : undefined
+  return valid ? { ended: true as const, reason: ended.reason, endedAt: ended.endedAt } : undefined
 }
 
 const redeemCandidate = async (
@@ -1173,7 +1105,8 @@ const createSourceSession = (
   lastHeartbeatAt: Date.now(),
 })
 
-export const handleIncomingStream = (ctx: SharingContext) =>
+export const handleIncomingStream =
+  (ctx: SharingContext) =>
   (
     stream: Parameters<typeof createProtocolMessagePort>[0],
     connection: { remotePeer: { toString: () => string } },
@@ -1280,18 +1213,12 @@ const exchangePeerName = async (
     expectedShareId,
   )
   await ctx.receivePeerName(peerId, request.displayName)
-  state.removeListener ??= addNameListener(
-    ctx,
-    port,
-    request.shareId,
-    share,
-    session,
-    peerId,
-  )
+  state.removeListener ??= addNameListener(ctx, port, request.shareId, share, session, peerId)
   return { displayName: ctx.namePreference(peerId).sharedName }
 }
 
-export const handleNameStream = (ctx: SharingContext) =>
+export const handleNameStream =
+  (ctx: SharingContext) =>
   (
     stream: Parameters<typeof createProtocolMessagePort>[0],
     connection: NameConnection,
@@ -1318,37 +1245,36 @@ export const handleNameStream = (ctx: SharingContext) =>
     })
   }
 
-export const startPeer = (ctx: SharingContext) =>
-  async () => {
-    if (!ctx.peer) {
-      ctx.publish({ peerStatus: 'connecting', message: 'Connecting to the P2P network…' })
-      ctx.peer = startPrivateBrowserPeer(ctx.privateKey)
-        .then(async (started) => {
-          await started.node.handle(SHARE_STREAM_PROTOCOL, ctx.handleIncomingStream, {
-            runOnLimitedConnection: true,
-          })
-          await started.node.handle(PEER_NAMES_PROTOCOL, ctx.handleNameStream, {
-            runOnLimitedConnection: true,
-          })
-          await started.node.handle(DEVICE_COMPARISON_PROTOCOL, ctx.handleComparisonStream, {
-            maxInboundStreams: 8,
-            runOnLimitedConnection: true,
-          })
-          ctx.handlerNode = started.node
-          ctx.publish({ peerStatus: 'online', message: '' })
-          return started
+export const startPeer = (ctx: SharingContext) => async () => {
+  if (!ctx.peer) {
+    ctx.publish({ peerStatus: 'connecting', message: 'Connecting to the P2P network…' })
+    ctx.peer = startPrivateBrowserPeer(ctx.privateKey)
+      .then(async (started) => {
+        await started.node.handle(SHARE_STREAM_PROTOCOL, ctx.handleIncomingStream, {
+          runOnLimitedConnection: true,
         })
-        .catch((error) => {
-          ctx.peer = undefined
-          ctx.publish({
-            peerStatus: 'error',
-            message: error instanceof Error ? error.message : 'P2P connection failed.',
-          })
-          throw error
+        await started.node.handle(PEER_NAMES_PROTOCOL, ctx.handleNameStream, {
+          runOnLimitedConnection: true,
         })
-    }
-    return ctx.peer
+        await started.node.handle(DEVICE_COMPARISON_PROTOCOL, ctx.handleComparisonStream, {
+          maxInboundStreams: 8,
+          runOnLimitedConnection: true,
+        })
+        ctx.handlerNode = started.node
+        ctx.publish({ peerStatus: 'online', message: '' })
+        return started
+      })
+      .catch((error) => {
+        ctx.peer = undefined
+        ctx.publish({
+          peerStatus: 'error',
+          message: error instanceof Error ? error.message : 'P2P connection failed.',
+        })
+        throw error
+      })
   }
+  return ctx.peer
+}
 
 const registerSourcePeerHandlers = async (
   ctx: SharingContext,
@@ -1383,7 +1309,8 @@ const failSourcePeerStart = (ctx: SharingContext, shareId: string, error: unknow
   throw error
 }
 
-export const startSourcePeer = (ctx: SharingContext) =>
+export const startSourcePeer =
+  (ctx: SharingContext) =>
   (
     share: Pick<SourceShare, 'capability' | 'sourcePrivateKey'>,
   ): Promise<{ node: BrowserLibp2pNode; addresses: string[] }> => {
@@ -1399,7 +1326,8 @@ export const startSourcePeer = (ctx: SharingContext) =>
     return starting
   }
 
-export const stopSourcePeer = (ctx: SharingContext) =>
+export const stopSourcePeer =
+  (ctx: SharingContext) =>
   async (shareId: string): Promise<void> => {
     const starting = ctx.sourceStarts.get(shareId)
     ctx.sourceStarts.delete(shareId)
@@ -1417,22 +1345,20 @@ export const stopSourcePeer = (ctx: SharingContext) =>
     await node.stop()
   }
 
-export const pruneEndNotifications = (ctx: SharingContext) =>
-  (): string[] => {
-    const retained = new Set(
-      retainedEndNotifications([...ctx.endedShares.values()]).map((share) => share.capability.shareId),
-    )
-    const removed = [...ctx.endedShares.keys()].filter((shareId) => !retained.has(shareId))
-    removed.forEach((shareId) => ctx.endedShares.delete(shareId))
-    return removed
-  }
+export const pruneEndNotifications = (ctx: SharingContext) => (): string[] => {
+  const retained = new Set(
+    retainedEndNotifications([...ctx.endedShares.values()]).map(
+      (share) => share.capability.shareId,
+    ),
+  )
+  const removed = [...ctx.endedShares.keys()].filter((shareId) => !retained.has(shareId))
+  removed.forEach((shareId) => ctx.endedShares.delete(shareId))
+  return removed
+}
 
-export const rememberEndNotification = (ctx: SharingContext) =>
-  (
-    share: SourceShare,
-    reason: 'revoked' | 'expired',
-    endedAt: number,
-  ): void => {
+export const rememberEndNotification =
+  (ctx: SharingContext) =>
+  (share: SourceShare, reason: 'revoked' | 'expired', endedAt: number): void => {
     ctx.endedShares.set(share.capability.shareId, {
       capability: share.capability,
       url: share.url,
@@ -1445,13 +1371,9 @@ export const rememberEndNotification = (ctx: SharingContext) =>
     })
   }
 
-export const endFollowing = (ctx: SharingContext) =>
-  (
-    shareId: string,
-    reason: 'revoked' | 'expired',
-    endedAt: number,
-    name?: string,
-  ): void => {
+export const endFollowing =
+  (ctx: SharingContext) =>
+  (shareId: string, reason: 'revoked' | 'expired', endedAt: number, name?: string): void => {
     const entry = ctx.followed.get(shareId)
     if (entry) {
       entry.connected = false
@@ -1469,11 +1391,9 @@ export const endFollowing = (ctx: SharingContext) =>
     })
   }
 
-export const acceptPendingReturn = (ctx: SharingContext) =>
-  async (
-    key: string,
-    offer: SharingRuntimeState['returnOffers'][number],
-  ): Promise<boolean> => {
+export const acceptPendingReturn =
+  (ctx: SharingContext) =>
+  async (key: string, offer: SharingRuntimeState['returnOffers'][number]): Promise<boolean> => {
     if (ctx.returnShareReceiver === 'external') return false
     const capability = parseShareInvitation(offer.url)
     if (
@@ -1482,7 +1402,9 @@ export const acceptPendingReturn = (ctx: SharingContext) =>
     ) {
       throw new Error('This return location link has ended.')
     }
-    await acceptReturnShare(ctx.runtimeApi!, offer, (shareId) => Boolean(ctx.followed.get(shareId)?.connected))
+    await acceptReturnShare(ctx.runtimeApi!, offer, (shareId) =>
+      Boolean(ctx.followed.get(shareId)?.connected),
+    )
     if (ctx.returnOffers.get(key) !== offer) return false
     ctx.returnOffers.delete(key)
     try {
@@ -1495,13 +1417,13 @@ export const acceptPendingReturn = (ctx: SharingContext) =>
     return true
   }
 
-export const ensurePeer = (ctx: SharingContext) =>
-  async () => {
-    await ctx.prepareState()
-    return ctx.startPeer()
-  }
+export const ensurePeer = (ctx: SharingContext) => async () => {
+  await ctx.prepareState()
+  return ctx.startPeer()
+}
 
-export const updateShareLocation = (ctx: SharingContext) =>
+export const updateShareLocation =
+  (ctx: SharingContext) =>
   (share: SourceShare, exact: LocationObservationV1): boolean => {
     if (ctx.paused || sharePauseReason(share, ctx.networkRestriction)) return false
     if (share.precision === 'exact') {
@@ -1525,21 +1447,17 @@ export const updateShareLocation = (ctx: SharingContext) =>
   }
 
 export const unsubscribeLocationState = (ctx: SharingContext) =>
-  ctx.locationSource.subscribeState((location) =>
-    ctx.publish({ location }),
-  )
+  ctx.locationSource.subscribeState((location) => ctx.publish({ location }))
 
-const publishLocationObservation = (
-  ctx: SharingContext,
-  exact: LocationObservationV1,
-) => {
+const publishLocationObservation = (ctx: SharingContext, exact: LocationObservationV1) => {
   let privateStateChanged = false
   for (const share of ctx.shares.values()) {
     if (!ctx.visible && share.publication === 'foreground') continue
     if (ctx.updateShareLocation(share, exact)) privateStateChanged = true
     for (const session of share.sessions) {
       if (!session.subscriptionId || !share.latest) continue
-      void ctx.encryptedObservationMessage(share, session.subscriptionId)
+      void ctx
+        .encryptedObservationMessage(share, session.subscriptionId)
         .then((message) => {
           if (!message) return
           session.send(message)
@@ -1584,8 +1502,7 @@ const deliverStopNotice = async (ctx: SharingContext, pending: PendingStopNotice
       .getConnections()
       .filter(
         (connection) =>
-          connection.status === 'open' &&
-          connection.remotePeer.toString() === pending.sourcePeerId,
+          connection.status === 'open' && connection.remotePeer.toString() === pending.sourcePeerId,
       ),
   )
   const port = createProtocolMessagePort(stream, parseConstellationMessage)
@@ -1601,11 +1518,7 @@ const deliverStopNotice = async (ctx: SharingContext, pending: PendingStopNotice
   }
 }
 
-const completeStopNotice = async (
-  ctx: SharingContext,
-  id: string,
-  pending: PendingStopNotice,
-) => {
+const completeStopNotice = async (ctx: SharingContext, id: string, pending: PendingStopNotice) => {
   ctx.pendingStopNotices.delete(id)
   try {
     await ctx.persist()
@@ -1614,33 +1527,32 @@ const completeStopNotice = async (
   }
 }
 
-export const retryPendingStopNotices = (ctx: SharingContext) =>
-  async (): Promise<void> => {
-    if (ctx.retryingStopNotices || ctx.runtimeClosed || !ctx.store || !ctx.privateStateAvailable)
-      return
-    ctx.retryingStopNotices = true
-    try {
-      // A bounded batch avoids monopolizing startup or draining the battery.
-      for (const [id, pending] of [...ctx.pendingStopNotices].slice(0, 2)) {
-        if (ctx.runtimeClosed) break
-        if (Date.now() - pending.queuedAt >= STOP_NOTICE_RETENTION_MS) {
-          await dropExpiredStopNotice(ctx, id, pending)
-          continue
-        }
-        try {
-          // A queued notice contains only a narrow, precomputed stop proof.
-          // No original bearer URL or location access secret is retained.
-          await deliverStopNotice(ctx, pending)
-          await completeStopNotice(ctx, id, pending)
-        } catch {
-          // Rotate unsuccessful deliveries so unreachable links cannot starve others.
-          rotatePendingNotice(ctx.pendingStopNotices, id)
-        }
+export const retryPendingStopNotices = (ctx: SharingContext) => async (): Promise<void> => {
+  if (ctx.retryingStopNotices || ctx.runtimeClosed || !ctx.store || !ctx.privateStateAvailable)
+    return
+  ctx.retryingStopNotices = true
+  try {
+    // A bounded batch avoids monopolizing startup or draining the battery.
+    for (const [id, pending] of [...ctx.pendingStopNotices].slice(0, 2)) {
+      if (ctx.runtimeClosed) break
+      if (Date.now() - pending.queuedAt >= STOP_NOTICE_RETENTION_MS) {
+        await dropExpiredStopNotice(ctx, id, pending)
+        continue
       }
-    } finally {
-      ctx.retryingStopNotices = false
+      try {
+        // A queued notice contains only a narrow, precomputed stop proof.
+        // No original bearer URL or location access secret is retained.
+        await deliverStopNotice(ctx, pending)
+        await completeStopNotice(ctx, id, pending)
+      } catch {
+        // Rotate unsuccessful deliveries so unreachable links cannot starve others.
+        rotatePendingNotice(ctx.pendingStopNotices, id)
+      }
     }
+  } finally {
+    ctx.retryingStopNotices = false
   }
+}
 
 const expireSweptShare = (ctx: SharingContext, share: SourceShare, now: number) => {
   if (share.capability.expiresAt === null || now < share.capability.expiresAt) return
@@ -1754,8 +1666,8 @@ const reconnectFollow = (ctx: SharingContext, shareId: string, entry: FollowEntr
     return
   }
   ctx.reconnecting.add(shareId)
-  void ctx.runtimeApi!
-    .acceptShare(entry.url, { localName: entry.localName, saved: entry.saved })
+  void ctx
+    .runtimeApi!.acceptShare(entry.url, { localName: entry.localName, saved: entry.saved })
     .catch(() => undefined)
     .finally(() => ctx.reconnecting.delete(shareId))
 }
@@ -1784,39 +1696,38 @@ const sweepSharingState = (ctx: SharingContext) => {
 export const heartbeatSweep = (ctx: SharingContext) =>
   window.setInterval(() => sweepSharingState(ctx), HEARTBEAT_INTERVAL_MS)
 
-
 export const createSharingHelpers = (ctx: SharingContext) => ({
-    namePreference: namePreference(ctx),
-    receivePeerName: receivePeerName(ctx),
-    viewerApprovalKey: viewerApprovalKey(ctx),
-    insertImportedEntries: insertImportedEntries(ctx),
-    applyHistoryRecords: applyHistoryRecords(ctx),
-    stoppedViewerKey: stoppedViewerKey(ctx),
-    rememberLifecycleRecord: rememberLifecycleRecord(ctx),
-    rememberEndedShareHistory: rememberEndedShareHistory(ctx),
-    rememberViewerPeer: rememberViewerPeer(ctx),
-    publish: publish(ctx),
-    snapshot: snapshot(ctx),
-    persist: persist(ctx),
-    useEphemeralIdentity: useEphemeralIdentity(ctx),
-    prepareState: prepareState(ctx),
-    recordSessionEvent: recordSessionEvent(ctx),
-    removeSession: removeSession(ctx),
-    encryptedObservationMessage: encryptedObservationMessage(ctx),
-    comparisonPeerIsEligible: comparisonPeerIsEligible(ctx),
-    comparisonIsCurrent: comparisonIsCurrent(ctx),
-    reserveDeviceComparison: reserveDeviceComparison(ctx),
-    handleComparisonStream: handleComparisonStream(ctx),
-    handleIncomingStream: handleIncomingStream(ctx),
-    handleNameStream: handleNameStream(ctx),
-    startPeer: startPeer(ctx),
-    startSourcePeer: startSourcePeer(ctx),
-    stopSourcePeer: stopSourcePeer(ctx),
-    pruneEndNotifications: pruneEndNotifications(ctx),
-    rememberEndNotification: rememberEndNotification(ctx),
-    endFollowing: endFollowing(ctx),
-    acceptPendingReturn: acceptPendingReturn(ctx),
-    ensurePeer: ensurePeer(ctx),
-    updateShareLocation: updateShareLocation(ctx),
-    retryPendingStopNotices: retryPendingStopNotices(ctx),
+  namePreference: namePreference(ctx),
+  receivePeerName: receivePeerName(ctx),
+  viewerApprovalKey,
+  insertImportedEntries,
+  applyHistoryRecords,
+  stoppedViewerKey,
+  rememberLifecycleRecord,
+  rememberEndedShareHistory: rememberEndedShareHistory(ctx),
+  rememberViewerPeer,
+  publish: publish(ctx),
+  snapshot: snapshot(ctx),
+  persist: persist(ctx),
+  useEphemeralIdentity: useEphemeralIdentity(ctx),
+  prepareState: prepareState(ctx),
+  recordSessionEvent: recordSessionEvent(ctx),
+  removeSession: removeSession(ctx),
+  encryptedObservationMessage: encryptedObservationMessage(ctx),
+  comparisonPeerIsEligible: comparisonPeerIsEligible(ctx),
+  comparisonIsCurrent: comparisonIsCurrent(ctx),
+  reserveDeviceComparison: reserveDeviceComparison(ctx),
+  handleComparisonStream: handleComparisonStream(ctx),
+  handleIncomingStream: handleIncomingStream(ctx),
+  handleNameStream: handleNameStream(ctx),
+  startPeer: startPeer(ctx),
+  startSourcePeer: startSourcePeer(ctx),
+  stopSourcePeer: stopSourcePeer(ctx),
+  pruneEndNotifications: pruneEndNotifications(ctx),
+  rememberEndNotification: rememberEndNotification(ctx),
+  endFollowing: endFollowing(ctx),
+  acceptPendingReturn: acceptPendingReturn(ctx),
+  ensurePeer: ensurePeer(ctx),
+  updateShareLocation: updateShareLocation(ctx),
+  retryPendingStopNotices: retryPendingStopNotices(ctx),
 })

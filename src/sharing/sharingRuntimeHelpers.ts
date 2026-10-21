@@ -77,7 +77,10 @@ export const rememberRedeemedNonce = (
   }
 }
 
-export const requireAuthorized = (session: SourceSession, share: SourceShare | undefined): SourceShare => {
+export const requireAuthorized = (
+  session: SourceSession,
+  share: SourceShare | undefined,
+): SourceShare => {
   if (!share || !session.sessionId) throw new Error('Share access denied.')
   if (share.capability.expiresAt !== null && Date.now() >= share.capability.expiresAt) {
     throw new Error('Share access denied.')

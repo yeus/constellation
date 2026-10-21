@@ -76,9 +76,7 @@ const handleStartFailure = (
 ): void => {
   if (!session.active || session.provider !== candidate) return
   const code =
-    typeof failure === 'object' && failure !== null && 'code' in failure
-      ? Number(failure.code)
-      : 2
+    typeof failure === 'object' && failure !== null && 'code' in failure ? Number(failure.code) : 2
   if (candidate === session.native && code !== 1 && code !== 4 && session.webview) {
     switchToWebview(session, 'error')
   } else {
@@ -94,12 +92,7 @@ const handleProviderFailure = (
   failure: BrowserPositionError,
 ): void => {
   if (!session.active || session.provider !== candidate) return
-  if (
-    candidate === session.native &&
-    failure.code !== 1 &&
-    failure.code !== 4 &&
-    session.webview
-  ) {
+  if (candidate === session.native && failure.code !== 1 && failure.code !== 4 && session.webview) {
     switchToWebview(session, 'error')
   } else {
     session.fallbackAllowed = false
@@ -182,10 +175,7 @@ const createWatchingSession = (
 
 interface FailoverWatchRegistry {
   nextId: number
-  readonly watches: Map<
-    number,
-    { stop: () => Promise<void>; provider: () => BrowserGeolocation }
-  >
+  readonly watches: Map<number, { stop: () => Promise<void>; provider: () => BrowserGeolocation }>
   readonly native: BrowserGeolocation
   readonly webview?: BrowserGeolocation
   readonly timers: FailoverTimers

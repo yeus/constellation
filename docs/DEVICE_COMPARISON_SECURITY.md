@@ -130,7 +130,6 @@ local confirmation. Installed Android and real-world human-channel acceptance
 remain outstanding.
 human-channel acceptance are still outstanding.
 
-
 ## Implementation and validation
 
 `src/sharing/deviceComparison.ts` owns schemas, transcript crypto, attempt

@@ -1,8 +1,4 @@
-import type {
-  FollowSummary,
-  PeerHistoryProtection,
-  ShareSummary,
-} from './sharingContracts.ts'
+import type { FollowSummary, PeerHistoryProtection, ShareSummary } from './sharingContracts.ts'
 
 export type { PeerHistoryProtection } from './sharingContracts.ts'
 

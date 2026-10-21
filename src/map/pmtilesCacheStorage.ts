@@ -83,10 +83,7 @@ const beginOpfsWrite = async (
   }
 }
 
-const removeOpfsFile = async (
-  directory: FileSystemDirectoryHandle,
-  key: string,
-): Promise<void> => {
+const removeOpfsFile = async (directory: FileSystemDirectoryHandle, key: string): Promise<void> => {
   await directory.removeEntry(await cacheKey(key)).catch((error: unknown) => {
     if (!isNotFound(error)) throw error
   })
@@ -155,10 +152,7 @@ const writeIndexedDbValue = async (
   await completed
 }
 
-const beginIndexedDbWrite = (
-  database: IDBDatabase,
-  key: string,
-): PmTilesCacheWrite => {
+const beginIndexedDbWrite = (database: IDBDatabase, key: string): PmTilesCacheWrite => {
   let chunks: Uint8Array[] = []
   return {
     write: (data) => {
@@ -176,10 +170,7 @@ const beginIndexedDbWrite = (
   }
 }
 
-const removeIndexedDbValue = async (
-  database: IDBDatabase,
-  key: string,
-): Promise<void> => {
+const removeIndexedDbValue = async (database: IDBDatabase, key: string): Promise<void> => {
   const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite')
   const completed = transactionDone(transaction)
   transaction.objectStore(INDEXED_DB_STORE).delete(key)

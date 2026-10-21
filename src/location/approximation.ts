@@ -175,11 +175,6 @@ export const projectApproximateLocation = (
   if (!Number.isFinite(minimumRadiusMeters) || minimumRadiusMeters < DEFAULT_RADIUS_METERS) {
     throw new RangeError('Approximate area radius must be at least one kilometre.')
   }
-  const state = nextApproximationState(
-    observation,
-    previous,
-    random,
-    minimumRadiusMeters,
-  )
+  const state = nextApproximationState(observation, previous, random, minimumRadiusMeters)
   return { state, observation: approximateObservation(observation, state) }
 }

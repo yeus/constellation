@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 import type { Browser, BrowserContextOptions, Page } from '@playwright/test'
-import { openPeerList, openShareCreator } from './peer-navigation.ts'
+import { continueInBrowserIfOffered, openPeerList, openShareCreator } from './peer-navigation.ts'
 
 const createNamedShare = async (page: Page, name: string): Promise<string> => {
   await page.goto('/')
@@ -22,6 +22,7 @@ const followTwoSources = async (
   afterFirstFollow?: (viewer: Page) => Promise<void>,
 ): Promise<void> => {
   await viewer.goto(firstLink)
+  await continueInBrowserIfOffered(viewer)
   await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
     timeout: 30_000,
   })

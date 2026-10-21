@@ -20,6 +20,7 @@ vendor/taskyon/*/dist/
 playwright-report/
 test-results/
 /.ci-logs/
+/.code-analysis/
 .yarn/install-state.gz
 *.local
 *.log

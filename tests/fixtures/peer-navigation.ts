@@ -21,6 +21,15 @@ export const openShareCreator = async (page: Page): Promise<void> => {
   await peerList.getByRole('button', { name: 'Share location' }).click()
 }
 
+export const continueInBrowserIfOffered = async (page: Page): Promise<void> => {
+  const isAndroidBrowser = await page.evaluate(() => /Android/i.test(navigator.userAgent))
+  if (!isAndroidBrowser) return
+  await page
+    .getByRole('region', { name: 'Open in the Constellation app' })
+    .getByRole('button', { name: 'Continue in browser' })
+    .click({ timeout: 30_000 })
+}
+
 export const saveLocationPreview = async (page: Page): Promise<void> => {
   const preview = page.getByRole('region', { name: 'Location preview' })
   await preview.getByRole('button', { name: 'Keep following' }).click()

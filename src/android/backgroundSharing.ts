@@ -83,10 +83,8 @@ const isLocationState = (value: unknown): value is BrowserLocationState => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object'
 
-const isOptionalArray = (
-  value: unknown,
-  guard: (entry: unknown) => boolean,
-): boolean => value === undefined || (Array.isArray(value) && value.every(guard))
+const isOptionalArray = (value: unknown, guard: (entry: unknown) => boolean): boolean =>
+  value === undefined || (Array.isArray(value) && value.every(guard))
 
 const isString = (value: unknown): value is string => typeof value === 'string'
 
@@ -284,11 +282,7 @@ const createReturnActions = (dependencies: AndroidBackgroundSharingDependencies)
   approveReturnLink: async (shareId: string) => {
     await dependencies.invoke('android_approve_background_return_link', { shareId })
   },
-  deviceComparison: async (
-    shareId: string,
-    challenge: string,
-    action: 'confirm' | 'cancel',
-  ) =>
+  deviceComparison: async (shareId: string, challenge: string, action: 'confirm' | 'cancel') =>
     invokeStatusAfter(dependencies, 'android_background_device_comparison', {
       request: JSON.stringify({ shareId, challenge, action }),
     }),

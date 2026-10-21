@@ -56,35 +56,65 @@ const createRelationStores = () => {
   const stoppedViewers = new Map<string, StoppedViewerRecord>()
   const pendingStopNotices = new Map<string, PendingStopNotice>()
   return {
-    deviceComparisons, comparisonBudgets, comparisonRuns, observers, received, followed,
-    viewerLabels, peerNamePreferences, nameListeners, nameSenders, viewerClosers,
-    returnSenders, returnOffers, approvedReturnLinks, pendingViewerApprovals, pendingReturns,
-    oldSharing, oldSeeing, stoppedViewers, pendingStopNotices,
+    deviceComparisons,
+    comparisonBudgets,
+    comparisonRuns,
+    observers,
+    received,
+    followed,
+    viewerLabels,
+    peerNamePreferences,
+    nameListeners,
+    nameSenders,
+    viewerClosers,
+    returnSenders,
+    returnOffers,
+    approvedReturnLinks,
+    pendingViewerApprovals,
+    pendingReturns,
+    oldSharing,
+    oldSeeing,
+    stoppedViewers,
+    pendingStopNotices,
   }
 }
 
 const createRuntimeFlags = () => {
-  let retryingStopNotices = false
-  let stopRetryAt = 0
-  let runtimeClosed = false
+  const retryingStopNotices = false
+  const stopRetryAt = 0
+  const runtimeClosed = false
   let noticeTimer: number | undefined
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
-  let visible = true
-  let paused = false
+  const visible = true
+  const paused = false
   let privateKey: PrivateKey | undefined
   let preparation: Promise<void> | undefined
-  let persistence = Promise.resolve()
-  let privateStateAvailable = true
-  let sessionEvents: readonly SessionEvent[] = []
-  let sessionEventSequence = 0
+  const persistence = Promise.resolve()
+  const privateStateAvailable = true
+  const sessionEvents: readonly SessionEvent[] = []
+  const sessionEventSequence = 0
   let sharingBehavior: SharingBehavior | undefined
   let pendingSharingBehavior: SharingBehavior | undefined
   let networkRestriction: NetworkRestriction | undefined
   return {
-    retryingStopNotices, stopRetryAt, runtimeClosed, noticeTimer, peer, handlerNode, visible,
-    paused, privateKey, preparation, persistence, privateStateAvailable, sessionEvents,
-    sessionEventSequence, sharingBehavior, pendingSharingBehavior, networkRestriction,
+    retryingStopNotices,
+    stopRetryAt,
+    runtimeClosed,
+    noticeTimer,
+    peer,
+    handlerNode,
+    visible,
+    paused,
+    privateKey,
+    preparation,
+    persistence,
+    privateStateAvailable,
+    sessionEvents,
+    sessionEventSequence,
+    sharingBehavior,
+    pendingSharingBehavior,
+    networkRestriction,
   }
 }
 

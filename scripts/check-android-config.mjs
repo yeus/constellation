@@ -172,7 +172,10 @@ assert.match(androidPlugin, /fun dismissBackgroundReturnOffer\(invoke: Invoke\)/
 assert.match(locationService, /"approve-return-link"/)
 assert.match(locationService, /"approve-viewer"/)
 assert.match(locationService, /"dismiss-return-offer"/)
-assert.match(backgroundEntry, /await executeBackgroundReturnCommand\(state\.runtime, command, post\)/)
+assert.match(
+  backgroundEntry,
+  /await executeBackgroundReturnCommand\(state\.runtime, command, post\)/,
+)
 assert.match(backgroundEntry, /state\.runtime\.approveViewer\(command\.shareId, command\.peerId\)/)
 assert.match(returnCommand, /await runtime\.approveReturnLink\(command\.shareId\)/)
 assert.match(

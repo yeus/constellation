@@ -262,10 +262,8 @@ export const createComparisonResponder = (dependencies: ComparisonDependencies) 
       state.cancelled = true
       state.pending = undefined
     },
-    commit: (input: z.output<typeof commitRequest>) =>
-      commitComparison(state, dependencies, input),
-    reveal: (input: z.output<typeof revealRequest>) =>
-      revealComparison(state, dependencies, input),
+    commit: (input: z.output<typeof commitRequest>) => commitComparison(state, dependencies, input),
+    reveal: (input: z.output<typeof revealRequest>) => revealComparison(state, dependencies, input),
   }
 }
 

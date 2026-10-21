@@ -629,7 +629,6 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   LucideMapPin as MapPin,
   LucidePause as PauseIcon,
-  LucidePencilLine as PencilLine,
   LucidePlay as PlayIcon,
   LucideFunnel as FilterIcon,
   LucideShare2 as ShareIcon,

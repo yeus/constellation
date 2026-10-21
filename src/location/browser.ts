@@ -165,10 +165,7 @@ const clearFreshnessTimers = (store: LocationStateStore): void => {
   store.freshnessTimers = []
 }
 
-const updateFreshness = (
-  store: LocationStateStore,
-  observation: LocationObservationV1,
-): void => {
+const updateFreshness = (store: LocationStateStore, observation: LocationObservationV1): void => {
   if (!['live', 'delayed', 'stale', 'acquiring'].includes(store.state.status)) return
   emitLocationState(
     store,
@@ -176,10 +173,7 @@ const updateFreshness = (
   )
 }
 
-const scheduleFreshness = (
-  store: LocationStateStore,
-  observation: LocationObservationV1,
-): void => {
+const scheduleFreshness = (store: LocationStateStore, observation: LocationObservationV1): void => {
   clearFreshnessTimers(store)
   const transitions = [observation.capturedAt + store.timing.liveWindowMs, observation.expiresAt]
     .map((at) => at - store.timing.now())
@@ -189,10 +183,7 @@ const scheduleFreshness = (
   )
 }
 
-const receiveLocationPosition = (
-  store: LocationStateStore,
-  position: BrowserPosition,
-): void => {
+const receiveLocationPosition = (store: LocationStateStore, position: BrowserPosition): void => {
   const observation = observationFromPosition(
     store.options.sourceId,
     position,
@@ -249,10 +240,7 @@ const stopWatching = (store: WatchStore): void => {
   store.watchId = undefined
 }
 
-const receiveWatchError = (
-  store: WatchStore,
-  error: BrowserPositionError,
-): void => {
+const receiveWatchError = (store: WatchStore, error: BrowserPositionError): void => {
   if (error.code === 1) {
     stopWatching(store)
     store.state.emitState({ status: 'denied' })
@@ -261,11 +249,7 @@ const receiveWatchError = (
   store.state.emitState({ status: 'error', code: locationErrorCode(error.code) })
 }
 
-const acceptWatchId = (
-  store: WatchStore,
-  generation: number,
-  startedWatchId: number,
-): void => {
+const acceptWatchId = (store: WatchStore, generation: number, startedWatchId: number): void => {
   if (generation !== store.watchGeneration) {
     void store.options.geolocation?.clearWatch(startedWatchId)
     return
@@ -321,9 +305,7 @@ const startWatching = (store: WatchStore): void => {
 const stopWatchingAndReset = (store: WatchStore): void => {
   stopWatching(store)
   store.state.emitState(
-    store.options.geolocation
-      ? { status: 'permission-required' }
-      : { status: 'unavailable' },
+    store.options.geolocation ? { status: 'permission-required' } : { status: 'unavailable' },
   )
 }
 
