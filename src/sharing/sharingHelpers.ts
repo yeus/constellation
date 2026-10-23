@@ -278,6 +278,7 @@ export const snapshot = (ctx: SharingContext) => (): PrivateState => {
     privateKey: ctx.privateKey,
     pendingSharingBehavior: ctx.pendingSharingBehavior,
     sharingBehavior: ctx.sharingBehavior,
+    mapCamera: ctx.mapCamera,
     paused: ctx.paused,
     deviceComparisons: [...ctx.deviceComparisons.values()].filter(
       (entry) => entry.confirmedAt !== undefined && ctx.comparisonIsCurrent(entry),
@@ -322,7 +323,11 @@ export const persist =
 export const useEphemeralIdentity = (ctx: SharingContext) => async (): Promise<void> => {
   ctx.privateStateAvailable = false
   ctx.privateKey ??= await generateKeyPair('Ed25519')
-  ctx.publish({ canSave: false, message: 'Protected storage is unavailable; preview only.' })
+  ctx.publish({
+    privateStateReady: true,
+    canSave: false,
+    message: 'Protected storage is unavailable; preview only.',
+  })
 }
 
 const loadPrivateState = async (
@@ -493,6 +498,7 @@ const restoreFollows = async (ctx: SharingContext, saved: PrivateState | undefin
 }
 
 const restoreRelations = (ctx: SharingContext, saved: PrivateState | undefined) => {
+  ctx.mapCamera = saved?.mapCamera
   for (const preference of saved?.peerNamePreferences ?? []) {
     ctx.peerNamePreferences.set(preference.peerId, preference)
   }
@@ -570,7 +576,7 @@ const prepareFromStore = async (
   changed = pruneRestoredRelations(ctx) || changed
   if (saved && changed) await ctx.persist()
   applyInitialLocation(ctx)
-  ctx.publish()
+  ctx.publish({ privateStateReady: true, ...(ctx.mapCamera ? { mapCamera: ctx.mapCamera } : {}) })
 }
 
 export const prepareState = (ctx: SharingContext) => (): Promise<void> => {

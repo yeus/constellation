@@ -149,6 +149,7 @@ import {
   MAP_ATTRIBUTION,
   type MapFamily,
 } from '../map/pmtiles.ts'
+import type { MapCamera } from '../map/mapCamera.ts'
 import PeerAvatar from './PeerAvatar.vue'
 
 const LOCATION_SOURCE_ID = 'constellation-locations'
@@ -159,6 +160,7 @@ const props = withDefaults(
     decluttering: MapDeclutteringPreferences
     pmtilesUrl?: string
     mapFamily?: MapFamily
+    initialCamera?: MapCamera
     cacheMaxBytes?: number
   }>(),
   { pmtilesUrl: DEFAULT_WORLD_PMTILES_URL, mapFamily: 'default' },
@@ -170,6 +172,7 @@ const emit = defineEmits<{
   ownAreaHidden: [hidden: boolean]
   areaOverflow: [shareIds: string[]]
   diagnostic: [entry: SessionLogInput]
+  cameraChange: [camera: MapCamera]
 }>()
 
 const mapElement = ref<HTMLDivElement | null>(null)
@@ -303,6 +306,11 @@ const configureMapEvents = (target: Map): void => {
   target.on('move', schedulePresentation)
   target.on('zoom', refreshPresentation)
   target.on('resize', schedulePresentation)
+  target.on('moveend', () => {
+    if (target !== map) return
+    const center = target.getCenter()
+    emit('cameraChange', { longitude: center.lng, latitude: center.lat, zoom: target.getZoom() })
+  })
   target.on('error', ({ error }) => handleMapError(error))
 }
 
@@ -318,8 +326,10 @@ const initialize = (): void => {
     map = new Map({
       container: mapElement.value,
       style: createWorldStyle(props.pmtilesUrl, props.mapFamily, theme.value),
-      center: [0, 20],
-      zoom: 1.5,
+      center: props.initialCamera
+        ? [props.initialCamera.longitude, props.initialCamera.latitude]
+        : [0, 20],
+      zoom: props.initialCamera?.zoom ?? 1.5,
       attributionControl: false,
     })
     map.addControl(new NavigationControl(), 'bottom-right')

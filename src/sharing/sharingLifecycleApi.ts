@@ -1,6 +1,7 @@
 import type { NetworkDiagnostics, SharingRuntime } from './sharingContracts.ts'
 
 export { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
+import { isDefaultMapCamera, MapCameraSchema } from '../map/mapCamera.ts'
 
 import { SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
 import { classifyTransport } from './transport.ts'
@@ -16,6 +17,7 @@ export const createLifecycleApi = (
   | 'initialize'
   | 'subscribe'
   | 'setVisible'
+  | 'setMapCamera'
   | 'setPaused'
   | 'stop'
 > => ({
@@ -24,6 +26,7 @@ export const createLifecycleApi = (
   initialize: createInitialize(ctx),
   subscribe: createSubscribe(ctx),
   setVisible: createSetVisible(ctx),
+  setMapCamera: createSetMapCamera(ctx),
   setPaused: createSetPaused(ctx),
   stop: createStop(ctx),
 })
@@ -107,6 +110,30 @@ const createSubscribe =
     return () => ctx.observers.delete(observer)
   }
 
+const createSetMapCamera =
+  (ctx: SharingContext): SharingRuntime['setMapCamera'] =>
+  (input) => {
+    if (!ctx.store || !ctx.privateStateAvailable || !ctx.state.privateStateReady) return
+    const parsed = MapCameraSchema.safeParse(input)
+    if (!parsed.success) return
+    const camera = parsed.data
+    if (!ctx.mapCamera && isDefaultMapCamera(camera)) return
+    if (
+      ctx.mapCamera &&
+      ctx.mapCamera.longitude === camera.longitude &&
+      ctx.mapCamera.latitude === camera.latitude &&
+      ctx.mapCamera.zoom === camera.zoom
+    )
+      return
+    ctx.mapCamera = camera
+    ctx.state = { ...ctx.state, mapCamera: camera }
+    if (ctx.mapCameraSaveTimer !== undefined) window.clearTimeout(ctx.mapCameraSaveTimer)
+    ctx.mapCameraSaveTimer = window.setTimeout(() => {
+      ctx.mapCameraSaveTimer = undefined
+      void ctx.persist().catch(() => undefined)
+    }, 1500)
+  }
+
 const createSetVisible =
   (ctx: SharingContext): SharingRuntime['setVisible'] =>
   (nextVisible, acquireLocation = true) => {
@@ -159,6 +186,11 @@ const createStop =
     }
     window.clearInterval(ctx.heartbeatSweep)
     if (ctx.noticeTimer !== undefined) window.clearTimeout(ctx.noticeTimer)
+    if (ctx.mapCameraSaveTimer !== undefined) {
+      window.clearTimeout(ctx.mapCameraSaveTimer)
+      ctx.mapCameraSaveTimer = undefined
+      await ctx.persist().catch(() => undefined)
+    }
     if (ctx.traceSaveTimer !== undefined) {
       window.clearTimeout(ctx.traceSaveTimer)
       ctx.traceSaveTimer = undefined

@@ -2,6 +2,7 @@ import type { PrivateKey } from '@libp2p/interface'
 import type { BrowserLocationState } from '../location/browser.ts'
 import type { ApproximationState } from '../location/approximation.ts'
 import type { LocationObservationV1 } from '../location/locationObservation.ts'
+import type { MapCamera } from '../map/mapCamera.ts'
 import type { ShareBatteryPolicy, ShareDraft, ShareNetworkPolicy } from '../shareDraft.ts'
 import type { DeviceComparison } from './deviceComparison.ts'
 import type { FollowTraceEvent } from './followTrace.ts'
@@ -79,6 +80,8 @@ export interface OldShareSummary {
 }
 
 export interface SharingRuntimeState {
+  readonly privateStateReady?: boolean
+  readonly mapCamera?: MapCamera
   readonly sharingBehavior?: SharingBehavior
   readonly paused: boolean
   readonly deviceComparisons?: readonly DeviceComparison[]
@@ -275,6 +278,7 @@ export interface SharingRuntime {
   dismissStoppedViewer: (shareId: string, peerId: string) => Promise<void>
   markReturnPromptSeen: (shareId: string) => Promise<void>
   initialize: () => Promise<void>
+  setMapCamera: (camera: MapCamera) => void
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
   createShare: (
     draft: ShareDraft,

@@ -3,6 +3,7 @@ import { MAX_END_NOTIFICATIONS } from './shareLifecycle.ts'
 import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
 
+import { MapCameraSchema } from '../map/mapCamera.ts'
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { DeviceComparison, ComparisonBudget } from './deviceComparison.ts'
 import { PeerNamePreference } from './peerNames.ts'
@@ -109,6 +110,7 @@ const ReturnOfferRecord = z.object({
 const PrivateStateSchema = z.object({
   sharingBehavior: SharingBehavior.optional(),
   paused: z.boolean().optional(),
+  mapCamera: MapCameraSchema.optional(),
   version: z.literal(1),
   deviceComparisons: z.array(DeviceComparison).max(256).optional(),
   comparisonBudgets: z.array(ComparisonBudget).max(256).optional(),

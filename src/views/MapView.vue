@@ -6,7 +6,9 @@
   >
     <div class="map-surface" aria-label="Location map">
       <LocationMap
+        v-if="runtimeState.privateStateReady"
         ref="locationMap"
+        :initial-camera="runtimeState.mapCamera"
         :locations="locations"
         :decluttering="mapDecluttering"
         :map-family="mapFamily"
@@ -17,6 +19,7 @@
         @select-group="openGroupPeers"
         @own-area-hidden="ownAreaHidden = $event"
         @diagnostic="sessionLog.record"
+        @camera-change="runtime.setMapCamera"
       />
     </div>
 
@@ -1787,10 +1790,15 @@ const ownObservation = computed(() => {
 })
 let initiallyCentered = false
 watch(
-  ownObservation,
-  (observation) => {
+  [ownObservation, () => runtimeState.value.privateStateReady],
+  ([observation, ready]) => {
     if (observation && localError.value === 'Waiting for your location…') localError.value = ''
-    if (!observation || initiallyCentered || !locationMap.value) return
+    if (!ready || !locationMap.value || initiallyCentered) return
+    if (runtimeState.value.mapCamera) {
+      initiallyCentered = true
+      return
+    }
+    if (!observation) return
     locationMap.value.centerOn(locationObservationToMapLocation(observation))
     initiallyCentered = true
   },

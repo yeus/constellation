@@ -1,3 +1,4 @@
+import type { MapCamera } from '../map/mapCamera.ts'
 import type { PrivateKey } from '@libp2p/interface'
 import type { BrowserLibp2pNode } from '@taskyon/p2p-core/browser'
 import type { BrowserLocationSource } from '../location/browser.ts'
@@ -86,6 +87,8 @@ const createRuntimeFlags = () => {
   let noticeTimer: number | undefined
   let traceSaveTimer: number | undefined
   const lastTraceSavedAt = 0
+  let mapCameraSaveTimer: number | undefined
+  let mapCamera: MapCamera | undefined
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
   const visible = true
@@ -107,6 +110,8 @@ const createRuntimeFlags = () => {
     peer,
     traceSaveTimer,
     lastTraceSavedAt,
+    mapCameraSaveTimer,
+    mapCamera,
     handlerNode,
     visible,
     paused,
@@ -127,6 +132,7 @@ const createInitialState = (
   store: PrivateStateStore | undefined,
 ): SharingRuntimeState => ({
   peerStatus: 'offline',
+  privateStateReady: !store,
   paused: false,
   location: locationSource.getState(),
   shares: [],

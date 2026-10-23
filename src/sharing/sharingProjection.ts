@@ -1,6 +1,7 @@
 import { privateKeyToProtobuf } from '@libp2p/crypto/keys'
 import type { PrivateKey } from '@libp2p/interface'
 import type { LocationObservationV1 } from '../location/locationObservation.ts'
+import type { MapCamera } from '../map/mapCamera.ts'
 import type { ComparisonBudget, DeviceComparison } from './deviceComparison.ts'
 import { bytesToBase64Url } from './encoding.ts'
 import type { PeerNamePreference } from './peerNames.ts'
@@ -250,6 +251,7 @@ export interface SnapshotProjectionInput {
   readonly privateKey: PrivateKey
   readonly pendingSharingBehavior: SharingBehavior | undefined
   readonly sharingBehavior: SharingBehavior | undefined
+  readonly mapCamera: MapCamera | undefined
   readonly paused: boolean
   readonly deviceComparisons: DeviceComparison[]
   readonly comparisonBudgets: ComparisonBudget[]
@@ -333,6 +335,7 @@ export const snapshotPrivateState = (input: SnapshotProjectionInput): PrivateSta
   return {
     ...(behavior ? { sharingBehavior: behavior } : {}),
     ...(input.paused ? { paused: true } : {}),
+    ...(input.mapCamera ? { mapCamera: input.mapCamera } : {}),
     version: 1,
     deviceComparisons: input.deviceComparisons,
     comparisonBudgets: input.comparisonBudgets,
