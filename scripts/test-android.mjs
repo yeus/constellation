@@ -1211,6 +1211,10 @@ const readBackgroundTransportSummary = async (cdp) => {
         (sum, share) => sum + (share.viewerCount ?? 0),
         0,
       ),
+      confirmedViewerCount: (status.shares ?? [])
+        .flatMap((share) => share.viewers ?? [])
+        .filter((viewer) => viewer.deliveryVerification === 'supported' &&
+          typeof viewer.lastConfirmedAt === 'number').length,
       connections: (status.diagnostics?.connections ?? []).map((connection) => ({
         role: connection.role,
         transport: connection.transport,
@@ -3823,6 +3827,11 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       { cause: error },
     )
   }
+  await waitFor(
+    async () => (await readBackgroundTransportSummary(cdp)).confirmedViewerCount > 0,
+    'an authenticated v3 location-delivery receipt from the browser viewer',
+    30_000,
+  )
   const updatesBeforeLock = await receivedUpdateCount(viewer)
   console.log('[android-test] checking locked-screen update')
   adb(['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
@@ -4268,8 +4277,269 @@ const runStopNoticeSmoke = async () => {
   )
 }
 
+// Receiver-side standby acceptance. Run against an isolated Android emulator with
+// ANDROID_SERIAL set; the browser acts as an independently authenticated sender.
+const runReceiverStandbySmoke = async () => {
+  let relay
+  let server
+  let browser
+  let context
+  let cdp
+  try {
+    adb(['shell', 'pm', 'clear', packageName])
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    grantIfSupported('android.permission.POST_NOTIFICATIONS')
+    relay = await startLocalRelay()
+    server = await startWebServer('preview')
+    adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+    cdp = await connectCdp()
+    await waitForNativeApp(cdp, 'the Android receiver')
+    await configureAndroidBackgroundSharing(cdp)
+    browser = await chromium.launch({ env: browserProcessEnvironment(process.env) })
+    context = await browser.newContext({
+      geolocation: { latitude: 40.1111, longitude: -70.1111 },
+      permissions: ['geolocation'],
+    })
+    const sender = await context.newPage()
+    await sender.goto('http://127.0.0.1:4173/', { waitUntil: 'domcontentloaded' })
+    const invitation = await createBrowserStarShare(sender, 'Standby E2E sender')
+    assert.equal(await followOnAndroid(cdp, process.env.ANDROID_SERIAL, invitation, 1), true)
+    await waitFor(
+      async () =>
+        (await cdp.evaluate(`
+      window.__TAURI_INTERNALS__?.invoke('android_load_private_state')
+        .then((stored) => JSON.parse(stored.state).followed.length)`)) === 1,
+      'a durably saved incoming subscription',
+      30_000,
+    )
+
+    assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
+    assert.equal(await clickButton(cdp, 'Settings'), true)
+    await waitFor(
+      () =>
+        cdp.evaluate(`Boolean(
+      document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+    )`),
+      'global background following switch',
+    )
+    assert.equal(
+      await cdp.evaluate(`(() => {
+      const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+      if (!checkbox || checkbox.disabled || checkbox.checked) return false
+      checkbox.click()
+      return true
+    })()`),
+      true,
+    )
+    const status = () =>
+      cdp.evaluate(`window.__TAURI_INTERNALS__?.invoke('android_receiver_ownership')`)
+    await waitFor(
+      async () => {
+        const owner = await status()
+        return (
+          owner?.owner === 'service' &&
+          owner?.generation >= 1 &&
+          owner?.status?.following?.some((entry) => entry.shareId)
+        )
+      },
+      'one service-owned saved receiver with a native ownership generation',
+      45_000,
+    )
+    const generation = (await status()).generation
+    assert.ok(generation > 0)
+    adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+    adb(['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
+    try {
+      await context.setGeolocation({ latitude: 40.1112, longitude: -70.1112 })
+      adb(['shell', 'dumpsys', 'deviceidle', 'force-idle'])
+      await wait(5_000) // Receiving during Doze is best-effort, never required.
+    } finally {
+      adb(['shell', 'dumpsys', 'deviceidle', 'unforce'])
+      adb(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
+      adb(['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
+    }
+    await context.setGeolocation({ latitude: 40.1113, longitude: -70.1113 })
+    await waitFor(
+      async () => {
+        const owner = await status()
+        return (
+          owner.owner === 'service' &&
+          owner.generation === generation &&
+          owner.status?.received?.length > 0
+        )
+      },
+      'a verified received location after screen-lock/Doze exit',
+      90_000,
+    )
+    adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+    await waitForNativeApp(cdp, 'the foreground Activity after standby')
+    const ownerAfter = await status()
+    assert.equal(ownerAfter.owner, 'service')
+    assert.equal(ownerAfter.generation, generation)
+
+    // Exercise the same native request as the ongoing notification's stop action.
+    adb([
+      'shell',
+      'am',
+      'startservice',
+      '-n',
+      `${packageName}/space.taskyon.constellation.plugin.LocationShareService`,
+      '-a',
+      'space.taskyon.constellation.RECEIVER_STOP',
+      '--es',
+      'space.taskyon.constellation.SHARE_REQUEST',
+      JSON.stringify({ generation }),
+    ])
+    await waitFor(
+      async () => (await status()).owner === 'activity',
+      'native receiver notification-stop ownership release',
+      30_000,
+    )
+    await waitFor(
+      () =>
+        cdp.evaluate(`
+      Boolean(document.body?.innerText?.includes('Seeing 1'))
+    `),
+      'foreground viewer restoration after native Stop',
+      30_000,
+    )
+  } finally {
+    cdp?.close()
+    await context?.close()
+    await browser?.close()
+    if (server) await stopChild(server)
+    if (relay) await stopChild(relay)
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      // Best-effort cleanup; the emulator may already have dropped the reverse.
+    }
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+}
+
+// Two independent Android app processes: A sends, B receives without obtaining
+// local-location permission. Verify the v3 receipt originates from B.
+const runTwoAndroidReceiverStandbySmoke = async (sourceSerial, receiverSerial) => {
+  let relay
+  let source
+  let receiver
+  try {
+    relay = await startLocalRelay()
+    for (const serial of [sourceSerial, receiverSerial]) {
+      adbFor(serial, ['shell', 'pm', 'clear', packageName])
+      adbFor(serial, ['reverse', 'tcp:9111', 'tcp:9111'])
+      adbFor(serial, ['shell', 'pm', 'grant', packageName, 'android.permission.POST_NOTIFICATIONS'])
+    }
+    for (const permission of ['ACCESS_FINE_LOCATION', 'ACCESS_BACKGROUND_LOCATION']) {
+      adbFor(sourceSerial, [
+        'shell',
+        'pm',
+        'grant',
+        packageName,
+        `android.permission.${permission}`,
+      ])
+    }
+    adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0001', '40.0001'])
+    for (const serial of [sourceSerial, receiverSerial]) {
+      adbFor(serial, ['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+    }
+    source = await connectCdp(sourceSerial, 9222)
+    receiver = await connectCdp(receiverSerial, 9223)
+    await waitForNativeApp(source, 'Android source')
+    await waitForNativeApp(receiver, 'Android receiver')
+    const sourceLink = await createAndroidStarShare(source, 'Sender A')
+    await configureAndroidBackgroundSharing(receiver)
+    assert.equal(await followOnAndroid(receiver, receiverSerial, sourceLink, 1), true)
+
+    const receiverStatus = () =>
+      receiver.evaluate(`window.__TAURI_INTERNALS__?.invoke('android_receiver_ownership')`)
+    assert.equal(await clickAriaButton(receiver, 'Open menu'), true)
+    assert.equal(await clickButton(receiver, 'Settings'), true)
+    assert.equal(
+      await receiver.evaluate(`(() => {
+      const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+      if (!checkbox || checkbox.disabled || checkbox.checked) return false
+      checkbox.click()
+      return true
+    })()`),
+      true,
+    )
+    await waitFor(
+      async () => {
+        const status = await receiverStatus()
+        return status?.owner === 'service' && status?.status?.following?.length === 1
+      },
+      'service-owned Android-to-Android receiver',
+      45_000,
+    )
+    const generation = (await receiverStatus()).generation
+    await waitFor(
+      async () => (await readBackgroundTransportSummary(source)).confirmedViewerCount > 0,
+      'acknowledged location from Android receiver to Android sender',
+      60_000,
+    )
+    const before = (await receiverStatus()).status.received[0]?.observation?.capturedAt ?? 0
+    adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+    adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
+    try {
+      adbFor(receiverSerial, ['shell', 'dumpsys', 'deviceidle', 'force-idle'])
+      adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0051', '40.0051'])
+      await wait(5_000)
+    } finally {
+      adbFor(receiverSerial, ['shell', 'dumpsys', 'deviceidle', 'unforce'])
+      adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
+      adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
+    }
+    adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0081', '40.0081'])
+    await waitFor(
+      async () => {
+        const status = await receiverStatus()
+        return (
+          status.owner === 'service' &&
+          status.generation === generation &&
+          (status.status?.received?.[0]?.observation?.capturedAt ?? 0) > before
+        )
+      },
+      'fresh Android-to-Android observation after Doze exit',
+      90_000,
+    )
+    assert.equal(
+      (await readBackgroundTransportSummary(source)).viewerCount,
+      1,
+      'exactly one authenticated viewer after Android receiver recovery',
+    )
+    await receiver.evaluate(`window.__TAURI_INTERNALS__?.invoke(
+      'android_stop_background_receiver', { generation: ${generation} }
+    )`)
+    await waitFor(
+      async () => (await receiverStatus()).owner === 'activity',
+      'Android receiver handoff back to Activity',
+      30_000,
+    )
+  } finally {
+    source?.close()
+    receiver?.close()
+    if (relay) await stopChild(relay)
+    for (const serial of [sourceSerial, receiverSerial]) {
+      try {
+        adbFor(serial, ['shell', 'dumpsys', 'deviceidle', 'unforce'])
+        adbFor(serial, ['reverse', '--remove', 'tcp:9111'])
+        adbFor(serial, ['shell', 'am', 'force-stop', packageName])
+      } catch {
+        // Best-effort cleanup across two independently failing devices.
+      }
+    }
+  }
+}
+
 const main = async () => {
   const serials = process.env.ANDROID_SERIALS?.split(',')
+  if (serials?.length === 2 && process.argv.includes('--two-android-receiver-standby-smoke')) {
+    await runTwoAndroidReceiverStandbySmoke(serials[0], serials[1])
+    console.log('Android-to-Android ACK, receiver Doze recovery and ownership handoff passed.')
+    return
+  }
   if (serials?.length === 2) {
     await runThreeWayFlow(serials[0], serials[1])
     return
@@ -4285,6 +4555,13 @@ const main = async () => {
     )
   }
 
+  if (process.argv.includes('--receiver-standby-smoke')) {
+    await runReceiverStandbySmoke()
+    console.log(
+      'Android receiver ownership, locked-screen recovery, and native Stop handoff passed.',
+    )
+    return
+  }
   if (process.argv.includes('--notification-pause-smoke')) {
     await runNotificationPauseSmoke()
     console.log('Android notification Pause/Resume actions preserved the same active link.')

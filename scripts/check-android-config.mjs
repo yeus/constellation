@@ -97,11 +97,15 @@ assert.match(cargo, /tauri-plugin-constellation-android/)
 for (const permission of [
   'android.permission.ACCESS_BACKGROUND_LOCATION',
   'android.permission.FOREGROUND_SERVICE_LOCATION',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.POST_NOTIFICATIONS',
 ]) {
   assert.match(manifest, new RegExp(permission))
 }
-assert.match(serviceManifest, /android:foregroundServiceType="location"/)
+assert.match(serviceManifest, /android:foregroundServiceType="location\\|specialUse"/)
+assert.match(serviceManifest, /android\.app\.PROPERTY_SPECIAL_USE_FGS_SUBTYPE/)
+assert.match(androidPlugin, /fun startBackgroundReceiver\(invoke: Invoke\)/)
+assert.match(androidPlugin, /fun stopBackgroundReceiver\(invoke: Invoke\)/)
 assert.match(manifest, /android\.intent\.action\.SEND/)
 assert.match(manifest, /android:mimeType="text\/plain"/)
 assert.match(androidPlugin, /fun takeSharedText\(invoke: Invoke\)/)
@@ -259,7 +263,7 @@ assert.match(androidPlugin, /requestPermissionForAlias\("backgroundLocation"/)
 assert.match(androidPlugin, /requestPermissionForAlias\("notifications"/)
 assert.match(androidPlugin, /ACTION_SET_SHARING_BEHAVIOR && locationGrant\(activity\) == "none"/)
 assert.match(androidPlugin, /activity\.startService\(intent\)/)
-assert.match(locationService, /if \(locationGrant\(this\) != "none"\)/)
+assert.ok(locationService.includes('val location = locationGrant(this) != "none" &&'))
 assert.match(backgroundEntry, /state\.runtime\.setSharingBehavior\(command\.behavior\)/)
 assert.match(
   backgroundEntry,

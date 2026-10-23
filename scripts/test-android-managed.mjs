@@ -231,6 +231,9 @@ const runThreeWay = async () => {
       [
         'scripts/test-android.mjs',
         ...(process.argv.includes('--preview-second-link') ? ['--preview-second-link'] : []),
+        ...(process.argv.includes('--two-android-receiver-standby-smoke')
+          ? ['--two-android-receiver-standby-smoke']
+          : []),
       ],
       {
         env: {
@@ -311,6 +314,26 @@ const main = async () => {
     } else buildThreeWayApk()
     await runThreeWay()
     console.log('Two Android API 36 peers and one desktop browser passed the three-way test.')
+    return
+  }
+  if (process.argv.includes('--two-android-receiver-standby-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runThreeWay()
+    console.log('Two Android devices validated authenticated standby reception and ACK.')
+    return
+  }
+  if (process.argv.includes('--receiver-standby-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    await runProfile('modern', undefined, ['--receiver-standby-smoke'], threeWayApk)
+    console.log('Saved Android receiver survived screen lock and restored Activity ownership.')
     return
   }
   if (!process.argv.includes('--skip-build')) {

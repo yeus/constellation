@@ -1,0 +1,109 @@
+name: Android Native and Standby Verification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'src/android/**'
+      - 'src/sharing/**'
+      - 'src/components/SettingsSheet.vue'
+      - 'src/views/MapView.vue'
+      - 'scripts/test-android*.mjs'
+      - 'scripts/check-android-config.mjs'
+      - '.github/workflows/android-standby.yml'
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  ANDROID_API_LEVEL: '36'
+  ANDROID_BUILD_TOOLS: '35.0.0'
+  ANDROID_NDK_VERSION: '28.2.13676358'
+  VITE_CONSTELLATION_RELAY_ADDRS: /ip4/127.0.0.1/tcp/9111/ws
+
+jobs:
+  native-build:
+    name: Compile Android Kotlin and Rust APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: android-actions/setup-android@v4
+      - name: Accept SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+      - name: Install Android SDK
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+      - name: Dependencies
+        run: |
+          corepack enable
+          corepack yarn install --immutable
+      - name: Static verification
+        run: |
+          corepack yarn test:android:config
+          corepack yarn typecheck
+      - name: Native debug APK
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          export NDK_HOME="$ANDROID_NDK_HOME"
+          corepack yarn build:android:debug:x86_64-emulator
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-standby-debug-apk
+          path: dist/constellation-android-debug-x86_64.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  receiver-standby-emulator:
+    name: Receiver standby emulator smoke (manual gate)
+    if: github.event_name == 'workflow_dispatch'
+    needs: native-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack yarn install --immutable
+          corepack yarn build:vendor
+          corepack yarn playwright install --with-deps chromium
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-standby-debug-apk
+          path: dist
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r dist/constellation-android-debug-x86_64.apk
+            corepack yarn test:android:e2e --receiver-standby-smoke
