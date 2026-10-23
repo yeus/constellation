@@ -27,6 +27,28 @@ test('unpaired and unsupported checks are skipped without creating a sharing ses
   assert.equal(summarizeDiagnostics(results).passed, 0)
 })
 
+test('exposes the PMTiles cache check and skips it when browser storage is unavailable', async () => {
+  const suite = createSharingDiagnostics({
+    shareBaseUrl: 'https://example.test/',
+    createSession: () => {
+      throw new Error('Unexpected session')
+    },
+    capabilities: () => ({ secureContext: true, crypto: true, webRTC: true }),
+    pairing: () => ({ role: 'none', url: '' }),
+    invitation: () => undefined,
+    stage: () => undefined,
+  })
+  assert.ok(suite.catalog.some((entry) => entry.id === 'local.pmtiles-cache'))
+  const results = await suite.run(
+    'local.pmtiles-cache',
+    new AbortController().signal,
+    () => undefined,
+  )
+  assert.equal(results.length, 1)
+  assert.equal(results[0]?.status, 'skipped')
+  assert.equal(results[0]?.code, 'prerequisite-unavailable')
+})
+
 test('diagnostic reports contain controlled outcomes and exclude arbitrary errors and details', () => {
   const result = diagnosticResult(
     {

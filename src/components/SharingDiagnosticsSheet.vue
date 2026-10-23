@@ -17,7 +17,8 @@
       </header>
       <button class="secondary-action" type="button" @click="leave">Back to diagnostics</button>
       <p class="field-help">
-        Run one check, a category, or the suite. Paired checks use fictional locations over your
+        Run one check, a category, or the suite. Local checks include browser capabilities, the
+        PMTiles map cache and location markers. Paired checks use fictional locations over your
         actual network. They create temporary test links and leave your ordinary shares alone.
       </p>
       <label

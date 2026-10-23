@@ -9,6 +9,7 @@ import { parseShareInvitation } from '../sharing/shareLink.ts'
 import { createShareDraft } from '../shareDraft.ts'
 import { TRANSPORT_KINDS } from '../sharing/transport.ts'
 import { createLocationFeatureCollection } from '../location/mapModel.ts'
+import { createPmtilesCacheDiagnostic } from './pmtilesCacheDiagnostic.ts'
 import {
   runPairedDiagnostic,
   runNativeDiagnostic,
@@ -245,6 +246,16 @@ const markersEntry = (): SharingDiagnosticCatalogEntry => ({
   fn: () => checkLocationMarkers(),
 })
 
+const pmtilesCacheEntry = (): SharingDiagnosticCatalogEntry => ({
+  id: 'local.pmtiles-cache',
+  name: 'PMTiles cache',
+  category: 'local',
+  description:
+    'Check sparse range reuse, real storage packs, compaction, offline reads and clearing.',
+  fn: createPmtilesCacheDiagnostic(),
+  timeoutMs: 30_000,
+})
+
 const networkEntry = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry => ({
   id: 'network.reachability',
   name: 'Sharing network reachability',
@@ -314,6 +325,7 @@ const androidEntry = (state: SharingDiagnosticState): SharingDiagnosticCatalogEn
 const createCatalog = (state: SharingDiagnosticState): SharingDiagnosticCatalogEntry[] => [
   capabilitiesEntry(state),
   markersEntry(),
+  pmtilesCacheEntry(),
   networkEntry(state),
   pairedEntry(
     state,

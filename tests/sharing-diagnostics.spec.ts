@@ -24,13 +24,29 @@ test('runs the suite with explicit skipped results and a safe copyable report', 
   ).toContainText('Finished', { timeout: 30_000 })
   const report = JSON.parse(await page.getByLabel('Diagnostic results').inputValue())
   expect(report.summary.failed).toBe(0)
-  expect(report.summary.passed).toBe(3)
+  expect(report.summary.passed).toBe(4)
   expect(report.summary.skipped).toBe(4)
   expect(report.results.every((result: { id: string }) => result.id)).toBe(true)
   expect(JSON.stringify(report)).not.toMatch(/#share=|\/ip4\/|latitude|longitude|peerId|https:\/\//)
   await page.getByRole('button', { name: 'Back to diagnostics' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page.locator('.dock-peers')).toContainText('Sharing 0 · Seeing 0')
+})
+
+test('runs the PMTiles cache diagnostic against real browser storage', async ({ page }) => {
+  await openSuite(page)
+  await page
+    .getByRole('group', { name: 'PMTiles cache', exact: true })
+    .getByRole('button', { name: 'Run test', exact: true })
+    .click()
+  await expect(
+    page.getByRole('dialog', { name: 'Sharing diagnostics', exact: true }).getByRole('status'),
+  ).toContainText('Finished: 1 passed', { timeout: 30_000 })
+  const report = JSON.parse(await page.getByLabel('Diagnostic results').inputValue())
+  expect(report.summary).toEqual({ passed: 1, failed: 0, skipped: 0, cancelled: 0 })
+  expect(JSON.stringify(report)).not.toMatch(/#share=|\/ip4\/|latitude|longitude|peerId/)
+  await page.getByRole('button', { name: 'Back to diagnostics' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
 })
 
 test('cancels a waiting pair and closes its temporary session', async ({ page }) => {
