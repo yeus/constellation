@@ -398,6 +398,134 @@ test('an external return receiver preserves saved follows without restoring view
   }
 })
 
+test('suspending foreground following leaves saved permissions intact and blocks restoration', async () => {
+  const invitation = await testInvitation('synthetic-sender')
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: await testPrivateKey(),
+    shares: [],
+    followed: [
+      {
+        url: invitation.url,
+        localName: 'Saved synthetic follow',
+        color: '#438ec9',
+        followedAt: 1_000,
+      },
+    ],
+  }
+  const restoreWindow = installSyntheticWindow()
+  const runtime = createTestRuntime(initial)
+  let attempts = 0
+  runtime.acceptShare = async () => {
+    attempts++
+  }
+  try {
+    await runtime.setFollowingSuspended(true)
+    await runtime.initialize()
+    assert.equal(attempts, 0)
+    await runtime.setFollowingSuspended(false)
+    assert.equal(attempts, 1)
+  } finally {
+    await runtime.stop()
+    restoreWindow()
+  }
+})
+
+test('native receiver shutdown waits for a confirmed encrypted-state write before releasing ownership', async () => {
+  const restoreWindow = installSyntheticWindow()
+  let release!: () => void
+  let saved!: () => void
+  const persistAllowed = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const saveStarted = new Promise<void>((resolve) => {
+    saved = resolve
+  })
+  const runtime = createTestRuntime(
+    {
+      version: 1,
+      privateKey: await testPrivateKey(),
+      shares: [],
+      followed: [],
+    },
+    {
+      save: async () => {
+        saved()
+        await persistAllowed
+      },
+    },
+  )
+  try {
+    await runtime.initialize()
+    let finished = false
+    const shutdown = runtime.stop({ requireDurableState: true }).then(() => {
+      finished = true
+    })
+    await saveStarted
+    assert.equal(finished, false)
+    release()
+    await shutdown
+    assert.equal(finished, true)
+  } finally {
+    release?.()
+    restoreWindow()
+  }
+})
+
+test('native ownership is not released after a failed durable shutdown save', async () => {
+  const restoreWindow = installSyntheticWindow()
+  const runtime = createTestRuntime(
+    {
+      version: 1,
+      privateKey: await testPrivateKey(),
+      shares: [],
+      followed: [],
+    },
+    {
+      save: async () => {
+        throw new Error('Durable state unavailable')
+      },
+    },
+  )
+  try {
+    await runtime.initialize()
+    await assert.rejects(runtime.stop({ requireDurableState: true }), /Durable state unavailable/)
+  } finally {
+    restoreWindow()
+  }
+})
+
+test('startup never redials a saved follow previously denied by the sharer', async () => {
+  const invitation = await testInvitation('denied-sender')
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: await testPrivateKey(),
+    shares: [],
+    followed: [
+      {
+        url: invitation.url,
+        localName: 'Denied follow',
+        color: '#438ec9',
+        approvalDenied: true,
+      },
+    ],
+  }
+  const restoreWindow = installSyntheticWindow()
+  const runtime = createTestRuntime(initial)
+  let attempts = 0
+  runtime.acceptShare = async () => {
+    attempts++
+  }
+  try {
+    await runtime.initialize()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    assert.equal(attempts, 0)
+  } finally {
+    await runtime.stop()
+    restoreWindow()
+  }
+})
+
 const comparisonFixtureState = async () => {
   const invitation = await testInvitation('synthetic-source')
   const comparison = {

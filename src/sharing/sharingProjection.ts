@@ -118,6 +118,15 @@ const projectShareViewers = (
         fingerprint: session.fingerprint!,
         displayName: displayedPeerName(preference, localName, 'Connected peer'),
         lastSeenAt: session.lastHeartbeatAt,
+        deliveryVerification: session.receiptCapable
+          ? ('supported' as const)
+          : ('unsupported' as const),
+        ...(session.pendingSince ? { pendingSince: session.pendingSince } : {}),
+        pendingObservations: session.delivery.pending.length,
+        ...(session.lastSubmittedAt ? { lastSubmittedAt: session.lastSubmittedAt } : {}),
+        ...(session.delivery.lastConfirmedAt !== null
+          ? { lastConfirmedAt: session.delivery.lastConfirmedAt }
+          : {}),
         ...(localName ? { localName } : {}),
         ...(preference?.receivedName ? { sourceName: preference.receivedName } : {}),
       }

@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { constellationProtocolV2, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import {
+  constellationProtocolV2,
+  constellationProtocolV3,
+  SHARE_STREAM_PROTOCOL,
+  SHARE_STREAM_PROTOCOL_V3,
+} from './shareProtocol.ts'
 
 test('combines share authorization and Taskyon sensor operations on one versioned stream', () => {
   assert.equal(SHARE_STREAM_PROTOCOL, '/constellation/location-share/2.0.0')
@@ -105,4 +110,63 @@ test('offline stop notices do not require a location session or expose location 
     }).success,
     false,
   )
+})
+
+test('v3 acknowledges only an identified observation while leaving v2 unchanged', () => {
+  assert.equal(SHARE_STREAM_PROTOCOL_V3, '/constellation/location-share/3.0.0')
+  const request = {
+    type: 'share.heartbeatRequest',
+    requestId: 'heartbeat-1',
+    sessionId: 'synthetic-session-id',
+    receipt: { sourceId: 'synthetic-source', sequence: 17, capturedAt: 17000 },
+  }
+  assert.equal(constellationProtocolV3.message.safeParse(request).success, true)
+  assert.equal(constellationProtocolV2.message.safeParse(request).success, false)
+  assert.equal(
+    constellationProtocolV3.message.safeParse({
+      ...request,
+      receipt: { sequence: 17, capturedAt: 17000 },
+    }).success,
+    false,
+  )
+  assert.equal(
+    constellationProtocolV3.message.safeParse({
+      ...request,
+      receipt: { ...request.receipt, latitude: 4 },
+    }).success,
+    false,
+  )
+  assert.equal(
+    constellationProtocolV3.message.safeParse({
+      type: 'share.heartbeatRequest',
+      requestId: 'heartbeat-old',
+      sessionId: 'synthetic-session-id',
+    }).success,
+    true,
+  )
+})
+
+test('v3 delivery receipt travels through the typed heartbeat RPC', async () => {
+  const { createDuplexChannel, createPortClient, createPortServer } = await import(
+    '@taskyon/protocol'
+  )
+  const channel = createDuplexChannel<ReturnType<typeof constellationProtocolV3.message.parse>>()
+  const accepted: unknown[] = []
+  const stop = createPortServer(channel.y, constellationProtocolV3, {
+    share: {
+      heartbeat: (request) => {
+        accepted.push(request.receipt)
+        return { receivedAt: 12345 }
+      },
+    },
+  })
+  try {
+    const client = createPortClient(channel.x, constellationProtocolV3)
+    const receipt = { sourceId: 'synthetic-location-source', sequence: 4, capturedAt: 4000 }
+    const response = await client.share.heartbeat({ sessionId: 'synthetic-session-id', receipt })
+    assert.deepEqual(response, { receivedAt: 12345 })
+    assert.deepEqual(accepted, [receipt])
+  } finally {
+    stop()
+  }
 })

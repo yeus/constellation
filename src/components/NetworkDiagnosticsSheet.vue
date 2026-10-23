@@ -66,6 +66,22 @@
             · last fix {{ elapsed(background.location.observation.capturedAt) }} ago</span
           >
         </p>
+        <ul v-if="background.shares.some((share) => share.viewers?.length)">
+          <template v-for="share in background.shares" :key="share.shareId">
+            <li v-for="viewer in share.viewers ?? []" :key="viewer.fingerprint">
+              {{ viewer.displayName || 'Connected device' }} · last location submitted
+              {{ viewer.lastSubmittedAt ? `${elapsed(viewer.lastSubmittedAt)} ago` : 'not yet' }}
+              · delivery
+              <template v-if="viewer.deliveryVerification === 'unsupported'"
+                >unverified (older peer)</template
+              >
+              <template v-else-if="viewer.lastConfirmedAt"
+                >confirmed {{ elapsed(viewer.lastConfirmedAt) }} ago</template
+              >
+              <template v-else>awaiting acknowledgement</template>
+            </li>
+          </template>
+        </ul>
         <p v-if="pausedShareCount" class="field-help">
           Network restriction:
           {{

@@ -3,8 +3,9 @@ import type { NetworkDiagnostics, SharingRuntime } from './sharingContracts.ts'
 export { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
 import { isDefaultMapCamera, MapCameraSchema } from '../map/mapCamera.ts'
 
-import { SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import { SHARE_STREAM_PROTOCOLS } from './shareProtocol.ts'
 import { classifyTransport } from './transport.ts'
+import { restoreFollows } from './sharingHelpers.ts'
 
 import type { SharingContext } from './sharingContext.ts'
 
@@ -15,6 +16,8 @@ export const createLifecycleApi = (
   | 'setNetworkState'
   | 'networkDiagnostics'
   | 'initialize'
+  | 'setFollowingSuspended'
+  | 'recoverBackgroundSources'
   | 'subscribe'
   | 'setVisible'
   | 'setMapCamera'
@@ -24,6 +27,8 @@ export const createLifecycleApi = (
   setNetworkState: createSetNetworkState(ctx),
   networkDiagnostics: createNetworkDiagnostics(ctx),
   initialize: createInitialize(ctx),
+  recoverBackgroundSources: createRecoverBackgroundSources(ctx),
+  setFollowingSuspended: createSetFollowingSuspended(ctx),
   subscribe: createSubscribe(ctx),
   setVisible: createSetVisible(ctx),
   setMapCamera: createSetMapCamera(ctx),
@@ -70,6 +75,54 @@ const createNetworkDiagnostics =
     ),
   })
 
+const createSetFollowingSuspended =
+  (ctx: SharingContext): SharingRuntime['setFollowingSuspended'] =>
+  async (suspended) => {
+    if (suspended) {
+      if (ctx.followersSuspended) return
+      // Set before first load so read-only Activity restoration never writes
+      // cleaned-up state over the service's authoritative encrypted store.
+      ctx.followersSuspended = true
+      try {
+        await ctx.prepareState()
+        const closers = [...ctx.viewerClosers.values()]
+        await Promise.allSettled(closers.map((close) => close(false)))
+        for (const entry of ctx.followed.values()) entry.connected = false
+      } catch (error) {
+        ctx.followersSuspended = false
+        throw error
+      }
+      await ctx.persistence
+      ctx.publish()
+      return
+    }
+    await ctx.prepareState()
+    if (!ctx.followersSuspended) return
+    // The native owner has released its write fence. Reload its durable viewer
+    // state before any foreground dial or persistence can occur.
+    if (ctx.returnShareReceiver === 'local' && ctx.store) {
+      const stored = await ctx.store.load()
+      if (!stored || stored.privateKey !== ctx.snapshot().privateKey) {
+        throw new Error('Protected receiver identity changed; following remains suspended.')
+      }
+      ctx.followed.clear()
+      ctx.received.clear()
+      await restoreFollows(ctx, stored)
+    }
+    ctx.followersSuspended = false
+    await Promise.allSettled(
+      [...ctx.followed.values()]
+        .filter((entry) => entry.saved && !entry.terminal && !entry.approvalDenied)
+        .map((entry) =>
+          ctx.runtimeApi!.acceptShare(entry.url, {
+            localName: entry.localName,
+            saved: true,
+          }),
+        ),
+    )
+    ctx.publish()
+  }
+
 const createInitialize =
   (ctx: SharingContext): SharingRuntime['initialize'] =>
   async () => {
@@ -93,7 +146,12 @@ const createInitialize =
       }
     }
     const pending = [...ctx.followed.values()].filter(
-      (entry) => ctx.returnShareReceiver === 'local' && !entry.connected && !entry.terminal,
+      (entry) =>
+        ctx.returnShareReceiver === 'local' &&
+        !ctx.followersSuspended &&
+        !entry.connected &&
+        !entry.terminal &&
+        !entry.approvalDenied,
     )
     void Promise.allSettled(
       pending.map((entry) =>
@@ -101,6 +159,31 @@ const createInitialize =
       ),
     )
   }
+
+const createRecoverBackgroundSources = (
+  ctx: SharingContext,
+): SharingRuntime['recoverBackgroundSources'] => {
+  let pending: Promise<void> | undefined
+  return () => {
+    if (pending) return pending
+    pending = (async () => {
+      await ctx.prepareState()
+      const sources = [...ctx.shares.values()].filter(
+        (share) => share.publication === 'background' && Boolean(share.sourcePrivateKey),
+      )
+      for (const share of sources) {
+        const shareId = share.capability.shareId
+        if (ctx.runtimeClosed || ctx.shares.get(shareId) !== share) continue
+        await ctx.stopSourcePeer(shareId)
+        if (ctx.runtimeClosed || ctx.shares.get(shareId) !== share) continue
+        await ctx.startSourcePeer(share)
+      }
+    })().finally(() => {
+      pending = undefined
+    })
+    return pending
+  }
+}
 
 const createSubscribe =
   (ctx: SharingContext): SharingRuntime['subscribe'] =>
@@ -178,7 +261,7 @@ const createSetPaused =
 
 const createStop =
   (ctx: SharingContext): SharingRuntime['stop'] =>
-  async () => {
+  async (options) => {
     ctx.runtimeClosed = true
     for (const run of ctx.comparisonRuns.values()) {
       run.cancelled = true
@@ -209,9 +292,12 @@ const createStop =
       ),
     )
     if (ctx.handlerNode) {
-      await ctx.handlerNode.unhandle(SHARE_STREAM_PROTOCOL)
+      await ctx.handlerNode.unhandle([...SHARE_STREAM_PROTOCOLS])
       await ctx.handlerNode.stop()
     }
+    // Native handoff requires a fresh committed snapshot and a fully flushed
+    // persistence queue before releasing the service writer fence.
+    if (options?.requireDurableState) await ctx.persist()
     ctx.shares.clear()
     ctx.received.clear()
     ctx.followed.clear()

@@ -93,6 +93,7 @@ const createRuntimeFlags = () => {
   let handlerNode: BrowserLibp2pNode | undefined
   const visible = true
   const paused = false
+  const followersSuspended = false
   let privateKey: PrivateKey | undefined
   let preparation: Promise<void> | undefined
   const persistence = Promise.resolve()
@@ -115,6 +116,7 @@ const createRuntimeFlags = () => {
     handlerNode,
     visible,
     paused,
+    followersSuspended,
     privateKey,
     preparation,
     persistence,

@@ -110,7 +110,7 @@ export const orderShareAddresses = (addresses: readonly string[]): string[] =>
 export const dialShareStream = async (
   node: Pick<BrowserLibp2pNode, 'dialProtocol'>,
   addresses: readonly string[],
-  protocol: string,
+  protocol: string | string[],
   connections: readonly Connection[] = [],
 ): Promise<Stream> => {
   const ordered = orderShareAddresses(addresses)

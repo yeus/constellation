@@ -4,6 +4,7 @@ import type { ApproximationState } from '../location/approximation.ts'
 import type { LocationObservationV1 } from '../location/locationObservation.ts'
 import type { MapCamera } from '../map/mapCamera.ts'
 import type { ShareBatteryPolicy, ShareDraft, ShareNetworkPolicy } from '../shareDraft.ts'
+import type { DeliveryReceiptState } from './deliveryReceipt.ts'
 import type { DeviceComparison } from './deviceComparison.ts'
 import type { FollowTraceEvent } from './followTrace.ts'
 import type { PeerNamePreference } from './peerNames.ts'
@@ -30,6 +31,11 @@ export interface ShareSummary {
     peerId: string
     fingerprint: string
     lastSeenAt: number
+    pendingSince?: number
+    pendingObservations?: number
+    lastSubmittedAt?: number
+    lastConfirmedAt?: number
+    deliveryVerification?: 'supported' | 'unsupported'
     localName?: string
     sourceName?: string
     displayName?: string
@@ -159,6 +165,10 @@ export interface SourceSession {
   sessionId?: string
   subscriptionId?: string
   lastHeartbeatAt: number
+  lastSubmittedAt?: number
+  pendingSince?: number
+  receiptCapable: boolean
+  delivery: DeliveryReceiptState
   fingerprint?: string
 }
 
@@ -278,6 +288,8 @@ export interface SharingRuntime {
   dismissStoppedViewer: (shareId: string, peerId: string) => Promise<void>
   markReturnPromptSeen: (shareId: string) => Promise<void>
   initialize: () => Promise<void>
+  setFollowingSuspended: (suspended: boolean) => Promise<void>
+  recoverBackgroundSources: () => Promise<void>
   setMapCamera: (camera: MapCamera) => void
   subscribe: (observer: (state: SharingRuntimeState) => void) => () => void
   createShare: (
@@ -299,7 +311,7 @@ export interface SharingRuntime {
   setPaused: (paused: boolean) => Promise<void>
   stopShare: (shareId: string) => Promise<void>
   stopEndNotifications: () => Promise<void>
-  stop: () => Promise<void>
+  stop: (options?: { readonly requireDurableState?: boolean }) => Promise<void>
 }
 
 export interface ShareCapability {

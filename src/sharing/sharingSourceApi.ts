@@ -35,7 +35,7 @@ import {
   type ShareCapability,
 } from './shareLink.ts'
 import { backgroundSharePolicy } from './sharePolicy.ts'
-import { constellationProtocolV2, SHARE_STREAM_PROTOCOL } from './shareProtocol.ts'
+import { constellationProtocolV2, SHARE_STREAM_PROTOCOLS } from './shareProtocol.ts'
 import { parsePrivateState, type PrivateState } from './privateStore.ts'
 import { retainedEndNotifications } from './shareLifecycle.ts'
 
@@ -645,7 +645,7 @@ const registerSourceHandlers = async (
 ) => {
   const shareId = share.capability.shareId
   await node.handle(
-    SHARE_STREAM_PROTOCOL,
+    [...SHARE_STREAM_PROTOCOLS],
     (stream, connection) => ctx.handleIncomingStream(stream, connection, shareId),
     { runOnLimitedConnection: true },
   )

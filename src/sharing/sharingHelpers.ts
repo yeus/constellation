@@ -37,6 +37,11 @@ import {
 } from './browserPeer.ts'
 import { base64UrlToBytes } from './encoding.ts'
 import type { PeerNamePreference } from './peerNames.ts'
+import {
+  acknowledgeObservation,
+  recordSentObservation,
+  type ObservationReceipt,
+} from './deliveryReceipt.ts'
 import { receiveAdvertisedName, peerNamesProtocol, PEER_NAMES_PROTOCOL } from './peerNames.ts'
 import { verifyRedemptionProof, verifyStopNoticeProof } from './shareAuth.ts'
 import { parseShareInvitation, verifyReturnOwner } from './shareLink.ts'
@@ -45,8 +50,12 @@ import { encryptLocationPayload } from './sharePayloadCrypto.ts'
 import { rotatePendingNotice } from './stopNotice.ts'
 import {
   constellationProtocolV2,
+  constellationProtocolV3,
   SHARE_STREAM_PROTOCOL,
+  SHARE_STREAM_PROTOCOLS,
+  SHARE_STREAM_PROTOCOL_V3,
   parseConstellationMessage,
+  parseConstellationMessageV3,
   type ConstellationMessage,
 } from './shareProtocol.ts'
 import {
@@ -485,7 +494,7 @@ const restoreExpiredFollow = (ctx: SharingContext, record: PrivateState['followe
   return true
 }
 
-const restoreFollows = async (ctx: SharingContext, saved: PrivateState | undefined) => {
+export const restoreFollows = async (ctx: SharingContext, saved: PrivateState | undefined) => {
   let changed = false
   for (const record of saved?.followed ?? []) {
     try {
@@ -574,7 +583,7 @@ const prepareFromStore = async (
   changed = (await restoreFollows(ctx, saved)) || changed
   changed = restoreRelations(ctx, saved) || changed
   changed = pruneRestoredRelations(ctx) || changed
-  if (saved && changed) await ctx.persist()
+  if (saved && changed && !ctx.followersSuspended) await ctx.persist()
   applyInitialLocation(ctx)
   ctx.publish({ privateStateReady: true, ...(ctx.mapCamera ? { mapCamera: ctx.mapCamera } : {}) })
 }
@@ -922,15 +931,24 @@ const handleRedeem = async (
 }
 
 const handleHeartbeat = (
+  ctx: SharingContext,
   session: SourceSession,
   state: StreamState,
-  request: { sessionId: string },
+  request: { sessionId: string; receipt?: ObservationReceipt },
 ) => {
   const share = requireAuthorized(session, state.authorizedShare)
   if (session.sessionId !== request.sessionId || !share.sessions.has(session)) {
     throw new Error('Share access denied.')
   }
   session.lastHeartbeatAt = Date.now()
+  if (request.receipt) {
+    const next = acknowledgeObservation(session.delivery, request.receipt, session.lastHeartbeatAt)
+    if (next !== session.delivery) {
+      session.delivery = next
+      session.pendingSince = next.pending.length ? session.lastHeartbeatAt : undefined
+      ctx.publish()
+    }
+  }
   return { receivedAt: session.lastHeartbeatAt }
 }
 
@@ -1082,7 +1100,24 @@ const handleSensorSubscribe = async (
   if (request.sensorId !== LOCATION_SENSOR_ID) throw new Error('Sensor access denied.')
   session.subscriptionId = randomToken()
   const initial = await ctx.encryptedObservationMessage(share, session.subscriptionId)
-  if (initial) session.send(initial)
+  if (initial) {
+    session.send(initial)
+    session.lastSubmittedAt = Date.now()
+    session.pendingSince ??= session.lastSubmittedAt
+    if (
+      share.latest &&
+      initial.type === 'observation' &&
+      initial.observation.sequence === share.latest.sequence &&
+      initial.observation.capturedAt === share.latest.capturedAt
+    ) {
+      session.delivery = recordSentObservation(session.delivery, {
+        sourceId: share.latest.sourceId,
+        sequence: share.latest.sequence,
+        capturedAt: share.latest.capturedAt,
+      })
+      ctx.publish()
+    }
+  }
   if (
     (ctx.visible || share.publication === 'background') &&
     !ctx.paused &&
@@ -1108,11 +1143,14 @@ const handleSensorUnsubscribe = (
 const createSourceSession = (
   messagePort: ReturnType<typeof createProtocolMessagePort>,
   connection: { remotePeer: { toString: () => string } },
+  receiptCapable: boolean,
 ): SourceSession => ({
   peerId: connection.remotePeer.toString(),
   close: () => messagePort.close(),
   closeAfterFlush: () => messagePort.closeAfterFlush(),
   send: messagePort.port.send,
+  receiptCapable,
+  delivery: { pending: [], lastConfirmedAt: null },
   lastHeartbeatAt: Date.now(),
 })
 
@@ -1124,29 +1162,44 @@ export const handleIncomingStream =
     expectedShareId?: string,
   ): void => {
     ctx.recordSessionEvent('stream-open')
-    const messagePort = createProtocolMessagePort(stream, parseConstellationMessage)
-    const session = createSourceSession(messagePort, connection)
-    const state: StreamState = {}
-    const stopServer = createPortServer(
-      messagePort.port,
-      constellationProtocolV2,
-      {
-        share: {
-          redeem: (request) => handleRedeem(ctx, session, state, expectedShareId, request),
-          heartbeat: (request) => handleHeartbeat(session, state, request),
-          leave: (request) => handleLeave(ctx, session, state, request),
-          stopFollowing: (request) => handleStopFollowing(ctx, session, state, request),
-          stopNotice: (request) => handleStopNotice(ctx, session, expectedShareId, request),
-          offerReturn: (request) => handleOfferReturn(ctx, session, state, request),
-        },
-        sensor: {
-          describe: (request) => handleSensorDescribe(session, state, request),
-          subscribe: (request) => handleSensorSubscribe(ctx, session, state, request),
-          unsubscribe: (request) => handleSensorUnsubscribe(session, state, request),
-        },
-      },
-      { onError: () => undefined },
+    const isV3 = stream.protocol === SHARE_STREAM_PROTOCOL_V3
+    const messagePort = createProtocolMessagePort(
+      stream,
+      isV3 ? parseConstellationMessageV3 : parseConstellationMessage,
     )
+    const session = createSourceSession(messagePort, connection, isV3)
+    const state: StreamState = {}
+    const handlers = {
+      share: {
+        redeem: (request: Parameters<typeof handleRedeem>[4]) =>
+          handleRedeem(ctx, session, state, expectedShareId, request),
+        heartbeat: (request: { sessionId: string; receipt?: ObservationReceipt }) =>
+          handleHeartbeat(ctx, session, state, request),
+        leave: (request: Parameters<typeof handleLeave>[3]) =>
+          handleLeave(ctx, session, state, request),
+        stopFollowing: (request: Parameters<typeof handleStopFollowing>[3]) =>
+          handleStopFollowing(ctx, session, state, request),
+        stopNotice: (request: Parameters<typeof handleStopNotice>[3]) =>
+          handleStopNotice(ctx, session, expectedShareId, request),
+        offerReturn: (request: Parameters<typeof handleOfferReturn>[3]) =>
+          handleOfferReturn(ctx, session, state, request),
+      },
+      sensor: {
+        describe: (request: Parameters<typeof handleSensorDescribe>[2]) =>
+          handleSensorDescribe(session, state, request),
+        subscribe: (request: Parameters<typeof handleSensorSubscribe>[3]) =>
+          handleSensorSubscribe(ctx, session, state, request),
+        unsubscribe: (request: Parameters<typeof handleSensorUnsubscribe>[2]) =>
+          handleSensorUnsubscribe(session, state, request),
+      },
+    }
+    const stopServer = isV3
+      ? createPortServer(messagePort.port, constellationProtocolV3, handlers, {
+          onError: () => undefined,
+        })
+      : createPortServer(messagePort.port, constellationProtocolV2, handlers, {
+          onError: () => undefined,
+        })
     void messagePort.closed.then(() => {
       stopServer()
       ctx.removeSession(session, 'transport-closed')
@@ -1261,7 +1314,7 @@ export const startPeer = (ctx: SharingContext) => async () => {
     ctx.publish({ peerStatus: 'connecting', message: 'Connecting to the P2P network…' })
     ctx.peer = startPrivateBrowserPeer(ctx.privateKey)
       .then(async (started) => {
-        await started.node.handle(SHARE_STREAM_PROTOCOL, ctx.handleIncomingStream, {
+        await started.node.handle([...SHARE_STREAM_PROTOCOLS], ctx.handleIncomingStream, {
           runOnLimitedConnection: true,
         })
         await started.node.handle(PEER_NAMES_PROTOCOL, ctx.handleNameStream, {
@@ -1293,7 +1346,7 @@ const registerSourcePeerHandlers = async (
   node: BrowserLibp2pNode,
 ) => {
   await node.handle(
-    SHARE_STREAM_PROTOCOL,
+    [...SHARE_STREAM_PROTOCOLS],
     (stream, connection) => ctx.handleIncomingStream(stream, connection, shareId),
     { runOnLimitedConnection: true },
   )
@@ -1352,7 +1405,7 @@ export const stopSourcePeer =
     }
     ctx.sourceNodes.delete(shareId)
     if (!node) return
-    await node.unhandle(SHARE_STREAM_PROTOCOL).catch(() => undefined)
+    await node.unhandle([...SHARE_STREAM_PROTOCOLS]).catch(() => undefined)
     await node.stop()
   }
 
@@ -1467,11 +1520,26 @@ const publishLocationObservation = (ctx: SharingContext, exact: LocationObservat
     if (ctx.updateShareLocation(share, exact)) privateStateChanged = true
     for (const session of share.sessions) {
       if (!session.subscriptionId || !share.latest) continue
+      const receipt = {
+        sourceId: share.latest.sourceId,
+        sequence: share.latest.sequence,
+        capturedAt: share.latest.capturedAt,
+      }
       void ctx
         .encryptedObservationMessage(share, session.subscriptionId)
         .then((message) => {
-          if (!message) return
+          if (
+            !message ||
+            message.type !== 'observation' ||
+            message.observation.sequence !== receipt.sequence ||
+            message.observation.capturedAt !== receipt.capturedAt
+          )
+            return
           session.send(message)
+          session.lastSubmittedAt = Date.now()
+          session.pendingSince ??= session.lastSubmittedAt
+          session.delivery = recordSentObservation(session.delivery, receipt)
+          ctx.publish()
         })
         .catch(() => ctx.publish({ message: 'Location encryption failed.' }))
     }
@@ -1655,7 +1723,7 @@ const sweepExpiredFollow = (
 }
 
 const reconnectFollow = (ctx: SharingContext, shareId: string, entry: FollowEntry, now: number) => {
-  if (ctx.returnShareReceiver === 'external') return
+  if (ctx.returnShareReceiver === 'external' || ctx.followersSuspended) return
   if (entry.connected || ctx.viewerClosers.has(shareId) || ctx.reconnecting.has(shareId)) return
   if (entry.terminal || entry.approvalDenied) return
   try {

@@ -7,8 +7,10 @@ import { sensorProtocolV1 } from '@taskyon/protocol/sensor'
 import { z } from 'zod'
 
 export const SHARE_STREAM_PROTOCOL = '/constellation/location-share/2.0.0' as const
+export const SHARE_STREAM_PROTOCOL_V3 = '/constellation/location-share/3.0.0' as const
+export const SHARE_STREAM_PROTOCOLS = [SHARE_STREAM_PROTOCOL_V3, SHARE_STREAM_PROTOCOL] as const
 
-export const shareProtocolV2 = defineFrpServiceProtocol({
+const shareDefinition = {
   service: 'share',
   id: 'dev.constellation.share',
   version: '2',
@@ -100,6 +102,31 @@ export const shareProtocolV2 = defineFrpServiceProtocol({
         .strict(),
     },
   },
+} as const
+
+export const shareProtocolV2 = defineFrpServiceProtocol(shareDefinition)
+export const shareProtocolV3 = defineFrpServiceProtocol({
+  ...shareDefinition,
+  version: '3',
+  commands: {
+    ...shareDefinition.commands,
+    heartbeat: {
+      ...shareDefinition.commands.heartbeat,
+      request: z
+        .object({
+          sessionId: z.string().min(16).max(64),
+          receipt: z
+            .object({
+              sourceId: z.string().min(1).max(256),
+              sequence: z.number().int().nonnegative(),
+              capturedAt: z.number().int().nonnegative(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict(),
+    },
+  },
 })
 
 export const constellationProtocolV2 = mergeFrpProtocols({
@@ -108,6 +135,16 @@ export const constellationProtocolV2 = mergeFrpProtocols({
   base: sensorProtocolV1,
   extension: shareProtocolV2,
 })
+
+export const constellationProtocolV3 = mergeFrpProtocols({
+  id: 'dev.constellation.location-share',
+  version: '3',
+  base: sensorProtocolV1,
+  extension: shareProtocolV3,
+})
+
+export const parseConstellationMessageV3 = (value: unknown) =>
+  constellationProtocolV3.message.parse(value)
 
 export type ConstellationMessage = ProtocolMessage<typeof constellationProtocolV2>
 export const parseConstellationMessage = (value: unknown): ConstellationMessage =>

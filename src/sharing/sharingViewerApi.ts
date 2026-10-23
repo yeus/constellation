@@ -21,6 +21,7 @@ import {
   acceptNewerLocationObservation,
   type LocationObservationV1,
 } from '../location/locationObservation.ts'
+import type { ObservationReceipt } from './deliveryReceipt.ts'
 import { createProtocolMessagePort, dialShareStream } from './browserPeer.ts'
 import { base64UrlToBytes } from './encoding.ts'
 import {
@@ -40,8 +41,10 @@ import {
 } from './stopNotice.ts'
 import {
   constellationProtocolV2,
-  SHARE_STREAM_PROTOCOL,
-  parseConstellationMessage,
+  constellationProtocolV3,
+  SHARE_STREAM_PROTOCOLS,
+  SHARE_STREAM_PROTOCOL_V3,
+  parseConstellationMessageV3,
   type ConstellationMessage,
 } from './shareProtocol.ts'
 import { type PendingStopNotice } from './privateStore.ts'
@@ -463,7 +466,7 @@ type FollowPort = ReturnType<typeof createProtocolMessagePort>
 type FollowCloser = (explicit?: boolean, eventId?: string) => Promise<boolean>
 
 const openFollowClient = (messagePort: FollowPort) =>
-  createPortClient(messagePort.port, constellationProtocolV2)
+  createPortClient(messagePort.port, constellationProtocolV3)
 type FollowClient = ReturnType<typeof openFollowClient>
 type FollowSession = Awaited<ReturnType<FollowClient['share']['redeem']>>
 type ActiveFollowSession = Extract<FollowSession, { sessionId: string }>
@@ -477,6 +480,8 @@ type FollowState = {
   node: BrowserLibp2pNode
   messagePort: FollowPort
   client: FollowClient
+  isV3: boolean
+  lastAccepted?: ObservationReceipt
   previousFollow?: FollowEntry
   previousObservation?: LocationObservationV1
   earlyClosedMessage?: ConstellationMessage
@@ -492,6 +497,11 @@ type FollowState = {
 const prepareAcceptance = async (ctx: SharingContext, url: string, options: AcceptShareOptions) => {
   if (ctx.returnShareReceiver === 'external') {
     throw new Error('Returned locations belong to the foreground receiver.')
+  }
+  if (ctx.followersSuspended) {
+    throw new Error(
+      'Foreground following is suspended while the background receiver owns subscriptions.',
+    )
   }
   if (!ctx.store && options.saved !== false) {
     throw new Error('Protected storage is not configured; preview only.')
@@ -517,6 +527,7 @@ const prepareAcceptance = async (ctx: SharingContext, url: string, options: Acce
   if (ctx.followed.get(capability.shareId)?.connected) {
     throw new Error('Already following this link.')
   }
+  if (ctx.followersSuspended) throw new Error('Viewer ownership changed during connection.')
   const { node } = await ctx.ensurePeer()
   return { capability, knownPeerId, node }
 }
@@ -525,7 +536,7 @@ const openFollowStream = async (node: BrowserLibp2pNode, capability: ShareCapabi
   const stream = await dialShareStream(
     node,
     capability.addresses,
-    SHARE_STREAM_PROTOCOL,
+    [...SHARE_STREAM_PROTOCOLS],
     node
       .getConnections()
       .filter(
@@ -534,8 +545,12 @@ const openFollowStream = async (node: BrowserLibp2pNode, capability: ShareCapabi
           connection.remotePeer.toString() === capability.sourcePeerId,
       ),
   )
-  const messagePort = createProtocolMessagePort(stream, parseConstellationMessage)
-  return { messagePort, client: openFollowClient(messagePort) }
+  const messagePort = createProtocolMessagePort(stream, parseConstellationMessageV3)
+  return {
+    messagePort,
+    client: openFollowClient(messagePort),
+    isV3: stream.protocol === SHARE_STREAM_PROTOCOL_V3,
+  }
 }
 
 const createFollowState = (
@@ -547,6 +562,7 @@ const createFollowState = (
   node: BrowserLibp2pNode,
   messagePort: FollowPort,
   client: FollowClient,
+  isV3: boolean,
 ): FollowState => {
   const state: FollowState = {
     url,
@@ -556,6 +572,7 @@ const createFollowState = (
     node,
     messagePort,
     client,
+    isV3,
     previousFollow: ctx.followed.get(capability.shareId),
     previousObservation: ctx.received.get(capability.shareId),
     stopBufferingClose: () => undefined,
@@ -730,6 +747,11 @@ const receiveObservation = async (
     const newSource = state.awaitingFirstObservation && current?.sourceId !== observation.sourceId
     if (!newSource && !acceptNewerLocationObservation(current, observation)) return
     state.awaitingFirstObservation = false
+    state.lastAccepted = {
+      sourceId: observation.sourceId,
+      sequence: observation.sequence,
+      capturedAt: observation.capturedAt,
+    }
     ctx.received.set(state.capability.shareId, observation)
     const entry = ctx.followed.get(state.capability.shareId)
     if (entry) entry.updatesReceived += 1
@@ -830,13 +852,18 @@ const startFollowHeartbeat = (
   session: ActiveFollowSession,
 ) =>
   window.setInterval(() => {
-    void state.client.share.heartbeat({ sessionId: session.sessionId }).catch(() => {
-      ctx.recordSessionEvent('heartbeat-failed')
-      const entry = ctx.followed.get(state.capability.shareId)
-      if (entry) entry.connected = false
-      ctx.publish({ message: 'The location connection was lost.' })
-      void state.messagePort.close()
-    })
+    void state.client.share
+      .heartbeat({
+        sessionId: session.sessionId,
+        ...(state.isV3 && state.lastAccepted ? { receipt: state.lastAccepted } : {}),
+      })
+      .catch(() => {
+        ctx.recordSessionEvent('heartbeat-failed')
+        const entry = ctx.followed.get(state.capability.shareId)
+        if (entry) entry.connected = false
+        ctx.publish({ message: 'The location connection was lost.' })
+        void state.messagePort.close()
+      })
   }, session.heartbeatIntervalMs)
 
 const createFollowCloser =
@@ -1041,7 +1068,7 @@ const createAcceptShare =
   (ctx: SharingContext): SharingRuntime['acceptShare'] =>
   async (url, options = {}) => {
     const { capability, knownPeerId, node } = await prepareAcceptance(ctx, url, options)
-    const { messagePort, client } = await openFollowStream(node, capability)
+    const { messagePort, client, isV3 } = await openFollowStream(node, capability)
     const state = createFollowState(
       ctx,
       url,
@@ -1051,9 +1078,12 @@ const createAcceptShare =
       node,
       messagePort,
       client,
+      isV3,
     )
     try {
       const session = await redeemFollow(capability, node, client)
+      if (ctx.followersSuspended)
+        throw new Error('Foreground following was suspended during connection.')
       if ('ended' in session) return await handleEndedFollow(ctx, state, session)
       if ('approvalPending' in session || 'accessDenied' in session) {
         await applyPendingFollow(ctx, state, 'accessDenied' in session)
