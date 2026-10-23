@@ -241,4 +241,18 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .await
             .map_err(Into::into)
     }
+    pub async fn receiver_ownership(&self) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("receiverOwnership", json!({}))
+            .await.map_err(Into::into)
+    }
+
+    pub async fn start_background_receiver(&self, generation: u64) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("startBackgroundReceiver", json!({ "generation": generation }))
+            .await.map_err(Into::into)
+    }
+
+    pub async fn stop_background_receiver(&self, generation: u64) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("stopBackgroundReceiver", json!({ "generation": generation }))
+            .await.map_err(Into::into)
+    }
 }

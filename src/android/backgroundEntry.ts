@@ -4,7 +4,12 @@ import {
   executeBackgroundReturnCommand,
   type BackgroundReturnCommand,
 } from './backgroundReturnCommand.ts'
-import { shouldSignalIdleAfterShareUpdate } from './backgroundRuntimePolicy.ts'
+import {
+  hasStalledDelivery,
+  shouldAttemptTransportRecovery,
+  shouldSignalIdleAfterShareUpdate,
+} from './backgroundRuntimePolicy.ts'
+import { createBackgroundViewer, type BackgroundViewerSnapshot } from './backgroundViewer.ts'
 import { backgroundRuntimeStatus } from './backgroundRuntimeStatus.ts'
 import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
 import type { ShareDraft } from '../shareDraft.ts'
@@ -82,6 +87,8 @@ type BackgroundCommand =
       readonly associateNames: boolean
       readonly sharedName: string | null
     }
+  | { readonly type: 'receiver-start'; readonly requestId: string; readonly generation: number }
+  | { readonly type: 'receiver-stop'; readonly requestId: string; readonly generation: number }
   | { readonly type: 'create-share'; readonly requestId: string; readonly request: CreateRequest }
   | { readonly type: 'location'; readonly position: BrowserPosition }
   | { readonly type: 'location-refresh-result'; readonly position: BrowserPosition }
@@ -90,7 +97,16 @@ type BackgroundCommand =
   | { readonly type: 'stop-all' }
   | { readonly type: 'set-paused'; readonly requestId: string; readonly paused: boolean }
   | { readonly type: 'stop-foreground-only' }
-  | { readonly type: 'network-state'; readonly state: 'unmetered' | 'metered' | 'data-saver' }
+  | {
+      readonly type: 'network-state'
+      readonly state: 'unmetered' | 'metered' | 'data-saver'
+      readonly online?: boolean
+    }
+  | {
+      readonly type: 'recover-background-sources'
+      readonly online: boolean
+      readonly stalled?: boolean
+    }
   | { readonly type: 'set-visible'; readonly visible: boolean }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
   | {
@@ -152,8 +168,13 @@ interface BackgroundEntryState extends StoreState {
   readonly observers: LocationObservers
   readonly location: ReturnType<typeof createBrowserLocationSource>
   readonly runtime: ReturnType<typeof createSharingRuntime>
+  viewer?: ReturnType<typeof createBackgroundViewer>
+  viewerGeneration?: number
+  latestViewer?: BackgroundViewerSnapshot
   latestState?: SharingRuntimeState
   previousShareCount: number
+  lastRecoveryAt: number | null
+  networkOnline: boolean
   commandQueue: Promise<void>
 }
 
@@ -162,25 +183,37 @@ const createStoreState = (): StoreState => ({
   requestCounter: 0,
 })
 
-const storeRequest = (state: StoreState, action: 'load' | 'save', privateState?: PrivateState) =>
+const storeRequest = (
+  state: StoreState,
+  action: 'load' | 'save',
+  privateState?: PrivateState,
+  scope: 'source' | 'viewer' = 'source',
+  generation?: number,
+) =>
   new Promise<string | null | undefined>((resolve, reject) => {
     const requestId = `${Date.now()}-${++state.requestCounter}`
     state.pendingStoreRequests.set(requestId, { resolve, reject })
     post({
       type: 'private-state',
+      scope,
+      ...(generation !== undefined ? { generation } : {}),
       action,
       requestId,
       ...(privateState ? { state: JSON.stringify(privateState) } : {}),
     })
   })
 
-const createPrivateStore = (state: StoreState): PrivateStateStore => ({
+const createPrivateStore = (
+  state: StoreState,
+  scope: 'source' | 'viewer' = 'source',
+  generation?: number,
+): PrivateStateStore => ({
   load: async () => {
-    const encoded = await storeRequest(state, 'load')
+    const encoded = await storeRequest(state, 'load', undefined, scope, generation)
     return encoded ? parsePrivateStateJson(encoded) : undefined
   },
   save: async (next) => {
-    await storeRequest(state, 'save', next)
+    await storeRequest(state, 'save', next, scope, generation)
   },
 })
 
@@ -212,6 +245,8 @@ const createBackgroundEntryState = (): BackgroundEntryState => {
     location,
     runtime,
     previousShareCount: 0,
+    lastRecoveryAt: null,
+    networkOnline: false,
     commandQueue: Promise.resolve(),
   }
 }
@@ -288,7 +323,8 @@ const isShareCommandType = (type: BackgroundCommand['type']): boolean =>
   type === 'stop-foreground-only' ||
   type === 'set-visible' ||
   type === 'set-paused' ||
-  type === 'network-state'
+  type === 'network-state' ||
+  type === 'recover-background-sources'
 
 const isViewerCommandType = (type: BackgroundCommand['type']): boolean =>
   type === 'block-viewer' ||
@@ -358,6 +394,7 @@ const stopAllCommand = async (state: BackgroundEntryState): Promise<void> => {
 
 const pauseForegroundOnly = async (state: BackgroundEntryState): Promise<void> => {
   if (
+    state.viewer !== undefined ||
     state.latestState?.shares.some((share) => share.publication === 'background') ||
     state.latestState?.endNotifications.some((share) => share.publication === 'background')
   ) {
@@ -390,8 +427,27 @@ const runShareCommand = async (
         state.runtime.setPaused(command.paused),
       )
     case 'network-state':
+      state.networkOnline = command.online === true
       state.runtime.setNetworkState(command.state === 'unmetered' ? undefined : command.state)
       return
+    case 'recover-background-sources': {
+      const now = Date.now()
+      if (
+        !shouldAttemptTransportRecovery({
+          online: command.online,
+          backgroundSources:
+            state.latestState?.shares.filter((share) => share.publication === 'background')
+              .length ?? 0,
+          now,
+          lastRecoveryAt: state.lastRecoveryAt,
+          stalled: command.stalled,
+        })
+      )
+        return
+      state.lastRecoveryAt = now
+      await state.runtime.recoverBackgroundSources()
+      return
+    }
   }
 }
 
@@ -528,11 +584,62 @@ const setPeerNamesCommand = async (
   )
 }
 
+const runReceiverCommand = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'receiver-start' | 'receiver-stop' }>,
+): Promise<void> =>
+  runCompletion(
+    command.requestId,
+    'Could not transfer background-following ownership.',
+    async () => {
+      if (!Number.isSafeInteger(command.generation) || command.generation < 1) {
+        throw new Error('Invalid owner generation.')
+      }
+      if (command.type === 'receiver-stop') {
+        if (!state.viewer) return
+        if (state.viewerGeneration !== command.generation) {
+          throw new Error('Background viewer generation mismatch.')
+        }
+        await state.viewer.stop()
+        state.viewer = undefined
+        state.viewerGeneration = undefined
+        state.latestViewer = undefined
+        post({ type: 'receiver-status', generation: command.generation, stopped: true })
+        return
+      }
+      if (state.viewer) {
+        if (state.viewerGeneration !== command.generation) {
+          throw new Error('A different receiver already owns this device.')
+        }
+        return
+      }
+      const viewer = createBackgroundViewer({
+        generation: command.generation,
+        store: createPrivateStore(state, 'viewer', command.generation),
+        onState: (status) => {
+          state.latestViewer = status
+          post({ type: 'receiver-status', status })
+        },
+      })
+      try {
+        await viewer.start()
+        state.viewer = viewer
+        state.viewerGeneration = command.generation
+      } catch (error) {
+        await viewer.stop().catch(() => undefined)
+        throw error
+      }
+    },
+  )
+
 const runCommand = async (
   state: BackgroundEntryState,
   command: BackgroundCommand,
 ): Promise<void> => {
   if (handleTransientCommand(state, command)) return
+  if (command.type === 'receiver-start' || command.type === 'receiver-stop') {
+    return runReceiverCommand(state, command)
+  }
   if (isShareCommandType(command.type)) return runShareCommand(state, command)
   if (isViewerCommandType(command.type)) return runViewerCommand(state, command)
   if (command.type === 'replace-background-owner') return ownerHandoffCommand(state, command)
@@ -563,6 +670,14 @@ const start = (): void => {
   const state = createBackgroundEntryState()
   window.__constellationBackgroundCommand = (encoded) => enqueueCommand(state, encoded)
   state.runtime.subscribe((next) => report(state, next))
+  window.setInterval(() => {
+    const now = Date.now()
+    if (!state.networkOnline || !hasStalledDelivery(state.latestState?.shares ?? [], now)) return
+    enqueueCommand(
+      state,
+      JSON.stringify({ type: 'recover-background-sources', online: true, stalled: true }),
+    )
+  }, 60_000)
   void state.runtime
     .initialize()
     .catch((error) => sendError(state, error, 'Could not restore protected sharing state.'))

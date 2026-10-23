@@ -485,6 +485,48 @@ async fn android_save_private_state(app: tauri::AppHandle, state: String) -> Res
 }
 
 #[tauri::command]
+async fn android_receiver_ownership(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().receiver_ownership().await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Android background reception is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_start_background_receiver(app: tauri::AppHandle, generation: u64) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        app.constellation_android().start_background_receiver(generation).await
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, generation);
+        Err("Android background reception is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_stop_background_receiver(app: tauri::AppHandle, generation: u64) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        app.constellation_android().stop_background_receiver(generation).await
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, generation);
+        Err("Android background reception is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn desktop_load_private_state() -> Result<serde_json::Value, String> {
     #[cfg(target_os = "linux")]
     {
@@ -544,6 +586,9 @@ pub fn run() {
             android_open_project_link,
             android_load_private_state,
             android_save_private_state,
+            android_receiver_ownership,
+            android_start_background_receiver,
+            android_stop_background_receiver,
             desktop_load_private_state,
             desktop_save_private_state,
             #[cfg(target_os = "android")]

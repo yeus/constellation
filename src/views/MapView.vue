@@ -162,10 +162,17 @@
       :device-policies="sharingSetup?.devicePolicies"
       :review="behaviorReviewRequired"
       :has-shares="activeShares.length > 0"
+      :background-following="receiverOwner === 'service'"
+      :saved-follow-count="
+        runtimeState.following.filter(
+          (entry) => entry.saved && !['expired', 'revoked'].includes(entry.status),
+        ).length
+      "
       :busy="settingsBusy"
       :error="settingsError"
       @close="settingsOpen = false"
       @save="saveSharingBehavior"
+      @set-background-following="setBackgroundFollowing"
       @enable-permissions="enableSharingPermissions"
       @open-system-settings="openAndroidSystemSettings"
     />
@@ -581,8 +588,8 @@
       @revoke-all="revokeAllShares"
       @viewer-name="setViewerName"
       @viewer-block="blockViewer"
-      @name="runtime.setFollowName"
-      @color="runtime.setFollowColor"
+      @name="setFollowName"
+      @color="setFollowColor"
       @focus="focusFollowing"
       @focus-all="focusAllFollowing"
       @unfollow="stopFollowing"
@@ -656,6 +663,9 @@ import DeviceComparisonSheet from '../components/DeviceComparisonSheet.vue'
 import ShareReadySheet from '../components/ShareReadySheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
 import { createSessionLog } from '../diagnostics/sessionLog.ts'
+import { createAndroidBackgroundReceiver } from '../android/backgroundReceiver.ts'
+import type { BackgroundViewerSnapshot } from '../android/backgroundViewer.ts'
+import { createFollowOwnership, type FollowOwner } from '../sharing/followOwnership.ts'
 import { receiveApprovedBackgroundReturns } from '../android/backgroundReturnShares.ts'
 import { createBrowserLocationSource } from '../location/browser.ts'
 import { locationObservationToMapLocation } from '../location/mapModel.ts'
@@ -774,6 +784,7 @@ const backgroundSharing = createAndroidBackgroundSharing({
     if (androidLocationApi) await ensureAndroidLocationPermission(androidLocationApi)
   },
 })
+const backgroundReceiver = createAndroidBackgroundReceiver({ isAndroid, invoke })
 const migrateAndroidSourceShares = async (): Promise<void> => {
   if (!isAndroid || !backgroundSharing) return
   const saved = await privateStore.load()
@@ -907,6 +918,87 @@ const behaviorReviewRequired = ref(isAndroid)
 const settingsOpen = ref(false)
 const settingsBusy = ref(false)
 const settingsError = ref('')
+const receiverOwner = ref<FollowOwner>('activity')
+const receiverSnapshot = ref<BackgroundViewerSnapshot>()
+let followOwnerController: ReturnType<typeof createFollowOwnership> | undefined
+
+const receiverEffects = {
+  suspendActivity: () => runtime.setFollowingSuspended(true),
+  resumeActivity: () => runtime.setFollowingSuspended(false),
+  startService: async (generation: number) => {
+    if (!backgroundReceiver) throw new Error('Native background following is unavailable.')
+    await backgroundReceiver.start(generation)
+    const confirmed = await backgroundReceiver.ownership()
+    if (confirmed.owner !== 'service' || confirmed.generation !== generation) {
+      throw new Error('Background following ownership was not confirmed.')
+    }
+  },
+  stopService: async (generation: number) => {
+    if (!backgroundReceiver) throw new Error('Native background following is unavailable.')
+    const current = await backgroundReceiver.ownership()
+    if (current.owner === 'activity') return // Stopped through Android's notification
+    if (current.generation !== generation) throw new Error('Background receiver ownership changed.')
+    await backgroundReceiver.stop(generation)
+    if ((await backgroundReceiver.ownership()).owner !== 'activity') {
+      throw new Error('Background receiver still owns its subscriptions.')
+    }
+  },
+}
+
+const setBackgroundFollowing = async (enabled: boolean): Promise<void> => {
+  if (!followOwnerController || settingsBusy.value || !backgroundReceiver) return
+  settingsBusy.value = true
+  settingsError.value = ''
+  try {
+    await followOwnerController.transition(enabled ? 'service' : 'activity')
+    receiverOwner.value = (await backgroundReceiver.ownership()).owner
+  } catch (error) {
+    const current = await backgroundReceiver.ownership().catch(() => undefined)
+    if (current) receiverOwner.value = current.owner
+    settingsError.value =
+      error instanceof Error ? error.message : 'Background following could not be changed.'
+  } finally {
+    settingsBusy.value = false
+  }
+}
+
+const reconcileReceiverOwnership = async (): Promise<void> => {
+  if (!backgroundReceiver || !followOwnerController || settingsBusy.value) return
+  const native = await backgroundReceiver.ownership()
+  if (native.owner === 'activity' && followOwnerController.snapshot().owner === 'service') {
+    await followOwnerController.transition('activity')
+  } else if (native.owner === 'service' && followOwnerController.snapshot().owner === 'activity') {
+    await runtime.setFollowingSuspended(true)
+    followOwnerController = createFollowOwnership(receiverEffects, {
+      owner: native.owner,
+      generation: native.generation,
+    })
+  }
+  receiverOwner.value = native.owner
+  receiverSnapshot.value = native.owner === 'service' ? (native.status ?? undefined) : undefined
+}
+const requireActivityFollowing = async (): Promise<void> => {
+  if (receiverOwner.value === 'service') await setBackgroundFollowing(false)
+  if (receiverOwner.value === 'service') {
+    throw new Error('Background following must be disabled before editing subscriptions.')
+  }
+}
+const setFollowName = async (shareId: string, name: string): Promise<void> => {
+  try {
+    await requireActivityFollowing()
+    runtime.setFollowName(shareId, name)
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not rename the peer.'
+  }
+}
+const setFollowColor = async (shareId: string, color: string): Promise<void> => {
+  try {
+    await requireActivityFollowing()
+    runtime.setFollowColor(shareId, color)
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not update the peer color.'
+  }
+}
 const openAndroidSystemSettings = async (target: AndroidSystemSettingsTarget): Promise<void> => {
   if (!backgroundSharing) return
   try {
@@ -1148,6 +1240,7 @@ const unsubscribe = runtime.subscribe((next) => {
   networkDiagnostics.value = latestNetwork
 })
 let backgroundPoll: number | undefined
+let receiverPoll: number | undefined
 let sharedTextPoll: number | undefined
 let checkingSharedText = false
 const receiveSharedText = async (): Promise<void> => {
@@ -1317,11 +1410,19 @@ const oldSharing = computed(() => {
     ).values(),
   ].sort((left, right) => right.endedAt - left.endedAt)
 })
-const activeFollowing = computed(() =>
-  runtimeState.value.following.filter(
-    (entry) => entry.status !== 'expired' && entry.status !== 'revoked',
-  ),
-)
+const activeFollowing = computed(() => {
+  const ownedByService = receiverOwner.value === 'service'
+  const native = new Map(receiverSnapshot.value?.following.map((entry) => [entry.shareId, entry]))
+  return runtimeState.value.following
+    .map((entry) => {
+      if (!ownedByService || !entry.saved) return entry
+      const current = native.get(entry.shareId)
+      return current
+        ? { ...entry, ...current }
+        : { ...entry, connected: false, status: 'unavailable' as const }
+    })
+    .filter((entry) => entry.status !== 'expired' && entry.status !== 'revoked')
+})
 const previewFollow = computed(() => activeFollowing.value.find((entry) => !entry.saved))
 const APP_HANDOFF_DISMISSED_KEY = 'constellation.app-handoff-dismissed'
 const readAppHandoffDismissed = (): readonly string[] => {
@@ -1579,6 +1680,11 @@ const recenterLabel = computed(() => {
     ? `${freshness}. Your location area is hidden at this zoom; show your area`
     : `Center on my location. ${freshness}`
 })
+const receivedLocations = computed(() =>
+  receiverOwner.value === 'service'
+    ? (receiverSnapshot.value?.received ?? [])
+    : runtimeState.value.received,
+)
 const locations = computed(() => {
   const own = ownLocationState.value
   const ownLocations =
@@ -1587,14 +1693,14 @@ const locations = computed(() => {
       : []
   return [
     ...ownLocations.map((location) => ({ ...location, isOwn: true, color: '#f78f3b' })),
-    ...runtimeState.value.received
+    ...receivedLocations.value
       .filter((entry) =>
         activeFollowing.value.some(
           (follow) => follow.shareId === entry.shareId && follow.status !== 'denied',
         ),
       )
       .map(({ shareId, observation, state }) => {
-        const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
+        const follow = activeFollowing.value.find((entry) => entry.shareId === shareId)
         return locationObservationToMapLocation(observation, state, {
           id: shareId,
           label: follow?.displayName || follow?.localName || 'Shared location',
@@ -1604,7 +1710,7 @@ const locations = computed(() => {
   ]
 })
 const viewableIds = computed(() =>
-  runtimeState.value.received
+  receivedLocations.value
     .filter((entry) => activeFollowing.value.some((follow) => follow.shareId === entry.shareId))
     .map(({ shareId }) => shareId),
 )
@@ -2060,6 +2166,7 @@ const acceptInvitation = async (): Promise<void> => {
     const url = invitationUrl.value
     if (!url) throw new Error('The share link is unavailable.')
     const { shareId } = parseShareInvitation(url)
+    await requireActivityFollowing()
     await runtime.acceptShare(url, { saved: false })
     collapseActions()
     if (invitationUrl.value === url) {
@@ -2097,6 +2204,7 @@ const previewInvitation = async (url: string): Promise<void> => {
   if (pendingBrowserInvite.value?.shareId === shareId) pendingBrowserInvite.value = undefined
   previewInvite.value = { shareId, url }
   try {
+    await requireActivityFollowing()
     await runtime.acceptShare(url, { saved: false })
     collapseActions()
     if (invitationUrl.value === url) {
@@ -2119,6 +2227,7 @@ const traceError = ref('')
 const setFollowTraceEnabled = async (shareId: string, enabled: boolean): Promise<void> => {
   traceError.value = ''
   try {
+    await requireActivityFollowing()
     await runtime.setFollowTraceEnabled(shareId, enabled)
   } catch (error) {
     traceError.value = error instanceof Error ? error.message : 'Could not update recording.'
@@ -2127,6 +2236,7 @@ const setFollowTraceEnabled = async (shareId: string, enabled: boolean): Promise
 const clearFollowTrace = async (shareId: string): Promise<void> => {
   traceError.value = ''
   try {
+    await requireActivityFollowing()
     await runtime.clearFollowTrace(shareId)
   } catch (error) {
     traceError.value = error instanceof Error ? error.message : 'Could not clear history.'
@@ -2137,6 +2247,7 @@ const saveNickname = async (): Promise<void> => {
   if (!nicknamePrompt.value) return
   try {
     const { shareId, name } = nicknamePrompt.value
+    await requireActivityFollowing()
     await runtime.saveFollowing(shareId, name)
     const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
     if (
@@ -2368,6 +2479,7 @@ const revokeAllShares = async (): Promise<void> => {
   }
 }
 const stopFollowing = async (shareId: string): Promise<void> => {
+  await requireActivityFollowing()
   await runtime.stopFollowing(shareId)
   if (selectedFollowId.value === shareId) peerListOpen.value = false
 }
@@ -2427,6 +2539,7 @@ const updateVisibility = (): void => {
       })
 
   const visible = document.visibilityState === 'visible'
+  if (visible) void reconcileReceiverOwnership().catch(() => undefined)
   updateLocationOwnership()
   void backgroundSharing?.setVisible(visible).catch(() => undefined)
 }
@@ -2442,7 +2555,17 @@ onMounted(() => {
   }
   void (async () => {
     updateVisibility()
-    await migrateAndroidSourceShares()
+    const native = await backgroundReceiver?.ownership()
+    if (native?.owner !== 'service') await migrateAndroidSourceShares()
+    if (native?.owner === 'service') await runtime.setFollowingSuspended(true)
+    if (native) {
+      receiverSnapshot.value = native.status ?? undefined
+      receiverOwner.value = native.owner
+      followOwnerController = createFollowOwnership(receiverEffects, {
+        owner: native.owner,
+        generation: native.generation,
+      })
+    }
     await runtime.initialize()
     await loadSharingSettings()
     if (backgroundSharing) {
@@ -2451,6 +2574,10 @@ onMounted(() => {
       backgroundPoll = window.setInterval(
         () => void refreshBackgroundStatus().catch(() => undefined),
         1_000,
+      )
+      receiverPoll = window.setInterval(
+        () => void reconcileReceiverOwnership().catch(() => undefined),
+        5_000,
       )
     }
     offerInvitation(window.location.href)
@@ -2466,6 +2593,7 @@ onBeforeUnmount(() => {
   stopDeepLinks()
   unsubscribe()
   if (backgroundPoll !== undefined) window.clearInterval(backgroundPoll)
+  if (receiverPoll !== undefined) window.clearInterval(receiverPoll)
   if (sharedTextPoll !== undefined) window.clearInterval(sharedTextPoll)
   if (copyNoticeTimeout !== undefined) window.clearTimeout(copyNoticeTimeout)
   if (statusNoticeTimeout !== undefined) window.clearTimeout(statusNoticeTimeout)

@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.location.Location
 import android.location.LocationListener
@@ -18,6 +19,7 @@ import android.os.Build
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.Looper
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -37,10 +39,12 @@ class LocationShareService : Service(), LocationListener {
   private val mainHandler = Handler(Looper.getMainLooper())
   private val ioExecutor = Executors.newSingleThreadExecutor()
   private lateinit var store: EncryptedShareStore
+  private lateinit var receiverFence: ReceiverOwnershipFence
   private var webView: WebView? = null
   private var runtimeStarting = false
   private val pendingCommandIds = mutableSetOf<String>()
   private val pendingCommands = mutableListOf<JSONObject>()
+  private val pendingReceiverStops = mutableMapOf<String, Long>()
   private val pendingCreateIds = mutableSetOf<String>()
   private var runtimeReady = false
   private var finishing = false
@@ -52,14 +56,33 @@ class LocationShareService : Service(), LocationListener {
   private var appliedSampling: String? = null
   private var networkRestriction: String? = null
   private var networkStateSent: String? = null
+  private var networkOnlineSent: Boolean? = null
   private var connectivityManager: ConnectivityManager? = null
+  private var lastActiveNetwork: Network? = null
+  private var sufferedNetworkLoss = false
+  private fun requestTransportRecovery() {
+    queueCommand(JSONObject().put("type", "recover-background-sources").put("online", true))
+  }
   private val networkCallback = object : ConnectivityManager.NetworkCallback() {
     override fun onAvailable(network: Network) {
-      mainHandler.post { updatePolicyState() }
+      mainHandler.post {
+        val changed = lastActiveNetwork != null && lastActiveNetwork != network
+        val recovering = changed || sufferedNetworkLoss
+        lastActiveNetwork = network
+        sufferedNetworkLoss = false
+        updatePolicyState()
+        if (recovering) requestTransportRecovery()
+      }
     }
 
     override fun onLost(network: Network) {
-      mainHandler.post { updatePolicyState() }
+      mainHandler.post {
+        if (lastActiveNetwork == network) {
+          lastActiveNetwork = null
+          sufferedNetworkLoss = true
+        }
+        updatePolicyState()
+      }
     }
 
     override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -69,6 +92,16 @@ class LocationShareService : Service(), LocationListener {
   private val restrictBackgroundReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       mainHandler.post { updatePolicyState() }
+    }
+  }
+  private val idleReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      mainHandler.post {
+        val power = getSystemService(PowerManager::class.java)
+        if (power?.isDeviceIdleMode == false && connectivityManager?.activeNetwork != null) {
+          requestTransportRecovery()
+        }
+      }
     }
   }
   private var locationManager: LocationManager? = null
@@ -81,6 +114,7 @@ class LocationShareService : Service(), LocationListener {
     ShareServiceContract.serviceRunning = true
     ShareServiceContract.startPending = false
     store = EncryptedShareStore(applicationContext, discardUnreadable = false)
+    receiverFence = ReceiverOwnershipFence(applicationContext)
     connectivityManager = getSystemService(ConnectivityManager::class.java)
     runCatching { connectivityManager?.registerDefaultNetworkCallback(networkCallback) }
     runCatching {
@@ -89,15 +123,34 @@ class LocationShareService : Service(), LocationListener {
         IntentFilter(ConnectivityManager.ACTION_RESTRICT_BACKGROUND_CHANGED),
       )
     }
+    runCatching {
+      registerReceiver(idleReceiver, IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED))
+    }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val action = intent?.action
     return try {
       when (action) {
+        ShareServiceContract.ACTION_RECEIVER_START, ShareServiceContract.ACTION_RECEIVER_STOP -> {
+          val requested = JSONObject(intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST) ?: "{}")
+          val generation = requested.optLong("generation", -1L)
+          check(generation > 0L && receiverFence.snapshot().generation == generation) {
+            "Background viewer ownership generation was rejected."
+          }
+          val requestId = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)
+            ?: UUID.randomUUID().toString()
+          if (action == ShareServiceContract.ACTION_RECEIVER_STOP) pendingReceiverStops[requestId] = generation
+          queueCommand(JSONObject()
+            .put("type", if (action == ShareServiceContract.ACTION_RECEIVER_START) "receiver-start" else "receiver-stop")
+            .put("generation", generation)
+            .put("requestId", requestId))
+          startRuntime()
+          START_STICKY
+        }
         ShareServiceContract.ACTION_STOP -> {
           queueCommand(JSONObject().put("type", "stop-all"))
-          if (webView == null && !store.hasSavedShares()) finishStop()
+          if (webView == null && !store.hasSavedShares() && receiverFence.snapshot().owner != "service") finishStop()
           else startRuntime()
           START_NOT_STICKY
         }
@@ -243,10 +296,17 @@ class LocationShareService : Service(), LocationListener {
           START_STICKY
         }
         ShareServiceContract.ACTION_RESTORE, null -> {
-          if (!store.hasSavedShares() || (action == null && !store.hasBackgroundShares())) {
+          if ((!store.hasSavedShares() && receiverFence.snapshot().owner != "service") ||
+              (action == null && !store.hasBackgroundShares() && receiverFence.snapshot().owner != "service")) {
             finishStop()
             START_NOT_STICKY
           } else {
+            if (receiverFence.snapshot().owner == "service") {
+              queueCommand(JSONObject()
+                .put("type", "receiver-start")
+                .put("generation", receiverFence.snapshot().generation)
+                .put("requestId", UUID.randomUUID().toString()))
+            }
             startRuntime()
             START_STICKY
           }
@@ -287,10 +347,14 @@ class LocationShareService : Service(), LocationListener {
     stopLocationUpdates()
     runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
     runCatching { unregisterReceiver(restrictBackgroundReceiver) }
+    runCatching { unregisterReceiver(idleReceiver) }
+    lastActiveNetwork = null
+    sufferedNetworkLoss = false
     connectivityManager = null
     watchRequested = false
     networkRestriction = null
     networkStateSent = null
+    networkOnlineSent = null
     ShareServiceContract.networkRestriction = null
     ShareServiceContract.sampling = "balanced"
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
@@ -384,11 +448,17 @@ class LocationShareService : Service(), LocationListener {
         .put("type", "private-state-result")
         .put("requestId", requestId)
       try {
+        val scope = request.optString("scope", "source")
+        val generation = request.optLong("generation", -1)
+        require(scope == "source" || scope == "viewer") { "Unsupported protected-state scope." }
         when (request.optString("action")) {
-          "load" -> response.put("state", store.loadPrivateState() ?: JSONObject.NULL)
+          "load" -> response.put("state", if (scope == "viewer")
+            receiverFence.loadServiceState(generation) ?: JSONObject.NULL
+            else store.loadPrivateState() ?: JSONObject.NULL)
           "save" -> {
             val state = request.optString("state")
-            store.savePrivateState(state)
+            if (scope == "viewer") receiverFence.saveServiceState(generation, state)
+            else store.savePrivateState(state)
             response.put("state", JSONObject.NULL)
           }
           else -> throw IllegalArgumentException("Unsupported protected-state operation.")
@@ -415,6 +485,13 @@ class LocationShareService : Service(), LocationListener {
         stopWhenIdle()
       }
       "command-complete" -> {
+        val completedId = parsed.optString("requestId")
+        pendingReceiverStops.remove(completedId)?.let { generation ->
+          if (!parsed.has("error")) {
+            runCatching { receiverFence.releaseService(generation) }
+              .onFailure { parsed.put("error", "Receiver ownership could not be released.") }
+          }
+        }
         pendingCommandIds.remove(parsed.optString("requestId"))
         val result = Intent(ShareServiceContract.ACTION_COMMAND_COMPLETE)
           .setPackage(packageName)
@@ -435,6 +512,11 @@ class LocationShareService : Service(), LocationListener {
         stopLocationUpdates()
       }
       "location-refresh" -> requestFreshLocation()
+      "receiver-status" -> {
+        ShareServiceContract.receiverStatus = parsed.optJSONObject("status")?.toString()
+        if (parsed.optBoolean("stopped")) ShareServiceContract.receiverStatus = null
+        updatePolicyState()
+      }
       "status" -> {
         val status = parsed.optJSONObject("status") ?: return
         ShareServiceContract.currentStatus = status.toString()
@@ -453,6 +535,7 @@ class LocationShareService : Service(), LocationListener {
           notificationBody(shares, viewers),
           (shares?.length() ?: 0) > 0,
           lastPaused,
+          receiving = receiverFence.snapshot().owner == "service",
         )
         stopWhenIdle()
       }
@@ -463,7 +546,8 @@ class LocationShareService : Service(), LocationListener {
 
   private fun notificationBody(shares: JSONArray?, viewers: Int): String {
     val count = shares?.length() ?: 0
-    if (count == 0) return "Notifying peers that location links have ended"
+    if (count == 0) return if (receiverFence.snapshot().owner == "service")
+      "Receiving encrypted location updates from saved peers" else "Notifying peers that location links have ended"
     val precisions = linkedSetOf<String>()
     var nearestExpiry: Long? = null
     for (index in 0 until count) {
@@ -590,9 +674,11 @@ class LocationShareService : Service(), LocationListener {
     val shares = lastShares
     val restriction = connectivityRestriction()
     val networkState = restriction ?: "unmetered"
-    if (forceSend || networkState != networkStateSent) {
+    val online = connectivityManager?.activeNetwork != null
+    if (forceSend || networkState != networkStateSent || online != networkOnlineSent) {
       networkStateSent = networkState
-      queueCommand(JSONObject().put("type", "network-state").put("state", networkState))
+      networkOnlineSent = online
+      queueCommand(JSONObject().put("type", "network-state").put("state", networkState).put("online", online))
     }
     val sampling = samplingFor(shares)
     networkRestriction = restriction
@@ -609,6 +695,7 @@ class LocationShareService : Service(), LocationListener {
       notificationBody(shares, lastViewerCount),
       (shares?.length() ?: 0) > 0,
       lastPaused,
+      receiving = receiverFence.snapshot().owner == "service",
     )
   }
 
@@ -666,13 +753,27 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun startRuntime() {
-    // Android 14+ forbids the location service type without a location grant.
-    // A visible settings-only command can use a short-lived ordinary service.
-    if (locationGrant(this) != "none") {
-      startForeground(
-        ShareServiceContract.NOTIFICATION_ID,
-        ShareNotification.build(this, foregroundNotificationBody(), true, lastPaused),
+    val receiving = receiverFence.snapshot().owner == "service"
+    val sourceShares = runCatching { store.loadPrivateState()?.let(::JSONObject)?.optJSONArray("shares")?.length() ?: 0 }.getOrDefault(0)
+    // Preserve the existing location-type lifecycle for outgoing shares and
+    // durable ended-link notices; receiver-only devices need no location grant.
+    val location = locationGrant(this) != "none" &&
+      (!receiving || sourceShares > 0 || pendingCreateIds.isNotEmpty())
+    if (location || receiving) {
+      val notice = ShareNotification.build(
+        this, if (receiving && !location) "Receiving encrypted updates from saved peers" else foregroundNotificationBody(),
+        sharing = location, paused = lastPaused, receiving = receiving,
       )
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        val types = (if (location) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0) or
+          (if (receiving) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)
+        startForeground(ShareServiceContract.NOTIFICATION_ID, notice, types)
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(ShareServiceContract.NOTIFICATION_ID, notice,
+          if (location) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0)
+      } else {
+        startForeground(ShareServiceContract.NOTIFICATION_ID, notice)
+      }
     }
     if (webView == null && !runtimeStarting) createRuntime()
   }
@@ -690,6 +791,7 @@ class LocationShareService : Service(), LocationListener {
       ?: return
     if ((status.optJSONArray("shares")?.length() ?: 0) > 0 ||
         status.optInt("endNotificationCount", 0) > 0) return
+    if (receiverFence.snapshot().owner == "service") return
     finishStop(status.takeIf { it.optString("state") == "error" })
   }
 

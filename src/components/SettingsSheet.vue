@@ -137,6 +137,24 @@
         networks, Data Saver and Doze can delay updates. Pausing updates keeps the link active;
         updates resume automatically when the restriction ends.
       </p>
+      <section v-if="isAndroid" class="android-readiness" aria-label="Background following">
+        <h3>Keep following in background</h3>
+        <label class="settings-network">
+          <input
+            type="checkbox"
+            :checked="backgroundFollowing"
+            :disabled="busy || (!backgroundFollowing && savedFollowCount === 0)"
+            @change="emit('setBackgroundFollowing', ($event.target as HTMLInputElement).checked)"
+          />
+          Keep following saved peers while this app is in the background
+        </label>
+        <p class="field-help">
+          Off by default. {{ savedFollowCount }} saved peer(s). When enabled, Android shows an
+          ongoing notification with Stop background following. Updates can still be delayed by Doze,
+          lack of network access or device policy; this is not guaranteed continuous delivery. Only
+          saved, authorized, non-expired subscriptions are restored.
+        </p>
+      </section>
       <section
         v-if="isAndroid"
         class="android-readiness"
@@ -200,6 +218,8 @@ const props = defineProps<{
   behavior: SharingBehavior
   isAndroid: boolean
   permissions?: AndroidSharingSetup['permissions']
+  backgroundFollowing: boolean
+  savedFollowCount: number
   devicePolicies?: AndroidSharingSetup['devicePolicies']
   review: boolean
   hasShares: boolean
@@ -210,6 +230,7 @@ const emit = defineEmits<{
   close: []
   save: [behavior: SharingBehavior]
   enablePermissions: []
+  setBackgroundFollowing: [enabled: boolean]
   openSystemSettings: [target: AndroidSystemSettingsTarget]
 }>()
 const dialog = ref<HTMLElement>()

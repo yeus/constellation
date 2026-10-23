@@ -15,6 +15,9 @@ internal object ShareServiceContract {
   const val ACTION_CLEAR_OLD_PEERS = "space.taskyon.constellation.CLEAR_OLD_PEERS"
   const val ACTION_ADOPT_PEER_NAME = "space.taskyon.constellation.ADOPT_PEER_NAME"
   const val ACTION_SET_PEER_NAMES = "space.taskyon.constellation.SET_PEER_NAMES"
+  const val ACTION_RECEIVER_START = "space.taskyon.constellation.RECEIVER_START"
+  const val ACTION_RECEIVER_STOP = "space.taskyon.constellation.RECEIVER_STOP"
+  @Volatile var receiverStatus: String? = null
   @Volatile var currentStatus: String? = null
   @Volatile var serviceRunning: Boolean = false
   @Volatile var startPending: Boolean = false
@@ -54,6 +57,7 @@ internal object ShareNotification {
     body: String,
     sharing: Boolean = true,
     paused: Boolean = false,
+    receiving: Boolean = false,
   ): Notification {
     ensureChannel(context)
     val stopIntent = Intent(context, LocationShareService::class.java)
@@ -77,9 +81,9 @@ internal object ShareNotification {
       .setSmallIcon(R.drawable.ic_stat_constellation)
       .setContentTitle(
         when {
-          !sharing -> "Constellation is sending ended-link notices"
-          paused -> "Constellation sharing is paused"
-          else -> "Constellation is sharing your location"
+          sharing -> if (paused) "Constellation sharing is paused" else "Constellation is sharing your location"
+          receiving -> "Constellation is following saved peers"
+          else -> "Constellation is sending ended-link notices"
         },
       )
       .setContentText(body)
@@ -88,11 +92,23 @@ internal object ShareNotification {
       .setOnlyAlertOnce(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
-      .addAction(
+    if (sharing || !receiving) {
+      builder.addAction(
         0,
         if (!sharing) "Stop notices" else if (paused) "Resume sharing" else "Pause sharing",
         if (sharing) pausePending else stopPending,
       )
+    }
+    if (receiving) {
+      val generation = ReceiverOwnershipFence(context).snapshot().generation
+      val stopFollowing = Intent(context, LocationShareService::class.java)
+        .setAction(ShareServiceContract.ACTION_RECEIVER_STOP)
+        .putExtra(ShareServiceContract.EXTRA_REQUEST, "{\"generation\":$generation}")
+      builder.addAction(0, "Stop background following", PendingIntent.getService(
+        context, ShareServiceContract.NOTIFICATION_ID + 2, stopFollowing,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      ))
+    }
     context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
       launch.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
       builder.setContentIntent(PendingIntent.getActivity(
@@ -110,9 +126,10 @@ internal object ShareNotification {
     body: String,
     sharing: Boolean = true,
     paused: Boolean = false,
+    receiving: Boolean = false,
   ) {
     context.getSystemService(NotificationManager::class.java)
-      .notify(ShareServiceContract.NOTIFICATION_ID, build(context, body, sharing, paused))
+      .notify(ShareServiceContract.NOTIFICATION_ID, build(context, body, sharing, paused, receiving))
   }
 
   private fun ensureChannel(context: Context) {

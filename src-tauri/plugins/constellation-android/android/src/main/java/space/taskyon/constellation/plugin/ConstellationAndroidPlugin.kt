@@ -47,6 +47,11 @@ class PrivateStateArgs {
 }
 
 @InvokeArg
+class ReceiverGenerationArgs {
+  var generation: Long = 0
+}
+
+@InvokeArg
 class BlockViewerArgs {
   var shareId: String = ""
   var fingerprint: String = ""
@@ -162,14 +167,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   private val store by lazy {
     EncryptedShareStore(activity.applicationContext, discardUnreadable = false)
   }
-  private val privateStore by lazy {
-    EncryptedShareStore(
-      activity.applicationContext,
-      "private-ui-state-v1",
-      "constellation-private-ui-state-v1",
-      false,
-    )
-  }
+  private val receiverFence by lazy { ReceiverOwnershipFence(activity.applicationContext) }
 
   private fun locationPermissionResult(): JSObject = JSObject()
     .put("grant", locationGrant(activity))
@@ -459,7 +457,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun loadPrivateState(invoke: Invoke) {
     try {
       val result = JSObject()
-      result.put("state", privateStore.loadPrivateState() ?: "")
+      result.put("state", receiverFence.loadActivityState() ?: "")
       invoke.resolve(result)
     } catch (_: Exception) {
       invoke.reject("Protected location state could not be opened.")
@@ -472,13 +470,71 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     try {
       val state = invoke.parseArgs(PrivateStateArgs::class.java).state
       JSONObject(state)
-      privateStore.savePrivateState(state)
+      receiverFence.saveActivityState(state)
       Log.i("ConstellationPersist", "native-save-committed")
       invoke.resolve(JSObject())
       Log.i("ConstellationPersist", "native-save-resolved")
     } catch (_: Exception) {
       Log.i("ConstellationPersist", "native-save-failed")
       invoke.reject("Protected location state could not be saved.")
+    }
+  }
+
+  @Command
+  fun receiverOwnership(invoke: Invoke) {
+    try {
+      val snapshot = receiverFence.snapshot()
+      invoke.resolve(JSObject()
+        .put("owner", snapshot.owner)
+        .put("generation", snapshot.generation)
+        .put("status", ShareServiceContract.receiverStatus?.let(::JSONObject) ?: JSONObject.NULL))
+    } catch (_: Exception) {
+      invoke.reject("Protected receiver ownership is unavailable.")
+    }
+  }
+
+  @Command
+  fun startBackgroundReceiver(invoke: Invoke) {
+    try {
+      val generation = invoke.parseArgs(ReceiverGenerationArgs::class.java).generation
+      val state = receiverFence.loadActivityState()?.let(::JSONObject)
+        ?: throw IllegalStateException("Save a location subscription before enabling background following.")
+      val saved = state.optJSONArray("followed")
+      check((0 until (saved?.length() ?: 0)).any { index ->
+        val record = saved?.optJSONObject(index)
+        record != null && !record.has("endReason")
+      }) { "There are no active saved subscriptions to follow." }
+      check((state.optJSONArray("shares")?.length() ?: 0) == 0 &&
+        (state.optJSONArray("endedShares")?.length() ?: 0) == 0) {
+        "Migrate outgoing shares before transferring viewer ownership."
+      }
+      requireNotificationPermission()
+      receiverFence.acquireService(generation)
+      runReturnCommand(
+        invoke, ShareServiceContract.ACTION_RECEIVER_START, "",
+        request = JSONObject().put("generation", generation).toString(),
+        timeoutMessage = "Background following did not confirm ownership. Disable it before retrying.",
+      )
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Background following could not be started.")
+    }
+  }
+
+  @Command
+  fun stopBackgroundReceiver(invoke: Invoke) {
+    try {
+      val generation = invoke.parseArgs(ReceiverGenerationArgs::class.java).generation
+      val snapshot = receiverFence.snapshot()
+      check(snapshot.owner == "service" && snapshot.generation == generation) {
+        "Receiver ownership changed. Reload its status."
+      }
+      runReturnCommand(
+        invoke, ShareServiceContract.ACTION_RECEIVER_STOP, "",
+        request = JSONObject().put("generation", generation).toString(),
+        timeoutMessage = "Background following could not confirm a safe shutdown.",
+      )
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Background following could not be stopped.")
     }
   }
 
