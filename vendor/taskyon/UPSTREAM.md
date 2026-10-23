@@ -36,12 +36,20 @@ The copied packages retain Taskyon's MIT copyright notice in `vendor/taskyon/LIC
 
 ## PMTiles cache snapshot
 
-- Package: `@taskyon/pmtiles-cache` (complete source and test snapshot)
+- Package: `@taskyon/pmtiles-cache` 0.2.0 (complete source and test snapshot)
 - Source repository: Taskyon `frontend`, branch `constellation` working tree
-- Base revision: `73126bee904cb2e5debd6fc7385a2a022e1b5e0f`
-- Snapshot date: 2026-10-14
-- Upstream working-tree changes: new tile-aware sparse PMTiles cache for Constellation
-  v0.1.4, including a spec-v3 archive writer, a minimal staged storage port, tile-level LRU
-  eviction, remote-version invalidation and focused writer/cache tests. The package is not yet
-  published as a released Taskyon version; this snapshot records the working-tree source.
+- Base revision: `d90769abab39fe36ddd14f6076b390e4312457ab`
+- Snapshot date: 2026-10-22
+- Source tree SHA-256 (sorted `src` files):
+  `bb1238bded93a460452ad7179abcc9a2278cdff7c6f83b9050c6a0ff21afb7e5`
+- Upstream working-tree changes: replace the tile-aware archive rewrite with a
+  sparse 64 MiB logical-window range cache over immutable content-addressed
+  packs, conditional per-window indexes, exact gap fetching, quota eviction,
+  crash reconciliation, ETag source isolation and offline PMTiles bootstrap.
+  The package is not yet published as a released Taskyon version; this snapshot
+  records the verified working-tree source.
 - Owner: `frontend/packages/pmtiles-cache`; generated dist is built locally.
+- Constellation integration boundary: the map runtime has no Taskyon runtime in
+  this application, so `src/map/pmtilesCacheStorage.ts` implements the same
+  narrow record/blob capability over the existing OPFS/IndexedDB stores. The
+  engine, schemas and tests remain upstream-owned and are not duplicated.

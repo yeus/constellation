@@ -2,16 +2,17 @@ import { layers, namedFlavor } from '@protomaps/basemaps'
 import { addProtocol, removeProtocol, setWorkerUrl } from 'maplibre-gl'
 import type { StyleSpecification } from 'maplibre-gl'
 import mapLibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { PMTiles, tileTypeExt, type Header } from 'pmtiles'
+import { PMTiles, tileTypeExt, type Source } from 'pmtiles'
 
 import {
-  createPmtilesCache,
-  type PmTilesArchiveHeader,
-  type PmTilesCache,
+  createPmtilesCachedSource,
+  createPmtilesHttpSource,
+  type PmtilesCachedSource,
 } from '@taskyon/pmtiles-cache'
 
 import {
   createPmtilesCacheStorage,
+  pmtilesCacheSourceId,
   type PmtilesCacheBackend,
   type PmtilesCacheStorageHandle,
 } from './pmtilesCacheStorage.ts'
@@ -75,7 +76,8 @@ const TILE_URL = /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)/
 export interface PmtilesCacheStats {
   readonly backend?: PmtilesCacheBackend
   readonly archives: number
-  readonly tiles: number
+  readonly packs: number
+  readonly windows: number
   readonly bytes: number
 }
 
@@ -83,26 +85,13 @@ export interface PmtilesRuntimeOptions {
   readonly maxBytes?: number
 }
 
-const cacheHeader = (header: Header): PmTilesArchiveHeader => ({
-  tileCompression: header.tileCompression,
-  tileType: header.tileType,
-  minZoom: header.minZoom,
-  maxZoom: header.maxZoom,
-  minLon: header.minLon,
-  minLat: header.minLat,
-  maxLon: header.maxLon,
-  maxLat: header.maxLat,
-  centerZoom: header.centerZoom,
-  centerLon: header.centerLon,
-  centerLat: header.centerLat,
-})
-
 const metadataRecord = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 
 interface PmtilesArchiveEntry {
   reader: PMTiles
-  cache?: PmTilesCache
+  readonly source: Source
+  cache?: PmtilesCachedSource
   ready: Promise<void>
 }
 
@@ -112,13 +101,17 @@ interface PmtilesRuntimeState {
   maxBytes: number
   storageHandle?: PmtilesCacheStorageHandle
   storagePromise?: Promise<void>
+  rebuildChain: Promise<void>
   readonly archives: Map<string, PmtilesArchiveEntry>
+  readonly pendingArchives: Map<string, Promise<PmtilesArchiveEntry>>
 }
 
 const createRuntimeState = (options: PmtilesRuntimeOptions): PmtilesRuntimeState => ({
   installed: false,
   maxBytes: Math.max(0, options.maxBytes ?? DEFAULT_CACHE_BYTES),
+  rebuildChain: Promise.resolve(),
   archives: new Map(),
+  pendingArchives: new Map(),
 })
 
 const ensureStorage = async (state: PmtilesRuntimeState): Promise<void> => {
@@ -130,26 +123,38 @@ const ensureStorage = async (state: PmtilesRuntimeState): Promise<void> => {
   await state.storagePromise
 }
 
-const createArchiveCache = (
+const createArchiveEntry = async (
   state: PmtilesRuntimeState,
   url: string,
-  reader: PMTiles,
-): PmTilesCache | undefined => {
-  if (!state.storageHandle || state.maxBytes <= 0) return undefined
-  return createPmtilesCache({
-    storage: state.storageHandle.storage,
-    key: url,
-    maxBytes: state.maxBytes,
-    remote: {
-      getHeader: async () => cacheHeader(await reader.getHeader()),
-      getMetadata: () => reader.getMetadata(),
-      getVersion: async () => (await reader.getHeader()).etag,
-      getTile: async (z, x, y, signal) => {
-        const tile = await reader.getZxy(z, x, y, signal)
-        return tile ? new Uint8Array(tile.data) : undefined
+): Promise<PmtilesArchiveEntry> => {
+  const remote = createPmtilesHttpSource({ url })
+  let cache: PmtilesCachedSource | undefined
+  if (state.storageHandle) {
+    const sourceId = await pmtilesCacheSourceId(url)
+    cache = createPmtilesCachedSource({
+      storage: state.storageHandle.storage,
+      namespace: `pmtiles/${sourceId}`,
+      sourceKey: url,
+      remote,
+      maxBytes: state.maxBytes,
+      onError: (error) => {
+        console.warn('Map cache storage unavailable; keeping the online map usable.', error)
       },
-    },
-  })
+    })
+  }
+  const source = cache ?? remote
+  const entry: PmtilesArchiveEntry = {
+    reader: new PMTiles(source),
+    source,
+    ...(cache ? { cache } : {}),
+    ready: Promise.resolve(),
+  }
+  entry.ready = entry.reader.getHeader().then(() => undefined)
+  return entry
+}
+
+const resetReader = (entry: PmtilesArchiveEntry): void => {
+  entry.reader = new PMTiles(entry.source)
 }
 
 const tileJsonResponse = async (entry: PmtilesArchiveEntry, archiveUrl: string) => {
@@ -173,11 +178,28 @@ const tileJsonResponse = async (entry: PmtilesArchiveEntry, archiveUrl: string) 
   }
 }
 
+const resolveArchive = async (
+  state: PmtilesRuntimeState,
+  archiveUrl: string,
+): Promise<PmtilesArchiveEntry> => {
+  const entry = state.archives.get(archiveUrl)
+  if (entry) return entry
+  const pending = state.pendingArchives.get(archiveUrl)
+  if (pending) return await pending
+  throw new Error('Unknown PMTiles archive.')
+}
+
 const handleJsonRequest = async (state: PmtilesRuntimeState, url: string) => {
   const archiveUrl = url.startsWith(PMTILES_PREFIX) ? url.slice(PMTILES_PREFIX.length) : undefined
-  const entry = archiveUrl ? state.archives.get(archiveUrl) : undefined
-  if (!entry) throw new Error('Unknown PMTiles archive.')
-  return tileJsonResponse(entry, archiveUrl!)
+  if (!archiveUrl) throw new Error('Invalid PMTiles archive URL.')
+  const entry = await resolveArchive(state, archiveUrl)
+  await entry.ready
+  try {
+    return await tileJsonResponse(entry, archiveUrl)
+  } catch (error) {
+    resetReader(entry)
+    throw error
+  }
 }
 
 const readTile = async (
@@ -188,14 +210,15 @@ const readTile = async (
   const match = TILE_URL.exec(url)
   if (!match) throw new Error('Invalid PMTiles tile URL.')
   const [, archiveUrl, z, x, y] = match
-  const entry = state.archives.get(archiveUrl!)
-  if (!entry) throw new Error('Unknown PMTiles archive.')
+  const entry = await resolveArchive(state, archiveUrl!)
   await entry.ready
-  const tile = entry.cache
-    ? await entry.cache.getTile(Number(z), Number(x), Number(y), signal).catch(() => undefined)
-    : undefined
-  const data = tile ?? (await entry.reader.getZxy(Number(z), Number(x), Number(y), signal))?.data
-  return data ? new Uint8Array(data) : new Uint8Array(0)
+  try {
+    const tile = await entry.reader.getZxy(Number(z), Number(x), Number(y), signal)
+    return tile ? new Uint8Array(tile.data) : new Uint8Array(0)
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) resetReader(entry)
+    throw error
+  }
 }
 
 const createProtocolHandler = (state: PmtilesRuntimeState): Parameters<typeof addProtocol>[1] => {
@@ -213,21 +236,36 @@ const setupRuntime = (state: PmtilesRuntimeState): void => {
   state.installed = true
 }
 
+const createArchive = async (
+  state: PmtilesRuntimeState,
+  url: string,
+): Promise<PmtilesArchiveEntry> => {
+  await ensureStorage(state)
+  return await createArchiveEntry(state, url)
+}
+
 const verifyRuntimeArchive = async (state: PmtilesRuntimeState, url: string): Promise<void> => {
-  const reader = new PMTiles(url)
-  const entry: PmtilesArchiveEntry = { reader, ready: Promise.resolve() }
-  entry.ready = (async () => {
-    await reader.getHeader()
-    await reader.getMetadata()
-    await ensureStorage(state)
-    entry.cache = createArchiveCache(state, url, reader)
-  })()
+  const pending = createArchive(state, url)
+  state.pendingArchives.set(url, pending)
+  let entry: PmtilesArchiveEntry
+  try {
+    entry = await pending
+  } finally {
+    state.pendingArchives.delete(url)
+  }
   state.archives.set(url, entry)
-  await entry.ready
+  try {
+    await entry.ready
+  } catch (error) {
+    resetReader(entry)
+    entry.ready = Promise.resolve()
+    throw error
+  }
 }
 
 const cacheStatsFor = async (state: PmtilesRuntimeState): Promise<PmtilesCacheStats> => {
   await state.storagePromise?.catch(() => undefined)
+  await state.rebuildChain.catch(() => undefined)
   const stats = await Promise.all(
     [...state.archives.values()].map(async (entry) =>
       entry.cache ? await entry.cache.stats() : undefined,
@@ -237,19 +275,34 @@ const cacheStatsFor = async (state: PmtilesRuntimeState): Promise<PmtilesCacheSt
   return {
     ...(state.storageHandle ? { backend: state.storageHandle.backend } : {}),
     archives: active.length,
-    tiles: active.reduce((total, entry) => total + entry.tiles, 0),
+    packs: active.reduce((total, entry) => total + entry.packs, 0),
+    windows: active.reduce((total, entry) => total + entry.windows, 0),
     bytes: active.reduce((total, entry) => total + entry.bytes, 0),
   }
 }
 
 const clearRuntimeCache = async (state: PmtilesRuntimeState): Promise<void> => {
+  await state.rebuildChain.catch(() => undefined)
   await Promise.all([...state.archives.values()].map(async (entry) => await entry.cache?.clear()))
+}
+
+const rebuildArchive = async (
+  state: PmtilesRuntimeState,
+  url: string,
+  previous: PmtilesArchiveEntry,
+): Promise<void> => {
+  await previous.cache?.close()
+  const next = await createArchive(state, url)
+  state.archives.set(url, next)
+  await next.ready.catch(() => undefined)
 }
 
 const setRuntimeCacheMaxBytes = (state: PmtilesRuntimeState, next: number): void => {
   state.maxBytes = Math.max(0, next)
   for (const [url, entry] of state.archives) {
-    entry.cache = createArchiveCache(state, url, entry.reader)
+    state.rebuildChain = state.rebuildChain
+      .then(() => rebuildArchive(state, url, entry))
+      .catch(() => undefined)
   }
 }
 
@@ -258,7 +311,9 @@ const disposeRuntime = (state: PmtilesRuntimeState): void => {
   removeProtocol('pmtiles')
   if (state.workerBootstrapUrl) URL.revokeObjectURL(state.workerBootstrapUrl)
   state.workerBootstrapUrl = undefined
+  for (const entry of state.archives.values()) void entry.cache?.close()
   state.archives.clear()
+  state.pendingArchives.clear()
   state.installed = false
 }
 

@@ -801,6 +801,26 @@ test('selects self and peers independently in a group and paints only own point 
   )
 })
 
+test('offers multi-gigabyte map cache limits without downloading them upfront', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.locator('.map-cache-settings summary').click()
+  const cache = page.locator('.map-cache-settings')
+  await expect(cache.getByRole('button', { name: '8 GB' })).toBeVisible()
+  await cache.getByRole('button', { name: '2 GB' }).click()
+  expect(await page.evaluate(() => localStorage.getItem('constellation.map-cache-bytes'))).toBe(
+    String(2 * 1024 * 1024 * 1024),
+  )
+  await page.reload()
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.locator('.map-cache-settings summary').click()
+  await expect(
+    page.locator('.map-cache-settings').getByRole('button', { name: '2 GB' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+})
+
 test('caches public basemap tiles, reports usage and clears the offline cache', async ({
   page,
 }) => {
@@ -812,13 +832,19 @@ test('caches public basemap tiles, reports usage and clears the offline cache', 
       try {
         const root = await navigator.storage.getDirectory()
         const directory = (await root.getDirectoryHandle(
-          'constellation-pmtiles-cache-v1',
+          'constellation-pmtiles-cache-v2',
         )) as FileSystemDirectoryHandle & { values(): AsyncIterable<FileSystemHandle> }
-        let count = 0
-        for await (const entry of directory.values()) {
-          if (entry) count += 1
+        type WalkableDirectory = FileSystemDirectoryHandle & {
+          values(): AsyncIterable<FileSystemHandle>
         }
-        return count
+        const countFiles = async (handle: WalkableDirectory): Promise<number> => {
+          let count = 0
+          for await (const entry of handle.values()) {
+            count += entry.kind === 'file' ? 1 : await countFiles(entry as WalkableDirectory)
+          }
+          return count
+        }
+        return await countFiles(directory)
       } catch {
         return 0
       }
@@ -829,7 +855,7 @@ test('caches public basemap tiles, reports usage and clears the offline cache', 
   await page.locator('.map-cache-settings summary').click()
   const section = page.locator('.map-cache-settings')
   await expect(section).toContainText('opfs')
-  await expect(section).toContainText('tiles')
+  await expect(section).toContainText('packs')
   await section.getByRole('button', { name: '128 MB' }).click()
   await expect(section.getByRole('button', { name: '128 MB' })).toHaveAttribute(
     'aria-pressed',
@@ -839,6 +865,15 @@ test('caches public basemap tiles, reports usage and clears the offline cache', 
     String(128 * 1024 * 1024),
   )
 
+  await section.getByRole('button', { name: '2 GB' }).click()
+  await expect(section.getByRole('button', { name: '2 GB' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  expect(await page.evaluate(() => localStorage.getItem('constellation.map-cache-bytes'))).toBe(
+    String(2 * 1024 * 1024 * 1024),
+  )
+  await expect(section.getByRole('button', { name: '8 GB' })).toBeVisible()
   await section.getByRole('button', { name: 'Clear map cache' }).click()
   await expect.poll(cacheEntries).toBe(0)
   await expect(section).toContainText('0.0 MB')

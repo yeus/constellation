@@ -82,9 +82,13 @@
               :aria-pressed="mapCacheMaxBytes === size * 1024 * 1024"
               @click="setMapCacheMaxBytes(size * 1024 * 1024)"
             >
-              {{ size }} MB
+              {{ size < 1024 ? `${size} MB` : `${size / 1024} GB` }}
             </button>
           </div>
+          <p class="field-help">
+            This is a maximum, not a download size. Larger limits require free device storage; the
+            browser or operating system can enforce a lower quota.
+          </p>
           <p class="field-help">{{ mapCacheLabel }}</p>
           <button type="button" @click="clearMapCache">Clear map cache</button>
         </details>
@@ -833,7 +837,7 @@ const readMapCacheBytes = (): number => {
 }
 const mapCacheMaxBytes = ref(readMapCacheBytes())
 const mapCacheStats = ref<PmtilesCacheStats>()
-const mapCacheSizes = [64, 128, 256] as const
+const mapCacheSizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192] as const
 const refreshMapCacheStats = async (): Promise<void> => {
   mapCacheStats.value = await locationMap.value?.cacheStats().catch(() => undefined)
 }
@@ -854,7 +858,7 @@ const mapCacheLabel = computed(() => {
   const stats = mapCacheStats.value
   if (!stats) return 'Cache usage unavailable.'
   const megabytes = (stats.bytes / (1024 * 1024)).toFixed(1)
-  return `${megabytes} MB · ${stats.tiles} tiles${stats.backend ? ` · ${stats.backend}` : ''}`
+  return `${megabytes} MB · ${stats.packs} packs${stats.backend ? ` · ${stats.backend}` : ''}`
 })
 const mapDecluttering = ref<MapDeclutteringPreferences>(
   loadMapDeclutteringPreferences(window.localStorage),

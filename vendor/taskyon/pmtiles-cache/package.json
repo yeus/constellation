@@ -1,7 +1,7 @@
 {
   "name": "@taskyon/pmtiles-cache",
-  "version": "0.1.0",
-  "description": "Tile-aware sparse PMTiles cache for Taskyon map clients",
+  "version": "0.2.0",
+  "description": "Sparse byte-range PMTiles cache for Taskyon map clients",
   "type": "module",
   "sideEffects": false,
   "exports": {
