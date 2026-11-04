@@ -132,3 +132,23 @@ test('release jobs use the Android SDK action that skips the removed tools packa
   assert.match(workflow, /android-actions\/setup-android@v4/)
   assert.doesNotMatch(workflow, /android-actions\/setup-android@v3/)
 })
+
+test('receiver standby CI builds the independent browser sender before its smoke test', () => {
+  const workflow = fs.readFileSync('.github/workflows/android-standby.yml', 'utf8')
+  const receiverJob = workflow.slice(
+    workflow.indexOf('  receiver-standby-emulator:'),
+    workflow.indexOf('  two-android-standby-emulator:'),
+  )
+  assert.match(receiverJob, /corepack yarn build:tauri:frontend/)
+  assert.match(receiverJob, /test:android:e2e --receiver-standby-smoke/)
+})
+
+test('manual Android standby CI tests recovery of both independent P2P peers', () => {
+  const workflow = fs.readFileSync('.github/workflows/android-standby.yml', 'utf8')
+  const twoAndroid = workflow.slice(workflow.indexOf('  two-android-standby-emulator:'))
+  assert.match(twoAndroid, /if: github\.event_name == 'workflow_dispatch'/)
+  assert.match(twoAndroid, /needs: native-build/)
+  assert.match(twoAndroid, /system-images;android-36;google_apis_playstore;x86_64/)
+  assert.match(twoAndroid, /constellation-android-e2e-local-x86_64\.apk/)
+  assert.match(twoAndroid, /test:android:managed --two-android-receiver-standby-smoke --skip-build/)
+})

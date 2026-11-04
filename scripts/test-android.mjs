@@ -1215,6 +1215,13 @@ const readBackgroundTransportSummary = async (cdp) => {
         .flatMap((share) => share.viewers ?? [])
         .filter((viewer) => viewer.deliveryVerification === 'supported' &&
           typeof viewer.lastConfirmedAt === 'number').length,
+      latestConfirmedAt: Math.max(
+        0,
+        ...(status.shares ?? [])
+          .flatMap((share) => share.viewers ?? [])
+          .filter((viewer) => viewer.deliveryVerification === 'supported')
+          .map((viewer) => viewer.lastConfirmedAt ?? 0),
+      ),
       connections: (status.diagnostics?.connections ?? []).map((connection) => ({
         role: connection.role,
         transport: connection.transport,
@@ -4479,6 +4486,8 @@ const runTwoAndroidReceiverStandbySmoke = async (sourceSerial, receiverSerial) =
       'acknowledged location from Android receiver to Android sender',
       60_000,
     )
+    const initialConfirmedAt = (await readBackgroundTransportSummary(source)).latestConfirmedAt
+    assert.ok(initialConfirmedAt > 0, 'initial Android-to-Android confirmation has a timestamp')
     const before = (await receiverStatus()).status.received[0]?.observation?.capturedAt ?? 0
     adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
     adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
@@ -4504,10 +4513,52 @@ const runTwoAndroidReceiverStandbySmoke = async (sourceSerial, receiverSerial) =
       'fresh Android-to-Android observation after Doze exit',
       90_000,
     )
+    await waitFor(
+      async () =>
+        (await readBackgroundTransportSummary(source)).latestConfirmedAt > initialConfirmedAt,
+      'fresh authenticated receipt after receiver Doze recovery',
+      90_000,
+    )
     assert.equal(
       (await readBackgroundTransportSummary(source)).viewerCount,
       1,
       'exactly one authenticated viewer after Android receiver recovery',
+    )
+    // The sender is an independently backgrounded Android runtime. A fresh
+    // observation and receipt must arrive after its own Doze exit.
+    const beforeSenderSleep =
+      (await receiverStatus()).status.received[0]?.observation?.capturedAt ?? 0
+    const beforeSenderConfirmation = (await readBackgroundTransportSummary(source))
+      .latestConfirmedAt
+    adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+    adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
+    try {
+      adbFor(sourceSerial, ['shell', 'dumpsys', 'deviceidle', 'force-idle'])
+      adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0111', '40.0111'])
+      await wait(5_000) // No promise of delivery while Android suspends networking.
+    } finally {
+      adbFor(sourceSerial, ['shell', 'dumpsys', 'deviceidle', 'unforce'])
+      adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
+      adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
+    }
+    adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0141', '40.0141'])
+    await waitFor(
+      async () => {
+        const status = await receiverStatus()
+        return (
+          status.owner === 'service' &&
+          status.generation === generation &&
+          (status.status?.received?.[0]?.observation?.capturedAt ?? 0) > beforeSenderSleep
+        )
+      },
+      'fresh Android-to-Android location after sender Doze exit',
+      90_000,
+    )
+    await waitFor(
+      async () =>
+        (await readBackgroundTransportSummary(source)).latestConfirmedAt > beforeSenderConfirmation,
+      'new authenticated viewer receipt after sender Doze exit',
+      90_000,
     )
     await receiver.evaluate(`window.__TAURI_INTERNALS__?.invoke(
       'android_stop_background_receiver', { generation: ${generation} }

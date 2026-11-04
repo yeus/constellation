@@ -92,6 +92,7 @@ jobs:
           corepack enable
           corepack yarn install --immutable
           corepack yarn build:vendor
+          corepack yarn build:tauri:frontend
           corepack yarn playwright install --with-deps chromium
       - uses: actions/download-artifact@v4
         with:
@@ -107,3 +108,40 @@ jobs:
           script: |
             adb install -r dist/constellation-android-debug-x86_64.apk
             corepack yarn test:android:e2e --receiver-standby-smoke
+
+  two-android-standby-emulator:
+    name: Sender and receiver Doze recovery (manual gate)
+    if: github.event_name == 'workflow_dispatch'
+    needs: native-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install two-emulator Android system images
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "emulator" \
+            "system-images;android-36;google_apis_playstore;x86_64"
+          sudo chmod 666 /dev/kvm
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack yarn install --immutable
+          corepack yarn build:vendor
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-standby-debug-apk
+          path: dist
+      - name: Prepare the same local-relay build for both independent devices
+        run: cp dist/constellation-android-debug-x86_64.apk dist/constellation-android-e2e-local-x86_64.apk
+      - name: Sender and receiver Doze exit with authenticated ACK
+        run: corepack yarn test:android:managed --two-android-receiver-standby-smoke --skip-build
