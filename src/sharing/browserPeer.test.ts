@@ -8,6 +8,8 @@ import {
   dialShareStream,
   orderShareAddresses,
   reachableRelayAddresses,
+  retryUnreachablePeerStart,
+  UnreachablePeerError,
   requireReachablePeer,
 } from './browserPeer.ts'
 
@@ -116,4 +118,38 @@ test('keeps a reachable peer running', async () => {
     '/dns4/relay.invalid/p2p/peer',
   ])
   assert.equal(stopped, false)
+})
+
+test('restarts an unreachable private peer once with the same caller input', async () => {
+  let attempts = 0
+  const result = await retryUnreachablePeerStart(async () => {
+    attempts += 1
+    if (attempts === 1) throw new UnreachablePeerError()
+    return { authenticatedPeer: true }
+  })
+  assert.deepEqual(result, { authenticatedPeer: true })
+  assert.equal(attempts, 2)
+})
+
+test('does not retry unrelated failures or retry an unreachable peer indefinitely', async () => {
+  let attempts = 0
+  const failure = new Error('Invalid identity')
+  await assert.rejects(
+    retryUnreachablePeerStart(async () => {
+      attempts += 1
+      throw failure
+    }),
+    (error) => error === failure,
+  )
+  assert.equal(attempts, 1)
+
+  attempts = 0
+  await assert.rejects(
+    retryUnreachablePeerStart(async () => {
+      attempts += 1
+      throw new UnreachablePeerError()
+    }),
+    UnreachablePeerError,
+  )
+  assert.equal(attempts, 2)
 })

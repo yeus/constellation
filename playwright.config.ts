@@ -5,6 +5,11 @@ import { browserProcessEnvironment } from './scripts/browser-environment.mjs'
 export default defineConfig({
   testDir: './tests',
   testIgnore: 'screenshots.spec.ts',
+  // Real P2P integration shares a local relay; eight concurrent browser
+  // workers caused unrelated share creation and map timing failures.
+  // Keep retries disabled so failures remain visible; override workers explicitly
+  // for performance experiments rather than turning races into passes.
+  workers: 2,
   fullyParallel: true,
   use: {
     baseURL: 'http://127.0.0.1:4173',

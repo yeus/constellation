@@ -20,6 +20,7 @@ import {
   type SharingRuntimeState,
 } from './sharingRuntime.ts'
 
+import { admitAuthenticatedSession } from './sharingRuntimeHelpers.ts'
 const testInvitation = (
   sourcePeerId: string,
   overrides: Partial<Parameters<typeof createShareInvitation>[0]> = {},
@@ -83,6 +84,54 @@ const createMutableTestRuntime = (
     },
   }
 }
+
+test('authenticated peer reconnect replaces its stale session without stealing capacity', () => {
+  const stale = { peerId: 'peer-A', sessionId: 'old' }
+  const sessions = new Set([stale])
+
+  const intruder = { peerId: 'peer-B', sessionId: 'intruder' }
+  assert.deepEqual(admitAuthenticatedSession(sessions, intruder, 1), {
+    accepted: false,
+    replaced: [],
+  })
+  assert.deepEqual([...sessions], [stale])
+
+  const reconnect = { peerId: 'peer-A', sessionId: 'new' }
+  assert.deepEqual(admitAuthenticatedSession(sessions, reconnect, 1), {
+    accepted: true,
+    replaced: [stale],
+  })
+  assert.deepEqual([...sessions], [reconnect])
+  sessions.delete(stale) // Late old-stream cleanup must not remove the new session.
+  assert.deepEqual([...sessions], [reconnect])
+
+  const another = { peerId: 'peer-B', sessionId: 'other' }
+  assert.equal(admitAuthenticatedSession(sessions, another, 1).accepted, false)
+})
+
+test('authenticated reconnect deduplicates sessions for the same peer at higher capacity', () => {
+  const first = { peerId: 'peer-A', sessionId: 'a1' }
+  const second = { peerId: 'peer-A', sessionId: 'a2' }
+  const different = { peerId: 'peer-B', sessionId: 'b' }
+  const sessions = new Set([first, second, different])
+  const replacement = { peerId: 'peer-A', sessionId: 'a3' }
+
+  assert.deepEqual(admitAuthenticatedSession(sessions, replacement, 3), {
+    accepted: true,
+    replaced: [first, second],
+  })
+  assert.deepEqual([...sessions], [different, replacement])
+})
+
+test('re-redeeming an existing authenticated transport never replaces itself', () => {
+  const active = { peerId: 'peer-A', sessionId: 'original' }
+  const sessions = new Set([active])
+  assert.deepEqual(admitAuthenticatedSession(sessions, active, 1), {
+    accepted: true,
+    replaced: [],
+  })
+  assert.deepEqual([...sessions], [active])
+})
 
 test('a concurrent first-device claim grants nothing before durable persistence', async () => {
   const share: { approvedPeerId?: string; claimPending?: boolean } = {}

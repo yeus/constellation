@@ -58,18 +58,40 @@ const waitForReachabilityAddresses = async (
   return []
 }
 
+export class UnreachablePeerError extends Error {
+  constructor() {
+    super('No reachable P2P address is available.')
+    this.name = 'UnreachablePeerError'
+  }
+}
+
+// One transient relay reservation failure should not abort sharing. The
+// failing attempt has already stopped its libp2p node before this is called;
+// do not retry identity, permission, or protocol failures.
+export const retryUnreachablePeerStart = async <Result>(
+  start: () => Promise<Result>,
+): Promise<Result> => {
+  try {
+    return await start()
+  } catch (error) {
+    if (!(error instanceof UnreachablePeerError)) throw error
+  }
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  return start()
+}
+
 export const requireReachablePeer = async <Node extends Pick<BrowserLibp2pNode, 'stop'>>(
   node: Node,
   addresses: string[],
 ): Promise<string[]> => {
   if (addresses.length > 0) return addresses
   await node.stop()
-  throw new Error('No reachable P2P address is available.')
+  throw new UnreachablePeerError()
 }
 
 const RELAY_CONNECT_TIMEOUT_MS = 10_000
 
-export const startPrivateBrowserPeer = async (
+const startPrivateBrowserPeerOnce = async (
   privateKey?: PrivateKey,
 ): Promise<{
   node: BrowserLibp2pNode
@@ -99,6 +121,8 @@ export const startPrivateBrowserPeer = async (
   const addresses = await waitForReachabilityAddresses(node, reservedRelay)
   return { node, addresses: await requireReachablePeer(node, addresses) }
 }
+export const startPrivateBrowserPeer = (privateKey?: PrivateKey) =>
+  retryUnreachablePeerStart(() => startPrivateBrowserPeerOnce(privateKey))
 
 export const orderShareAddresses = (addresses: readonly string[]): string[] =>
   [...addresses].sort((left, right) => {

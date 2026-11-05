@@ -74,6 +74,7 @@ import {
   LOCATION_SENSOR_ID,
   DESCRIPTOR_REVISION,
   appendSessionEvent,
+  admitAuthenticatedSession,
   claimSingleRecipient,
   randomToken,
   rememberRedeemedNonce,
@@ -881,7 +882,12 @@ const admitRedeemSession = async (
   candidate: SourceShare,
   viewerNonce: string,
 ) => {
-  if (candidate.sessions.size >= candidate.capacity) {
+  const { accepted, replaced } = admitAuthenticatedSession(
+    candidate.sessions,
+    session,
+    candidate.capacity,
+  )
+  if (!accepted) {
     ctx.recordSessionEvent('redeem-denied')
     throw new Error('Share access denied.')
   }
@@ -891,7 +897,11 @@ const admitRedeemSession = async (
     ctx.viewerApprovalKey(candidate.capability.shareId, session.peerId),
   )
   rememberRedeemedNonce(candidate.redeemedNonces, viewerNonce)
-  candidate.sessions.add(session)
+  replaced.forEach((previous) => {
+    // Old transports can close after the new session has been admitted.
+    // Their eventual cleanup cannot remove this new session.
+    void previous.close().catch(() => undefined)
+  })
   if (ctx.rememberViewerPeer(candidate, session.peerId)) {
     try {
       await ctx.persist()

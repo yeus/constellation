@@ -28,6 +28,24 @@ export const appendSessionEvent = (
   event: SessionEvent,
 ): readonly SessionEvent[] => [...events, event].slice(-32)
 
+// After cryptographic redemption, replace only sessions from the same
+// authenticated peer. A reconnect must not consume an extra viewer slot,
+// and no other identity may displace an existing recipient.
+export const admitAuthenticatedSession = <Session extends { peerId: string }>(
+  sessions: Set<Session>,
+  incoming: Session,
+  capacity: number,
+): { accepted: boolean; replaced: Session[] } => {
+  const replaced = [...sessions].filter(
+    (existing) => existing !== incoming && existing.peerId === incoming.peerId,
+  )
+  if (!sessions.has(incoming) && !replaced.length && sessions.size >= capacity)
+    return { accepted: false, replaced: [] }
+  replaced.forEach((existing) => sessions.delete(existing))
+  sessions.add(incoming)
+  return { accepted: true, replaced }
+}
+
 export const claimSingleRecipient = async (
   share: { approvedPeerId?: string; claimPending?: boolean },
   peerId: string,
