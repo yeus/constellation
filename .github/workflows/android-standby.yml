@@ -108,6 +108,12 @@ jobs:
           script: |
             adb install -r dist/constellation-android-debug-x86_64.apk
             corepack yarn test:android:e2e --receiver-standby-smoke
+            corepack yarn test:android:e2e --receiver-standby-smoke --notification-stop-ui
+            corepack yarn test:android:e2e --receiver-standby-smoke --receiver-process-restart
+            corepack yarn test:android:e2e --service-restart-smoke --local-relay
+            corepack yarn test:android:e2e --metered-policy-smoke
+            corepack yarn test:android:e2e --restricted-start-smoke
+            corepack yarn test:android:e2e --power-network-smoke
 
   two-android-standby-emulator:
     name: Sender and receiver Doze recovery (manual gate)
@@ -145,3 +151,7 @@ jobs:
         run: cp dist/constellation-android-debug-x86_64.apk dist/constellation-android-e2e-local-x86_64.apk
       - name: Sender and receiver Doze exit with authenticated ACK
         run: corepack yarn test:android:managed --two-android-receiver-standby-smoke --skip-build
+      - name: Mixed outgoing-source and background-receiver ownership regression
+        run: corepack yarn test:android:managed --two-android-receiver-standby-smoke --dual-role-standby-smoke --skip-build
+      - name: Location permission revoked while simultaneously receiving and sending
+        run: corepack yarn test:android:managed --two-android-receiver-standby-smoke --dual-role-standby-smoke --dual-role-permission-revocation-smoke --skip-build

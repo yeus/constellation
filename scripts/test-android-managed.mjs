@@ -10,6 +10,7 @@ import {
   profile,
 } from './android-emulator.mjs'
 import { androidApkCandidates } from './copy-android-apk.mjs'
+import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const apk = 'dist/constellation-android-debug-x86_64.apk'
@@ -234,6 +235,13 @@ const runThreeWay = async () => {
         ...(process.argv.includes('--two-android-receiver-standby-smoke')
           ? ['--two-android-receiver-standby-smoke']
           : []),
+        ...(process.argv.includes('--dual-role-standby-smoke')
+          ? ['--dual-role-standby-smoke']
+          : []),
+        ...(process.argv.includes('--dual-role-permission-revocation-smoke')
+          ? ['--dual-role-permission-revocation-smoke']
+          : []),
+        ...process.argv.filter((argument) => argument.startsWith('--standby-soak-minutes=')),
       ],
       {
         env: {
@@ -277,6 +285,16 @@ const buildThreeWayApk = () => {
 
 restartAdbServer()
 const main = async () => {
+  const soakMinutes = parseStandbySoakMinutes(process.argv)
+  if (
+    soakMinutes !== null &&
+    !process.argv.includes('--two-android-receiver-standby-smoke') &&
+    !process.argv.includes('--receiver-standby-smoke')
+  ) {
+    throw new Error(
+      'Standby soak requires --receiver-standby-smoke or --two-android-receiver-standby-smoke.',
+    )
+  }
   if (process.argv.includes('--native-location-smoke')) {
     if (!fs.existsSync(apk)) throw new Error('Build the Android debug APK first.')
     await runProfile('modern', undefined, ['--native-location-smoke'])
@@ -323,7 +341,9 @@ const main = async () => {
       }
     } else buildThreeWayApk()
     await runThreeWay()
-    console.log('Two Android devices validated authenticated standby reception and ACK.')
+    console.log(
+      'Two Android devices validated independent Doze recovery, authenticated ACK and optional dual-role state merge.',
+    )
     return
   }
   if (process.argv.includes('--receiver-standby-smoke')) {
@@ -332,8 +352,34 @@ const main = async () => {
         throw new Error('Build the local-relay Android APK before using --skip-build.')
       }
     } else buildThreeWayApk()
-    await runProfile('modern', undefined, ['--receiver-standby-smoke'], threeWayApk)
+    await runProfile(
+      'modern',
+      undefined,
+      [
+        '--receiver-standby-smoke',
+        ...(process.argv.includes('--receiver-process-restart')
+          ? ['--receiver-process-restart']
+          : []),
+        ...(process.argv.includes('--notification-stop-ui') ? ['--notification-stop-ui'] : []),
+        ...process.argv.filter((argument) => argument.startsWith('--standby-soak-minutes=')),
+      ],
+      threeWayApk,
+    )
     console.log('Saved Android receiver survived screen lock and restored Activity ownership.')
+    return
+  }
+  if (process.argv.includes('--service-restart-smoke')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile('modern', undefined, ['--service-restart-smoke', '--local-relay'], threeWayApk)
+    console.log('Android service-only process recovery retained the same source identity.')
+    return
+  }
+  if (process.argv.includes('--power-network-smoke')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile('modern', undefined, ['--power-network-smoke'], threeWayApk)
+    console.log('Android source policy, Doze and network restoration survived with a local relay.')
     return
   }
   if (!process.argv.includes('--skip-build')) {
@@ -351,20 +397,12 @@ const main = async () => {
     await runProfile('modern', undefined, ['--expiry-smoke'])
     return
   }
-  if (process.argv.includes('--service-restart-smoke')) {
-    await runProfile('modern', undefined, ['--service-restart-smoke'])
-    return
-  }
   if (process.argv.includes('--foreground-only-smoke')) {
     await runProfile('modern', undefined, ['--foreground-only-smoke'])
     return
   }
   if (process.argv.includes('--multiple-source-links-smoke')) {
     await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
-    return
-  }
-  if (process.argv.includes('--power-network-smoke')) {
-    await runProfile('modern', undefined, ['--power-network-smoke'])
     return
   }
   if (process.argv.includes('--stop-notice-smoke')) {
@@ -464,8 +502,9 @@ const main = async () => {
   await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
   await runProfile('modern', undefined, ['--native-fallback-smoke'])
   await runProfile('modern', undefined, ['--ui-policy-smoke'])
-  await runProfile('modern', undefined, ['--power-network-smoke'])
-  await runProfile('modern', undefined, ['--service-restart-smoke'])
+  if (!fs.existsSync(threeWayApk)) buildThreeWayApk()
+  await runProfile('modern', undefined, ['--power-network-smoke'], threeWayApk)
+  await runProfile('modern', undefined, ['--service-restart-smoke', '--local-relay'], threeWayApk)
   await runManagedPowerCycle()
   console.log('Android API 29 stock/no-GMS and API 36 location-sharing tests passed.')
 }

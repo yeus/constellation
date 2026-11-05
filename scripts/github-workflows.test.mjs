@@ -141,6 +141,20 @@ test('receiver standby CI builds the independent browser sender before its smoke
   )
   assert.match(receiverJob, /corepack yarn build:tauri:frontend/)
   assert.match(receiverJob, /test:android:e2e --receiver-standby-smoke/)
+  assert.match(receiverJob, /--receiver-standby-smoke --notification-stop-ui/)
+})
+
+test('receiver standby CI verifies process eviction and source restriction recovery', () => {
+  const workflow = fs.readFileSync('.github/workflows/android-standby.yml', 'utf8')
+  const receiverJob = workflow.slice(
+    workflow.indexOf('  receiver-standby-emulator:'),
+    workflow.indexOf('  two-android-standby-emulator:'),
+  )
+  assert.match(receiverJob, /--receiver-standby-smoke --receiver-process-restart/)
+  assert.match(receiverJob, /--service-restart-smoke --local-relay/)
+  assert.match(receiverJob, /--metered-policy-smoke/)
+  assert.match(receiverJob, /--restricted-start-smoke/)
+  assert.match(receiverJob, /--power-network-smoke/)
 })
 
 test('manual Android standby CI tests recovery of both independent P2P peers', () => {
@@ -151,4 +165,9 @@ test('manual Android standby CI tests recovery of both independent P2P peers', (
   assert.match(twoAndroid, /system-images;android-36;google_apis_playstore;x86_64/)
   assert.match(twoAndroid, /constellation-android-e2e-local-x86_64\.apk/)
   assert.match(twoAndroid, /test:android:managed --two-android-receiver-standby-smoke --skip-build/)
+  assert.match(
+    twoAndroid,
+    /--two-android-receiver-standby-smoke --dual-role-standby-smoke --skip-build/,
+  )
+  assert.match(twoAndroid, /--dual-role-permission-revocation-smoke --skip-build/)
 })
