@@ -504,10 +504,6 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         val record = saved?.optJSONObject(index)
         record != null && !record.has("endReason")
       }) { "There are no active saved subscriptions to follow." }
-      check((state.optJSONArray("shares")?.length() ?: 0) == 0 &&
-        (state.optJSONArray("endedShares")?.length() ?: 0) == 0) {
-        "Migrate outgoing shares before transferring viewer ownership."
-      }
       requireNotificationPermission()
       receiverFence.acquireService(generation)
       runReturnCommand(

@@ -36,6 +36,10 @@ const locationAccess = fs.readFileSync(
 const backgroundEntry = fs.readFileSync('src/android/backgroundEntry.ts', 'utf8')
 const backgroundStatus = fs.readFileSync('src/android/backgroundRuntimeStatus.ts', 'utf8')
 const returnCommand = fs.readFileSync('src/android/backgroundReturnCommand.ts', 'utf8')
+const receiverFence = fs.readFileSync(
+  'src-tauri/plugins/constellation-android/android/src/main/java/space/taskyon/constellation/plugin/ReceiverOwnershipFence.kt',
+  'utf8',
+)
 const mapView = fs.readFileSync('src/views/MapView.vue', 'utf8')
 const backgroundGradle = fs.readFileSync(
   'src-tauri/plugins/constellation-android/android/build.gradle.kts',
@@ -247,6 +251,17 @@ assert.match(locationService, /"idle", "stopped" -> stopWhenIdle\(\)/)
 
 assert.match(locationService, /listOf\("oldSharing", "stoppedViewers", "peerNamePreferences"\)/)
 
+// The native owner fence must merge source and receiver fields in one durable
+// encrypted record, so a device can share and follow concurrently.
+assert.doesNotMatch(androidPlugin, /Migrate outgoing shares before transferring viewer ownership/)
+assert.match(receiverFence, /fun saveServiceState\(generation: Long, state: String\)/)
+assert.match(receiverFence, /fun saveActivityState\(state: String\)/)
+assert.match(receiverFence, /requireSameIdentity\(current, incoming\)/)
+for (const field of ['followed', 'oldSeeing', 'pendingStopNotices', 'pendingReturns']) {
+  assert.ok(receiverFence.includes(`"${field}"`), `receiver field ${field} must remain fenced`)
+}
+assert.match(receiverFence, /for \(key in RECEIVER_FIELDS\)/)
+assert.match(receiverFence, /key !in RECEIVER_FIELDS/)
 for (const command of [
   'android_sharing_setup',
   'android_enable_sharing_permissions',

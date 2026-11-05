@@ -4,29 +4,52 @@ import { backgroundViewerSnapshot, viewerPrivateState } from './backgroundViewer
 import type { PrivateState } from '../sharing/privateStore.ts'
 import type { SharingRuntimeState } from '../sharing/sharingRuntime.ts'
 
-test('background viewer cannot adopt local outgoing source keys', () => {
-  const empty: PrivateState = {
+test('background viewer isolates saved subscriptions from outgoing source and UI state', () => {
+  const stored: PrivateState = {
     version: 1,
-    privateKey: 'synthetic-secret',
-    shares: [],
-    followed: [],
+    privateKey: 'synthetic-private-key',
+    shares: [
+      {
+        url: 'https://example.invalid/#share=outgoing-secret',
+        publication: 'background',
+        precision: 'exact',
+        capacity: 1,
+      },
+    ],
+    endedShares: [
+      {
+        url: 'https://example.invalid/#share=ended-secret',
+        publication: 'background',
+        reason: 'revoked',
+        endedAt: 1,
+      },
+    ],
+    followed: [
+      {
+        url: 'https://example.invalid/#share=incoming-secret',
+        localName: 'Test location',
+        color: '#445566',
+      },
+    ],
+    pendingReturns: [{ shareId: 'incoming', url: 'https://example.invalid/#share=return' }],
+    pendingStopNotices: [],
+    oldSeeing: [],
+    oldSharing: [{ shareId: 'outgoing', reason: 'revoked', endedAt: 1 }],
+    sharingBehavior: { publication: 'background', battery: 'balanced', network: 'always' },
+    mapCamera: undefined,
   }
-  assert.deepEqual(viewerPrivateState(empty), empty)
-  assert.throws(
-    () =>
-      viewerPrivateState({
-        ...empty,
-        shares: [
-          {
-            url: 'https://example.invalid/#share=synthetic',
-            publication: 'background',
-            precision: 'exact',
-            capacity: 1,
-          },
-        ],
-      }),
-    /separate source-share/,
-  )
+  const viewer = viewerPrivateState(stored)
+  assert.deepEqual(viewer, {
+    version: stored.version,
+    privateKey: stored.privateKey,
+    shares: [],
+    followed: stored.followed,
+    pendingReturns: stored.pendingReturns,
+    pendingStopNotices: [],
+    oldSeeing: [],
+  })
+  assert.equal(JSON.stringify(viewer).includes('outgoing-secret'), false)
+  assert.equal(JSON.stringify(viewer).includes('ended-secret'), false)
 })
 
 test('background viewer projection exposes only saved authorized observations, no bearer URLs', () => {

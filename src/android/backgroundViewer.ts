@@ -18,16 +18,18 @@ export interface BackgroundViewerSnapshot {
   readonly received: SharingRuntimeState['received']
 }
 
-export const viewerPrivateState = (stored: PrivateState): PrivateState => {
-  if (stored.shares.length || (stored.endedShares?.length ?? 0) > 0) {
-    throw new Error('Viewer ownership requires separate source-share storage.')
-  }
-  // Only the locally saved subscriptions may be restored by the unattended runtime.
-  return {
-    ...stored,
-    followed: stored.followed,
-  }
-}
+// The native ownership fence merges only these receiver-owned fields back
+// into the full encrypted state. Never initialize outgoing shares in the
+// unattended viewer, even when this device is also a location source.
+export const viewerPrivateState = (stored: PrivateState): PrivateState => ({
+  version: stored.version,
+  privateKey: stored.privateKey,
+  shares: [],
+  followed: stored.followed,
+  ...(stored.oldSeeing ? { oldSeeing: stored.oldSeeing } : {}),
+  ...(stored.pendingStopNotices ? { pendingStopNotices: stored.pendingStopNotices } : {}),
+  ...(stored.pendingReturns ? { pendingReturns: stored.pendingReturns } : {}),
+})
 
 export const backgroundViewerSnapshot = (
   generation: number,
