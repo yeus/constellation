@@ -9,6 +9,11 @@ import { compileAndroidWebViewExpression } from './android-cdp-source.mjs'
 import { browserProcessEnvironment } from './browser-environment.mjs'
 import { redactAndroidTestError, summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
+import {
+  DebuggerTimeoutError,
+  DebuggerTransportError,
+  evaluateReadOnlyWithRecovery,
+} from './android-debugger-recovery.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const sdk = process.env.ANDROID_HOME
@@ -163,7 +168,7 @@ const waitForCdpPage = async (port) => {
   return selected
 }
 
-const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222, attempt = 0) => {
+const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222) => {
   let pid
   await waitFor(
     () => {
@@ -178,13 +183,12 @@ const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222, atte
     30_000,
   )
   adbFor(serial, ['forward', `tcp:${port}`, `localabstract:webview_devtools_remote_${pid}`])
-  const page = await waitForCdpPage(port)
-  const socket = new WebSocket(page.webSocketDebuggerUrl)
   const pending = new Map()
   const persistenceTrace = []
   const ipcTrace = []
   let nextId = 0
-  socket.addEventListener('message', ({ data }) => {
+  let socket
+  const onMessage = ({ data }) => {
     const message = JSON.parse(String(data))
     if (message.method === 'Runtime.consoleAPICalled') {
       for (const argument of message.params?.args ?? []) {
@@ -223,56 +227,85 @@ const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222, atte
     pending.delete(message.id)
     if (message.error) request.reject(new Error(message.error.message))
     else request.resolve(message.result)
-  })
-  socket.addEventListener('close', () => {
+  }
+  const onClose = () => {
     for (const request of pending.values()) {
-      request.reject(new Error('Android WebView debugger disconnected.'))
+      request.reject(new DebuggerTransportError('Android WebView debugger disconnected.'))
     }
     pending.clear()
-  })
-  await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve, { once: true })
-    socket.addEventListener('error', reject, { once: true })
-  })
-  socket.send(JSON.stringify({ id: ++nextId, method: 'Runtime.enable' }))
-  const handshakeId = ++nextId
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pending.delete(handshakeId)
-      reject(new Error('Android WebView debugger handshake timed out.'))
-    }, 5_000)
-    pending.set(handshakeId, {
-      resolve: () => {
-        clearTimeout(timeout)
-        resolve()
-      },
-      reject: (error) => {
-        clearTimeout(timeout)
-        reject(error)
-      },
+  }
+  const openSocket = async (openAttempt = 0) => {
+    const page = await waitForCdpPage(port)
+    const candidate = new WebSocket(page.webSocketDebuggerUrl)
+    candidate.addEventListener('message', onMessage)
+    candidate.addEventListener('close', onClose)
+    await new Promise((resolve, reject) => {
+      candidate.addEventListener('open', resolve, { once: true })
+      candidate.addEventListener('error', reject, { once: true })
     })
-    socket.send(
-      JSON.stringify({
-        id: handshakeId,
-        method: 'Runtime.evaluate',
-        params: { expression: 'document.readyState', returnByValue: true },
-      }),
-    )
-  }).catch(async (error) => {
-    socket.close()
-    if (attempt >= 5) throw error
-    await wait(500)
-    return undefined
-  })
-  if (socket.readyState !== WebSocket.OPEN) return connectCdp(serial, port, attempt + 1)
-  return createCdpClient(
-    socket,
+    candidate.send(JSON.stringify({ id: ++nextId, method: 'Runtime.enable' }))
+    const handshakeId = ++nextId
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pending.delete(handshakeId)
+        reject(new Error('Android WebView debugger handshake timed out.'))
+      }, 5_000)
+      pending.set(handshakeId, {
+        resolve: () => {
+          clearTimeout(timeout)
+          resolve()
+        },
+        reject: (error) => {
+          clearTimeout(timeout)
+          reject(error)
+        },
+      })
+      candidate.send(
+        JSON.stringify({
+          id: handshakeId,
+          method: 'Runtime.evaluate',
+          params: { expression: 'document.readyState', returnByValue: true },
+        }),
+      )
+    }).catch(async (error) => {
+      candidate.close()
+      if (openAttempt >= 5) throw error
+      await wait(500)
+      return undefined
+    })
+    if (candidate.readyState !== WebSocket.OPEN) {
+      if (openAttempt >= 5) throw new Error('Android WebView debugger did not connect.')
+      await wait(500)
+      return openSocket(openAttempt + 1)
+    }
+    socket = candidate
+  }
+  await openSocket()
+  const reconnect = async () => {
+    try {
+      socket?.close()
+    } catch {
+      /* The previous debugger socket is already closed. */
+    }
+    pending.clear()
+    const currentPid = adbFor(serial, ['shell', 'pidof', packageName]).trim().split(/\s+/)[0] ?? pid
+    adbFor(serial, [
+      'forward',
+      `tcp:${port}`,
+      `localabstract:webview_devtools_remote_${currentPid}`,
+    ])
+    await openSocket()
+  }
+  return createCdpClient({
     pending,
-    () => ++nextId,
-    () => [...persistenceTrace],
-    () => [...ipcTrace],
+    nextId: () => ++nextId,
+    persistenceTrace: () => [...persistenceTrace],
+    ipcTrace: () => [...ipcTrace],
     serial,
-  )
+    reconnect,
+    send: (payload) => socket.send(payload),
+    close: () => socket.close(),
+  })
 }
 
 const startWithSharedText = (shareUrl, serial = process.env.ANDROID_SERIAL) => {
@@ -296,7 +329,16 @@ const startWithSharedText = (shareUrl, serial = process.env.ANDROID_SERIAL) => {
   }
 }
 
-const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, serial) => {
+const createCdpClient = ({
+  pending,
+  nextId,
+  persistenceTrace,
+  ipcTrace,
+  serial,
+  reconnect,
+  send,
+  close,
+}) => {
   const command = (method, params) =>
     new Promise((resolve, reject) => {
       const id = nextId()
@@ -306,6 +348,7 @@ const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, se
           'android_start_background_share',
           'android_background_share_status',
           'android_load_private_state',
+          'android_receiver_ownership',
           'android_current_location',
           'document.readyState',
           'document.querySelector',
@@ -346,7 +389,7 @@ const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, se
           /* Diagnostic failure must not mask the debugger failure. */
         }
         reject(
-          new Error(
+          new DebuggerTimeoutError(
             `Android WebView debugger did not answer ${method} (${operation ?? 'command'}) within 30 seconds; IPC markers: ${JSON.stringify(ipcTrace())}; activity: ${activity}; rendererExit: ${rendererExit}; fatalNative: ${fatalNative}; exceptionClasses: ${JSON.stringify(exceptions)}; crash: ${JSON.stringify(crash)}.`,
           ),
         )
@@ -362,7 +405,7 @@ const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, se
         },
       })
       try {
-        socket.send(
+        send(
           JSON.stringify({
             id,
             method,
@@ -379,11 +422,16 @@ const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, se
     ipcTrace,
     evaluate: async (expression) => {
       const compatibleExpression = await compileAndroidWebViewExpression(expression)
-      const response = await command('Runtime.evaluate', {
-        expression: compatibleExpression,
-        awaitPromise: true,
-        returnByValue: true,
-        userGesture: true,
+      const response = await evaluateReadOnlyWithRecovery({
+        expression,
+        reconnect,
+        evaluate: () =>
+          command('Runtime.evaluate', {
+            expression: compatibleExpression,
+            awaitPromise: true,
+            returnByValue: true,
+            userGesture: true,
+          }),
       })
       if (response.exceptionDetails) {
         const description =
@@ -401,7 +449,7 @@ const createCdpClient = (socket, pending, nextId, persistenceTrace, ipcTrace, se
       return command('Page.addScriptToEvaluateOnNewDocument', { source })
     },
     reload: () => command('Page.reload', { ignoreCache: true }),
-    close: () => socket.close(),
+    close,
     serial,
   }
 }
@@ -782,7 +830,11 @@ const createBackgroundShareForSmoke = async (cdp) => {
   await waitForNativeApp(cdp, 'Android app startup')
   await configureAndroidBackgroundSharing(cdp)
   await clickNativePeerAction(cdp, 'All', 'Share location')
-  assert.equal(await clickButton(cdp, 'Device accuracy'), true)
+  await waitFor(
+    () => cdp.evaluate(`Boolean(document.querySelector('[aria-labelledby="share-title"]'))`),
+    'the share sheet',
+  )
+  assert.equal(await clickButton(cdp, 'Exact'), true)
   assert.equal(await clickButton(cdp, 'Create location link'), true)
   const url = await readAndroidShareLink(cdp)
   await closeAndroidDialog(cdp)
@@ -3700,7 +3752,7 @@ const createBrowserReturnShare = async (page) => {
   const form = page.getByRole('dialog', { name: 'Share your location' })
   await expect(form).toContainText('Only this sender receives the private offer')
   await expect(form.getByText('Viewers')).toHaveCount(0)
-  await expect(form.getByRole('button', { name: 'Approximate' })).toHaveAttribute(
+  await expect(form.getByRole('button', { name: 'Neighbourhood' })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
