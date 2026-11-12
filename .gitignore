@@ -29,6 +29,7 @@ test-results/
 /phonelogs.txt
 /cierror.txt
 .winx/
+/.fresh/
 /.screenshots/
 
 # Private release acceptance reports

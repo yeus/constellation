@@ -58,3 +58,18 @@ clarify the relevant requirement instead of inventing semantics.
 
 Before changing Taskyon-owned packages or protocols, read the matching policies in the initialized
 Taskyon repository and update Taskyon's own system definition when that repository changes.
+
+## Release gate: automate to rc.1, then verify on devices
+
+- Every release cycle reaches `-rc.1` using only automated evidence: unit, integration, script,
+  browser, emulator, static, packaging, and version-consistency checks. Do not block rc.1 on
+  physical-device, OEM, network-handoff, or app-store evidence that cannot be produced
+  automatically.
+- Test physical devices, real networks, OEM power management, and store review on the rc.1
+  artifact itself. When that evidence passes, promote the same source revision for the final
+  release instead of changing behavior late in the cycle.
+- A requirement that still needs device or store evidence stays `planned` in the system definition
+  and is named as a known limitation in the rc.1 release notes. Never promote it to `implemented`
+  or `tracked` from emulator-only or one-off manual checks.
+- Record the rc.1 gate evidence (command, runner, result, unproved items) in the owning
+  documentation so the promotion decision is auditable.
