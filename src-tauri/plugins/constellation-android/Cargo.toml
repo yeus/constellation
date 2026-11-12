@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-constellation-android"
-version = "0.1.3"
+version = "0.1.4-rc.1"
 edition = "2021"
 license = "MIT"
 links = "tauri-plugin-constellation-android"
