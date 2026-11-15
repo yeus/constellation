@@ -1,0 +1,20 @@
+# v0.1.5 — field validation of the release candidate
+
+`field-validation` in `SYSTEM_DEFINITION.csv` means the implementation exists and the available automated acceptance checks have passed; the remaining evidence requires an **installed release candidate used in real conditions**, rather than additional sandbox automation. `implemented` means automated checks are still pending or failing. Neither label authorizes final release.
+
+## Test record
+
+Record the **exact commit and installed APK**, Android version, manufacturer/OEM, relevant app and OS permissions, location mode, battery restrictions, network (Wi-Fi/cellular), time zone and actual UTC test interval. Use **two stock Android phones** for mandatory acceptance; GrapheneOS is optional additional coverage. Keep pass/fail and a short reproducible observation per case. Never paste bearer links, precise coordinates, identities or unredacted debug logs into issue trackers.
+
+## Real-world scenarios
+
+1. **Links, QR, clipboard and permission boundaries.** Create single-viewer and multi-viewer (10 / No limit, timed / Until stopped) links on phone A. Open by physical camera QR, Android share-target and Paste link on B. Every new explicit opening must display the privacy introduction before any peer connection; Cancel must not dial or activate GPS. On single-viewer links compare the fresh four letters over a trusted channel, then reject and approve in separate trials. Multi-viewer bearer admission should require no per-viewer approval. A third viewer must not silently publish its own location.
+2. **Map, peers and reciprocal sharing.** Check immediate map entry, optional Add peer / Not now, and saved-follow persistence across restarting the Activity. Share back **must open the normal share-creation dialog** (precision, duration and nickname) before offering any return location. Revoke only one peer while another viewer remains connected. Verify Stop following, terminal/Ended history and queued stop notices after an offline overlap. Repeat on both devices to expose concurrent revocation/stop races.
+3. **Background, process death and OS policy.** Leave both phones simultaneously sharing and following for **at least two nights**, including DND/quiet-hours transitions if normally configured. Include screen lock, Wi-Fi↔cellular handoffs, transient offline periods, Doze and ordinary Android app process recreation. Reboot and first-unlock each device; install an update on top of the existing version. Confirm only previously authorized work resumes and no one-sided stop or opt-out is overridden. Revoke/grant location and notification permissions, switch desired background sharing off/on, and verify visible fallback without surprise GPS publication. Explicit Android Force stop is not expected to autostart services until the user opens the app.
+4. **Received history and privacy-safe diagnostics.** Enable Received messages for a saved follow and verify actual incoming records remain attributed to that peer across Activity↔service handoffs, screen lock, restart and reconnection; recording defaults off and never backfills earlier locations. Verify bounded history and Clear. Export Share logs after a restart or failure; check that native journal events survive and include the preceding process exit and restart decisions where Android reports them, without raw coordinates, keys or link secrets.
+
+## Evidence and promotion
+
+For a failed case, export Share logs from **both** phones after reopening, capture approximate UTC incident time and OS event/battery settings, and link the relevant requirement ID in `SYSTEM_DEFINITION.csv`. Keep it at `field-validation` until that real-world check passes; if a runnable emulator/browser regression is found failing, move it back to `implemented` and add a focused test.
+
+When all required field cases pass on the **same source revision as rc.1**, update the catalog's verification evidence and promote the relevant requirements to `tracked`. No version bump or release should be inferred from this checklist.

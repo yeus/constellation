@@ -57,10 +57,20 @@ test('system definition rows are complete and structurally valid', () => {
       assert.ok(record[required]?.length, `catalog row ${line} must define ${required}`)
     }
     assert.ok(
-      ['planned', 'implemented', 'tracked'].includes(record.status),
+      ['planned', 'implemented', 'field-validation', 'tracked'].includes(record.status),
       `catalog row ${line} has an unsupported status`,
     )
     assert.match(record.id, /^[a-z0-9-]+$/, `catalog row ${line} has an invalid id`)
+    if (record.status === 'field-validation') {
+      assert.ok(
+        record.implementation?.length,
+        `catalog row ${line} in field-validation must have implementation evidence`,
+      )
+      assert.ok(
+        record.verification?.length,
+        `catalog row ${line} in field-validation must state automated and real-world validation evidence`,
+      )
+    }
     assert.equal(ids.has(record.id), false, `catalog id ${record.id} is duplicated`)
     ids.add(record.id)
   }

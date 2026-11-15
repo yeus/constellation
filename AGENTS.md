@@ -15,16 +15,12 @@ clarify the relevant requirement instead of inventing semantics.
 - Keep requirement descriptions, status, surface, Taskyon compatibility, implementation paths,
   verification evidence, milestones, sources, notes, and target releases synchronized with the
   resulting behavior.
-- Use status to show regression-test coverage, not a feature's importance or partial completion:
-  - `planned`: the requirement's acceptance criteria are not yet met.
-  - `implemented`: the behavior or policy is in place, but no repeatable regression test is
-    maintained for it. Record the implementation path and the available evidence in the catalog.
-  - `tracked`: the acceptance criteria are met and one or more focused regression tests are
-    maintained and included in the regular test workflow. Name the test and its runner in
-    `verification`.
-- A one-off manual check is useful evidence, but does not by itself qualify a requirement as
-  `tracked`. Record remaining gaps and platform limits in `notes`; do not describe partial behavior
-  as meeting the full acceptance criteria.
+- Use status to show the implementation and acceptance stage, not the feature's importance:
+  - `planned`: the requirement has not been implemented.
+  - `implemented`: code exists, but runnable automated acceptance checks are incomplete, failing, or not yet maintained. Record the remaining executable checks in `verification`.
+  - `field-validation`: implemented and available automated checks have passed; only real-world acceptance on an installed release candidate remains (physical devices, OEM power management, store review, or real networks). Record the specific field checklist and evidence in `verification` and `notes`.
+  - `tracked`: all acceptance criteria, including required field validation, are satisfied and maintained focused regression tests run in the regular workflow. Name the tests and runner in `verification`.
+- A one-off manual check is useful evidence but does not by itself qualify a requirement as `tracked`. Never use `field-validation` to hide runnable, incomplete sandbox/emulator checks; keep these `implemented` until they pass. Record remaining gaps and platform limits in `notes`.
 - Treat `target_release` as product scope and `milestone` as implementation order. A prerequisite may
   belong to v1 even when its milestone is `foundation` or `web-preview`.
 
@@ -68,8 +64,6 @@ Taskyon repository and update Taskyon's own system definition when that reposito
 - Test physical devices, real networks, OEM power management, and store review on the rc.1
   artifact itself. When that evidence passes, promote the same source revision for the final
   release instead of changing behavior late in the cycle.
-- A requirement that still needs device or store evidence stays `planned` in the system definition
-  and is named as a known limitation in the rc.1 release notes. Never promote it to `implemented`
-  or `tracked` from emulator-only or one-off manual checks.
+- Before rc.1, implementation with unfinished runnable automated checks remains `implemented`; it cannot be considered ready just because the UI exists. Once available automated tests pass, use `field-validation` if only release-candidate real-world evidence is missing; otherwise use `tracked` if all acceptance is complete. Do not block building rc.1 solely on physical/OEM/store checks that can only be performed on that artifact. Name these limitations in rc.1 notes.
 - Record the rc.1 gate evidence (command, runner, result, unproved items) in the owning
   documentation so the promotion decision is auditable.
