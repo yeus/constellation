@@ -177,8 +177,23 @@ impl<R: Runtime> ConstellationAndroid<R> {
     pub async fn enable_sharing_permissions(&self) -> crate::Result<Value> {
         self.0.run_mobile_plugin_async("enableSharingPermissions", json!({})).await.map_err(Into::into)
     }
+    pub async fn set_background_following_preference(&self, enabled: bool) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("setBackgroundFollowingPreference", json!({ "enabled": enabled }))
+            .await.map_err(Into::into)
+    }
+
     pub async fn set_sharing_behavior(&self, behavior: Value) -> crate::Result<Value> {
         self.0.run_mobile_plugin_async("setSharingBehavior", json!({ "behavior": behavior })).await.map_err(Into::into)
+    }
+
+    pub async fn record_session_event(&self, event: &str, state: &str, level: &str) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("recordSessionEvent",
+            json!({ "event": event, "state": state, "level": level })).await.map_err(Into::into)
+    }
+
+    pub async fn share_session_logs(&self, text: &str) -> crate::Result<Value> {
+        self.0.run_mobile_plugin_async("shareSessionLogs", json!({ "text": text }))
+            .await.map_err(Into::into)
     }
 
     pub async fn clear_old_peers(&self, protection: Value) -> crate::Result<Value> {
@@ -217,6 +232,13 @@ impl<R: Runtime> ConstellationAndroid<R> {
     pub async fn open_project_link(&self, target: &str) -> crate::Result<Value> {
         self.0
             .run_mobile_plugin_async("openProjectLink", json!({ "target": target }))
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn take_settings_request(&self) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async("takeSettingsRequest", json!({}))
             .await
             .map_err(Into::into)
     }

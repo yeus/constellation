@@ -33,7 +33,10 @@ export const backgroundRuntimeStatus = (
     deviceComparisons: state?.deviceComparisons ?? [],
     pendingViewerApprovals: state?.pendingViewerApprovals ?? [],
     stoppedViewers: state?.stoppedViewers ?? [],
-    oldSharing: state?.oldSharing ?? [],
+    oldSharing: (state?.oldSharing ?? []).filter(
+      (record): record is typeof record & { reason: 'revoked' | 'expired' } =>
+        record.reason !== 'stopped',
+    ),
     location,
     message: failureMessage ?? state?.message ?? '',
   }

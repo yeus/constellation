@@ -6,7 +6,10 @@ import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
 import android.content.Intent
+import java.io.File
+import androidx.core.content.FileProvider
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
@@ -117,6 +120,11 @@ class VisibilityArgs {
 }
 
 @InvokeArg
+class FollowingPreferenceArgs {
+  var enabled: Boolean = true
+}
+
+@InvokeArg
 class SetPausedArgs {
   var paused: Boolean = false
 }
@@ -153,6 +161,18 @@ class SystemSettingsArgs {
   var target: String = ""
 }
 
+@InvokeArg
+class SessionLogsArgs {
+  var text: String = ""
+}
+
+@InvokeArg
+class SessionEventArgs {
+  var event: String = ""
+  var state: String = ""
+  var level: String = ""
+}
+
 
 @TauriPlugin(permissions = [Permission(
   strings = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION],
@@ -168,6 +188,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     EncryptedShareStore(activity.applicationContext, discardUnreadable = false)
   }
   private val receiverFence by lazy { ReceiverOwnershipFence(activity.applicationContext) }
+  private var lastForegroundRestoreAt = 0L
 
   private fun locationPermissionResult(): JSObject = JSObject()
     .put("grant", locationGrant(activity))
@@ -178,7 +199,9 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     val power = activity.getSystemService(PowerManager::class.java)
     val connectivity = activity.getSystemService(ConnectivityManager::class.java)
     val processes = activity.getSystemService(ActivityManager::class.java)
-    return JSObject().put("behavior", saved?.optJSONObject("sharingBehavior") ?: JSONObject.NULL)
+    return JSObject().put("behavior", store.loadBehaviorPreference()?.let(::JSONObject)
+      ?: saved?.optJSONObject("sharingBehavior") ?: JSONObject.NULL)
+      .put("backgroundFollowing", store.loadFollowingPreference() ?: JSONObject.NULL)
       .put("hasShares", (saved?.optJSONArray("shares")?.length() ?: 0) > 0)
       .put("permissions", JSONObject()
         .put("location", locationGrant(activity) != "none")
@@ -195,6 +218,18 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
           processes?.isBackgroundRestricted == true)
         .put("dataSaverEnabled", Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
           connectivity?.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED))
+  }
+
+  /** Record user intent before any asynchronous receiver handoff can be interrupted. */
+  @Command
+  fun setBackgroundFollowingPreference(invoke: Invoke) {
+    try {
+      val enabled = invoke.parseArgs(FollowingPreferenceArgs::class.java).enabled
+      store.saveFollowingPreference(enabled)
+      invoke.resolve(sharingSetupResult())
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Background following preference could not be saved.")
+    }
   }
 
   @Command
@@ -278,21 +313,78 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       check(behavior.publication in setOf("foreground", "background")) { "Invalid publication." }
       check(behavior.battery in setOf("balanced", "saver")) { "Invalid battery policy." }
       check(behavior.network in setOf("always", "pause-when-metered")) { "Invalid network policy." }
-      if (behavior.publication == "background") {
-        val permissions = sharingSetupResult().getJSONObject("permissions")
-        check(listOf("location", "background", "notifications", "servicesEnabled").all { permissions.getBoolean(it) }) {
-          "Enable location, background location and notifications before background sharing."
-        }
+      // The user's choice is durable regardless of the Android permission state.
+      // Effective execution is downgraded to foreground-only until the OS permits
+      // background location. Never silently replace the desired preference.
+      val desired = JSONObject()
+        .put("publication", behavior.publication)
+        .put("battery", behavior.battery)
+        .put("network", behavior.network)
+      store.saveBehaviorPreference(desired.toString())
+      val permissions = sharingSetupResult().getJSONObject("permissions")
+      val canBackground = listOf("location", "background", "notifications", "servicesEnabled")
+        .all { permissions.getBoolean(it) }
+      val effective = JSONObject(desired.toString())
+      if (behavior.publication == "background" && !canBackground)
+        effective.put("publication", "foreground")
+      val request = JSONObject().put("behavior", effective)
+      if (!store.hasSavedShares()) {
+        invoke.resolve(JSObject())
+      } else {
+        runReturnCommand(invoke, ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR, "", request = request.toString())
       }
-      val request = JSONObject().put(
-        "behavior",
-        JSONObject()
-          .put("publication", behavior.publication)
-          .put("battery", behavior.battery)
-          .put("network", behavior.network),
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Sharing preference could not be saved.")
+    }
+  }
+
+  @Command
+  fun recordSessionEvent(invoke: Invoke) {
+    try {
+      val args = invoke.parseArgs(SessionEventArgs::class.java)
+      check(args.event.matches(Regex("(app|sharing|location|android|map)\\.[a-z0-9._-]{1,60}")))
+      check(args.level in setOf("info", "warning", "error"))
+      check(args.state in setOf("", "offline", "connecting", "online", "error",
+        "starting", "sharing", "paused", "stopped", "connected", "disconnected",
+        "visible", "hidden", "enabled", "disabled", "service", "activity"))
+      ReliabilityJournal(activity.applicationContext).record(
+        "ui.${args.event.replace('_', '-')}",
+        "level=${args.level};state=${args.state.ifEmpty { "none" }}",
       )
-      runReturnCommand(invoke, ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR, "", request = request.toString())
-    } catch (_: Exception) { invoke.reject("Sharing settings could not be saved. Check permissions and retry.") }
+      invoke.resolve(JSObject())
+    } catch (_: Exception) {
+      invoke.reject("Invalid diagnostic event.")
+    }
+  }
+
+  @Command
+  fun shareSessionLogs(invoke: Invoke) {
+    try {
+      val text = invoke.parseArgs(SessionLogsArgs::class.java).text
+      require(text.startsWith("Constellation session logs\n"))
+      val bytes = text.toByteArray(Charsets.UTF_8)
+      require(bytes.size in 1..10_000_000) { "Session logs exceed the sharing limit." }
+      val directory = File(activity.cacheDir, "shared-logs").apply {
+        check(isDirectory || mkdirs()) { "Could not prepare temporary logs." }
+      }
+      val file = File(directory, "constellation-logs-${System.currentTimeMillis()}.txt")
+      file.bufferedWriter().use { writer ->
+        writer.write(text)
+        writer.write("\n\nConstellation native reliability journal (14 days)\n")
+        ReliabilityJournal(activity.applicationContext).writeTo(writer)
+      }
+      val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.sessionlogs", file)
+      val intent = Intent(Intent.ACTION_SEND)
+        .setType("text/plain")
+        .putExtra(Intent.EXTRA_STREAM, uri)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      intent.clipData = ClipData.newRawUri(null, uri)
+      activity.startActivity(Intent.createChooser(intent, "Share Constellation logs")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+      invoke.resolve(JSObject())
+    } catch (_: Exception) {
+      invoke.reject("Could not share the session logs as a file.")
+    }
   }
 
   @Command
@@ -439,6 +531,15 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   @Command
+  fun takeSettingsRequest(invoke: Invoke) {
+    val intent = activity.intent
+    val key = ShareServiceContract.EXTRA_OPEN_SHARING_SETTINGS
+    val requested = intent?.getBooleanExtra(key, false) == true
+    if (requested) intent?.removeExtra(key)
+    invoke.resolve(JSObject().put("open", requested))
+  }
+
+  @Command
   fun takeSharedText(invoke: Invoke) {
     val intent = activity.intent
     val text = if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
@@ -504,6 +605,9 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         val record = saved?.optJSONObject(index)
         record != null && !record.has("endReason")
       }) { "There are no active saved subscriptions to follow." }
+      check(store.loadFollowingPreference() == true) {
+        "Background following is disabled in Settings."
+      }
       requireNotificationPermission()
       receiverFence.acquireService(generation)
       runReturnCommand(
@@ -538,7 +642,13 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun startBackgroundShare(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(BackgroundShareArgs::class.java)
-      val request = validateRequest(args.request)
+      val requested = validateRequest(args.request)
+      val permissions = sharingSetupResult().getJSONObject("permissions")
+      val canBackground = listOf("location", "background", "notifications", "servicesEnabled")
+        .all { permissions.getBoolean(it) }
+      val request = JSONObject(requested.toString())
+      if (requested.optString("publication") == "background" && !canBackground)
+        request.put("publication", "foreground")
       requireLocationPermission(request.optString("publication") == "background")
       if (request.optString("publication") == "background") requireNotificationPermission()
       val running = serviceRunning()
@@ -578,7 +688,14 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         "ConstellationStatus",
         "background-status running=$running has-saved=$hasSavedShares has-background=$hasBackgroundShares current=${ShareServiceContract.currentStatus != null} stored=$state",
       )
-      if (ShareServiceContract.startPending && !running) {
+      if (!running && hasBackgroundShares && !locationManager.isLocationEnabled) {
+        ShareServiceContract.startPending = false
+        val paused = statusWithPolicy(stored)
+        paused.put("state", "paused")
+        paused.put("message", "Device location is off. Existing links are saved; location updates will resume after you enable Location.")
+        paused.put("location", JSONObject().put("status", "services-disabled"))
+        invoke.resolve(paused)
+      } else if (ShareServiceContract.startPending && !running) {
         invoke.resolve(statusWithPolicy(STARTING_STATUS))
       } else if (!running && hasBackgroundShares) {
         ShareServiceContract.startPending = true
@@ -674,9 +791,22 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   fun setBackgroundVisibility(invoke: Invoke) {
     try {
       val visible = invoke.parseArgs(VisibilityArgs::class.java).visible
-      if (!serviceRunning() && visible && store.hasSavedShares()) {
-        ensureService(ShareServiceContract.ACTION_RESTORE)
-        ensureService(ShareServiceContract.ACTION_SET_VISIBLE, visible = true)
+      // A receiver-only device has no outgoing share records. Reopen its
+      // existing opted-in service when the Activity returns after process death.
+      val now = SystemClock.elapsedRealtime()
+      if (!serviceRunning() && visible &&
+        (store.hasSavedShares() || receiverFence.snapshot().owner == "service") &&
+        (lastForegroundRestoreAt == 0L || now - lastForegroundRestoreAt >= 30_000L)) {
+        lastForegroundRestoreAt = now
+        ShareServiceContract.startPending = true
+        try {
+          ReliabilityJournal(activity.applicationContext).record("service.foreground.restore", "mode=receiver-or-source")
+          ensureService(ShareServiceContract.ACTION_RESTORE)
+          ensureService(ShareServiceContract.ACTION_SET_VISIBLE, visible = true)
+        } catch (error: Exception) {
+          ShareServiceContract.startPending = false
+          throw error
+        }
       } else if (serviceRunning()) {
         activity.startService(
           Intent(activity, LocationShareService::class.java)
@@ -966,27 +1096,25 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
     peerId?.let { intent.putExtra(ShareServiceContract.EXTRA_PEER_ID, it) }
     name?.let { intent.putExtra(ShareServiceContract.EXTRA_NAME, it) }
     visible?.let { intent.putExtra(ShareServiceContract.EXTRA_VISIBLE, it) }
-    // First-run foreground-only settings must be savable before location is granted.
-    if (action == ShareServiceContract.ACTION_SET_SHARING_BEHAVIOR && locationGrant(activity) == "none")
+    // Commands remain usable when global Location is off. Android must not
+    // attempt a location-type foreground service without the OS prerequisites.
+    if (!locationManager.isLocationEnabled || locationGrant(activity) == "none")
       activity.startService(intent)
     else ContextCompat.startForegroundService(activity, intent)
   }
 
   private fun requireLocationPermission(background: Boolean) {
+    check(locationManager.isLocationEnabled) {
+      "Device location is turned off. Enable it from Constellation Settings, then retry."
+    }
     check(locationGrant(activity) != "none") {
       "Allow device location before starting a share."
     }
     if (background && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
         PackageManager.PERMISSION_GRANTED) {
-        activity.startActivity(
-          Intent(
-            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            Uri.parse("package:${activity.packageName}"),
-          ),
-        )
         throw IllegalStateException(
-          "Choose Permissions, Location, and Allow all the time; then return and create the share again.",
+          "Choose Permissions, Location, and Allow all the time in Constellation Settings, then retry.",
         )
       }
     }

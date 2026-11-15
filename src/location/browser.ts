@@ -41,6 +41,7 @@ export type BrowserLocationState =
   | { readonly status: 'delayed'; readonly observation: LocationObservationV1 }
   | { readonly status: 'stale'; readonly observation: LocationObservationV1 }
   | { readonly status: 'denied' }
+  | { readonly status: 'services-disabled' }
   | { readonly status: 'unavailable' }
   | {
       readonly status: 'error'
@@ -241,9 +242,9 @@ const stopWatching = (store: WatchStore): void => {
 }
 
 const receiveWatchError = (store: WatchStore, error: BrowserPositionError): void => {
-  if (error.code === 1) {
+  if (error.code === 1 || error.code === 4) {
     stopWatching(store)
-    store.state.emitState({ status: 'denied' })
+    store.state.emitState({ status: error.code === 4 ? 'services-disabled' : 'denied' })
     return
   }
   store.state.emitState({ status: 'error', code: locationErrorCode(error.code) })

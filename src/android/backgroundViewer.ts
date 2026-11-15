@@ -5,6 +5,7 @@ import {
   type SharingRuntimeState,
 } from '../sharing/sharingRuntime.ts'
 import type { PrivateState, PrivateStateStore } from '../sharing/privateStore.ts'
+import { pruneFollowTrace, type FollowTraceEvent } from '../sharing/followTrace.ts'
 
 export interface BackgroundViewerSnapshot {
   readonly generation: number
@@ -14,6 +15,8 @@ export interface BackgroundViewerSnapshot {
     readonly connected: boolean
     readonly lastLocationAt?: number
     readonly updatesReceived: number
+    readonly traceEnabled?: boolean
+    readonly trace?: readonly FollowTraceEvent[]
   }[]
   readonly received: SharingRuntimeState['received']
 }
@@ -41,13 +44,16 @@ export const backgroundViewerSnapshot = (
       ({ saved, status }) =>
         saved && status !== 'expired' && status !== 'revoked' && status !== 'denied',
     )
-    .map(({ shareId, status, connected, lastLocationAt, updatesReceived }) => ({
-      shareId,
-      status,
-      connected,
-      ...(lastLocationAt ? { lastLocationAt } : {}),
-      updatesReceived,
-    })),
+    .map(
+      ({ shareId, status, connected, lastLocationAt, updatesReceived, traceEnabled, trace }) => ({
+        shareId,
+        status,
+        connected,
+        ...(lastLocationAt ? { lastLocationAt } : {}),
+        updatesReceived,
+        ...(traceEnabled ? { traceEnabled: true, trace: pruneFollowTrace(trace ?? []) } : {}),
+      }),
+    ),
   received: state.received.filter(({ shareId }) =>
     state.following.some(
       (entry) =>
@@ -64,7 +70,12 @@ export const createBackgroundViewer = (options: {
   readonly generation: number
   readonly store: PrivateStateStore
   readonly onState: (status: BackgroundViewerSnapshot) => void
-}): { start: () => Promise<void>; stop: () => Promise<void>; runtime: SharingRuntime } => {
+}): {
+  start: () => Promise<void>
+  recover: () => Promise<void>
+  stop: () => Promise<void>
+  runtime: SharingRuntime
+} => {
   const location = createBrowserLocationSource({
     sourceId: 'unattended-viewer-no-location-sensor',
     geolocation: undefined,
@@ -85,6 +96,12 @@ export const createBackgroundViewer = (options: {
   return {
     runtime,
     start: () => runtime.initialize(),
+    recover: async () => {
+      // Release stale authenticated streams and reload the same protected
+      // identity and saved follows under the service ownership fence.
+      await runtime.setFollowingSuspended(true)
+      await runtime.setFollowingSuspended(false)
+    },
     stop: async () => {
       unsubscribe()
       await runtime.stop({ requireDurableState: true })

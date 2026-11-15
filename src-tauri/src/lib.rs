@@ -313,6 +313,44 @@ async fn android_set_sharing_behavior(app: tauri::AppHandle, behavior: serde_jso
 }
 
 #[tauri::command]
+async fn android_set_background_following_preference(app: tauri::AppHandle, enabled: bool) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app.constellation_android().set_background_following_preference(enabled).await.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    { let _ = (app, enabled); Err("Android background reception is unavailable.".into()) }
+}
+
+#[tauri::command]
+async fn android_record_session_event(app: tauri::AppHandle, event: String, state: String, level: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        app.constellation_android().record_session_event(&event, &state, &level).await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, event, state, level);
+        Err("Android diagnostics are unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_share_session_logs(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        app.constellation_android().share_session_logs(&text).await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, text);
+        Err("Android file sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_clear_old_peers(
     app: tauri::AppHandle,
     protection: serde_json::Value,
@@ -405,6 +443,21 @@ async fn android_block_background_viewer(
     {
         let _ = (app, share_id, fingerprint);
         Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
+async fn android_take_settings_request(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .take_settings_request()
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Android sharing settings are unavailable.".into())
     }
 }
 
@@ -579,10 +632,14 @@ pub fn run() {
             android_enable_sharing_permissions,
             android_open_sharing_system_settings,
             android_set_sharing_behavior,
+            android_set_background_following_preference,
+            android_share_session_logs,
+            android_record_session_event,
             android_clear_old_peers,
             android_adopt_background_peer_name,
             android_block_background_viewer,
             android_take_shared_text,
+            android_take_settings_request,
             android_open_project_link,
             android_load_private_state,
             android_save_private_state,

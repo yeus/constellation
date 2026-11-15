@@ -611,6 +611,36 @@ test('global Android behavior waits for native acknowledgement before reading st
   assert.deepEqual(calls, ['android_set_sharing_behavior', 'android_background_share_status'])
 })
 
+test('Android following preference persists through native storage without using receiver ownership as intent', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const response = {
+    behavior: null,
+    hasShares: false,
+    backgroundFollowing: false,
+    permissions: {
+      location: false,
+      background: false,
+      notifications: false,
+      servicesEnabled: true,
+    },
+  }
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: () => 0,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return response
+    },
+  })!
+  assert.equal(
+    (await controller.setBackgroundFollowingPreference(false)).backgroundFollowing,
+    false,
+  )
+  assert.deepEqual(calls, [
+    { command: 'android_set_background_following_preference', args: { enabled: false } },
+  ])
+})
+
 test('Android system policy actions open system settings without changing grants', async () => {
   const calls: { command: string; args?: Record<string, unknown> }[] = []
   const controller = createAndroidBackgroundSharing({

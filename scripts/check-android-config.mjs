@@ -276,9 +276,17 @@ assert.match(androidPlugin, /isIgnoringBatteryOptimizations/)
 assert.match(androidPlugin, /restrictBackgroundStatus/)
 assert.match(androidPlugin, /requestPermissionForAlias\("backgroundLocation"/)
 assert.match(androidPlugin, /requestPermissionForAlias\("notifications"/)
-assert.match(androidPlugin, /ACTION_SET_SHARING_BEHAVIOR && locationGrant\(activity\) == "none"/)
+assert.match(
+  androidPlugin,
+  /if \(!locationManager\.isLocationEnabled \|\| locationGrant\(activity\) == "none"\)/,
+)
 assert.match(androidPlugin, /activity\.startService\(intent\)/)
-assert.ok(locationService.includes('val location = locationGrant(this) != "none" &&'))
+assert.match(androidPlugin, /ContextCompat\.startForegroundService\(activity, intent\)/)
+assert.match(
+  locationService,
+  /val location = locationGrant\(this\) != "none" &&[\s\S]{0,105}isLocationEnabled/,
+)
+assert.match(locationService, /LocationManager\.MODE_CHANGED_ACTION/)
 assert.match(backgroundEntry, /state\.runtime\.setSharingBehavior\(command\.behavior\)/)
 assert.match(
   backgroundEntry,

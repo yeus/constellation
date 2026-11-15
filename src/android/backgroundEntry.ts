@@ -6,8 +6,11 @@ import {
 } from './backgroundReturnCommand.ts'
 import {
   hasStalledDelivery,
+  hasRecentAuthenticatedViewer,
   shouldAttemptTransportRecovery,
   shouldSignalIdleAfterShareUpdate,
+  shouldAttemptReceiverRecovery,
+  receiverRecoveryOutcome,
 } from './backgroundRuntimePolicy.ts'
 import { createBackgroundViewer, type BackgroundViewerSnapshot } from './backgroundViewer.ts'
 import { backgroundRuntimeStatus } from './backgroundRuntimeStatus.ts'
@@ -107,6 +110,11 @@ type BackgroundCommand =
       readonly online: boolean
       readonly stalled?: boolean
     }
+  | {
+      readonly type: 'recover-background-viewer'
+      readonly online: boolean
+      readonly force?: boolean
+    }
   | { readonly type: 'set-visible'; readonly visible: boolean }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
   | {
@@ -174,6 +182,7 @@ interface BackgroundEntryState extends StoreState {
   latestState?: SharingRuntimeState
   previousShareCount: number
   lastRecoveryAt: number | null
+  lastReceiverRecoveryAt: number | null
   networkOnline: boolean
   commandQueue: Promise<void>
 }
@@ -246,6 +255,7 @@ const createBackgroundEntryState = (): BackgroundEntryState => {
     runtime,
     previousShareCount: 0,
     lastRecoveryAt: null,
+    lastReceiverRecoveryAt: null,
     networkOnline: false,
     commandQueue: Promise.resolve(),
   }
@@ -441,6 +451,7 @@ const runShareCommand = async (
           now,
           lastRecoveryAt: state.lastRecoveryAt,
           stalled: command.stalled,
+          recentlyActive: hasRecentAuthenticatedViewer(state.latestState?.shares ?? [], now),
         })
       )
         return
@@ -613,6 +624,7 @@ const runReceiverCommand = async (
         }
         return
       }
+      post({ type: 'diagnostic', event: 'follow.restore.attempt', state: 'retry' })
       const viewer = createBackgroundViewer({
         generation: command.generation,
         store: createPrivateStore(state, 'viewer', command.generation),
@@ -625,12 +637,48 @@ const runReceiverCommand = async (
         await viewer.start()
         state.viewer = viewer
         state.viewerGeneration = command.generation
+        post({ type: 'diagnostic', event: 'follow.restore.finished', state: 'connected' })
       } catch (error) {
+        post({ type: 'diagnostic', event: 'follow.restore.failed', state: 'error' })
         await viewer.stop().catch(() => undefined)
         throw error
       }
     },
   )
+
+const recoverBackgroundViewer = async (
+  state: BackgroundEntryState,
+  command: Extract<BackgroundCommand, { type: 'recover-background-viewer' }>,
+): Promise<void> => {
+  const follows = state.latestViewer?.following ?? []
+  const now = Date.now()
+  if (
+    !state.viewer ||
+    !shouldAttemptReceiverRecovery({
+      online: command.online,
+      savedFollows: follows.length,
+      disconnected: follows.some((entry) => !entry.connected),
+      force: command.force === true,
+      now,
+      lastRecoveryAt: state.lastReceiverRecoveryAt,
+    })
+  )
+    return
+  state.lastReceiverRecoveryAt = now
+  post({ type: 'diagnostic', event: 'follow.reconnect.attempt', state: 'retry' })
+  try {
+    await state.viewer.recover()
+    // Completing the command does not imply an authenticated stream is established.
+    post({
+      type: 'diagnostic',
+      event: 'follow.reconnect.finished',
+      state: receiverRecoveryOutcome(state.latestViewer?.following ?? []),
+    })
+  } catch {
+    post({ type: 'diagnostic', event: 'follow.reconnect.failed', state: 'error' })
+    throw new Error('Could not reconnect saved background peers.')
+  }
+}
 
 const runCommand = async (
   state: BackgroundEntryState,
@@ -640,6 +688,7 @@ const runCommand = async (
   if (command.type === 'receiver-start' || command.type === 'receiver-stop') {
     return runReceiverCommand(state, command)
   }
+  if (command.type === 'recover-background-viewer') return recoverBackgroundViewer(state, command)
   if (isShareCommandType(command.type)) return runShareCommand(state, command)
   if (isViewerCommandType(command.type)) return runViewerCommand(state, command)
   if (command.type === 'replace-background-owner') return ownerHandoffCommand(state, command)
@@ -672,11 +721,19 @@ const start = (): void => {
   state.runtime.subscribe((next) => report(state, next))
   window.setInterval(() => {
     const now = Date.now()
-    if (!state.networkOnline || !hasStalledDelivery(state.latestState?.shares ?? [], now)) return
-    enqueueCommand(
-      state,
-      JSON.stringify({ type: 'recover-background-sources', online: true, stalled: true }),
-    )
+    if (!state.networkOnline) return
+    if (hasStalledDelivery(state.latestState?.shares ?? [], now)) {
+      enqueueCommand(
+        state,
+        JSON.stringify({ type: 'recover-background-sources', online: true, stalled: true }),
+      )
+    }
+    if (state.latestViewer?.following.some((entry) => !entry.connected)) {
+      enqueueCommand(
+        state,
+        JSON.stringify({ type: 'recover-background-viewer', online: true, force: false }),
+      )
+    }
   }, 60_000)
   void state.runtime
     .initialize()

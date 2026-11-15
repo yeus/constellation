@@ -39,6 +39,7 @@ const createGeolocationFixture = () => {
         },
       }),
     deny: () => failure?.({ code: 1 }),
+    disableServices: () => failure?.({ code: 4 }),
     getPositionOptions: () => receivedOptions,
     getRefreshCount: () => refreshCount,
   }
@@ -152,6 +153,19 @@ test('reports denied and unavailable capabilities explicitly', () => {
   assert.equal(unavailable.getState().status, 'unavailable')
   unavailable.start()
   assert.equal(unavailable.getState().status, 'unavailable')
+})
+
+test('a device-wide Location-off event is distinct from permission denial and can recover', () => {
+  const fixture = createFixture()
+  fixture.source.start()
+  fixture.disableServices()
+  assert.equal(fixture.source.getState().status, 'services-disabled')
+  assert.deepEqual(fixture.cleared, [42])
+
+  fixture.source.start()
+  assert.equal(fixture.source.getState().status, 'acquiring')
+  fixture.succeed()
+  assert.equal(fixture.source.getState().status, 'live')
 })
 
 test('clears an asynchronous watch that resolves after stop', async () => {

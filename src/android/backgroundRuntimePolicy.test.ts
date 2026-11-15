@@ -3,8 +3,11 @@ import test from 'node:test'
 
 import {
   hasStalledDelivery,
+  hasRecentAuthenticatedViewer,
   shouldAttemptTransportRecovery,
+  shouldAttemptReceiverRecovery,
   shouldSignalIdleAfterShareUpdate,
+  receiverRecoveryOutcome,
 } from './backgroundRuntimePolicy.ts'
 
 test('signals service idle only when the final active share disappears', () => {
@@ -21,6 +24,31 @@ test('recovery follows a network transition without restarting on every callback
   assert.equal(shouldAttemptTransportRecovery({ ...ready, backgroundSources: 0 }), false)
   assert.equal(shouldAttemptTransportRecovery({ ...ready, lastRecoveryAt: 82_000 }), false)
   assert.equal(shouldAttemptTransportRecovery({ ...ready, lastRecoveryAt: 60_000 }), true)
+})
+
+test('a healthy authenticated viewer prevents a destructive network-handoff restart', () => {
+  const now = 100_000
+  const share = {
+    publication: 'background' as const,
+    viewers: [{ lastSeenAt: now - 10_000 }],
+  }
+  assert.equal(hasRecentAuthenticatedViewer([share], now), true)
+  assert.equal(
+    hasRecentAuthenticatedViewer([{ ...share, viewers: [{ lastSeenAt: now - 60_000 }] }], now),
+    false,
+  )
+  assert.equal(hasRecentAuthenticatedViewer([{ ...share, viewers: [] }], now), false)
+  assert.equal(hasRecentAuthenticatedViewer([{ ...share, publication: 'foreground' }], now), false)
+  const ready = {
+    online: true,
+    backgroundSources: 1,
+    now,
+    lastRecoveryAt: null,
+    recentlyActive: true,
+  }
+  assert.equal(shouldAttemptTransportRecovery(ready), false)
+  assert.equal(shouldAttemptTransportRecovery({ ...ready, stalled: true }), true)
+  assert.equal(shouldAttemptTransportRecovery({ ...ready, recentlyActive: false }), true)
 })
 
 test('missing receiver receipts detect stalled delivery without relying on fresh GPS fixes', () => {
@@ -64,4 +92,29 @@ test('stalled-delivery watchdog uses a five-minute retry floor', () => {
   }
   assert.equal(shouldAttemptTransportRecovery(ready), false)
   assert.equal(shouldAttemptTransportRecovery({ ...ready, lastRecoveryAt: 200_000 }), true)
+})
+
+test('receiver reconnection is only confirmed once every saved follow is actually connected', () => {
+  assert.equal(receiverRecoveryOutcome([{ connected: true }]), 'connected')
+  assert.equal(receiverRecoveryOutcome([{ connected: true }, { connected: false }]), 'pending')
+  assert.equal(receiverRecoveryOutcome([{ connected: false }]), 'pending')
+  assert.equal(receiverRecoveryOutcome([]), 'pending')
+})
+
+test('background receiver reconnects on handoff or disconnection but rate-limits retries', () => {
+  const state = {
+    online: true,
+    savedFollows: 2,
+    disconnected: true,
+    now: 300_000,
+    lastRecoveryAt: null,
+    force: false,
+  }
+  assert.equal(shouldAttemptReceiverRecovery(state), true)
+  assert.equal(shouldAttemptReceiverRecovery({ ...state, online: false }), false)
+  assert.equal(shouldAttemptReceiverRecovery({ ...state, savedFollows: 0 }), false)
+  assert.equal(shouldAttemptReceiverRecovery({ ...state, disconnected: false }), false)
+  assert.equal(shouldAttemptReceiverRecovery({ ...state, disconnected: false, force: true }), true)
+  assert.equal(shouldAttemptReceiverRecovery({ ...state, lastRecoveryAt: 240_000 }), false)
+  assert.equal(shouldAttemptReceiverRecovery({ ...state, lastRecoveryAt: 100_000 }), true)
 })

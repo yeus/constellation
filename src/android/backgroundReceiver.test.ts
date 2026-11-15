@@ -37,9 +37,28 @@ test('receiver status accepts validated observations and rejects stale generatio
     longitude: -117.2,
     accuracyMeters: 100,
   }
+  const event = {
+    type: 'location',
+    receivedAt: Date.now(),
+    capturedAt: Date.now() - 1000,
+    latitude: 33.1,
+    longitude: -117.2,
+    accuracyMeters: 100,
+    precision: 'approximate',
+    sequence: 2,
+  }
   const status = {
     generation: 4,
-    following: [{ shareId: 'share-1', status: 'live', connected: true, updatesReceived: 2 }],
+    following: [
+      {
+        shareId: 'share-1',
+        status: 'live',
+        connected: true,
+        updatesReceived: 2,
+        traceEnabled: true,
+        trace: [event],
+      },
+    ],
     received: [{ shareId: 'share-1', state: 'live', observation }],
   }
   const native = (generation: number, payload: unknown) =>
@@ -49,6 +68,7 @@ test('receiver status accepts validated observations and rejects stale generatio
     })!
   const result = await native(4, status).ownership()
   assert.equal(result.status?.received[0]?.observation.latitude, 33.1)
+  assert.deepEqual(result.status?.following[0]?.trace, [event])
   await assert.rejects(native(5, status).ownership(), /Stale receiver status/)
   await assert.rejects(
     native(4, {

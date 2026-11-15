@@ -52,6 +52,47 @@ test('background viewer isolates saved subscriptions from outgoing source and UI
   assert.equal(JSON.stringify(viewer).includes('ended-secret'), false)
 })
 
+test('background receiver retains opted-in recorded events for the on-screen inspector', () => {
+  const now = Date.now()
+  const event = {
+    type: 'location' as const,
+    receivedAt: now,
+    capturedAt: now - 1_000,
+    latitude: 32.71,
+    longitude: -117.16,
+    accuracyMeters: 1_000,
+    precision: 'approximate' as const,
+    sequence: 21,
+  }
+  const snapshot = backgroundViewerSnapshot(4, {
+    following: [
+      {
+        shareId: 'saved',
+        saved: true,
+        connected: true,
+        status: 'live',
+        updatesReceived: 21,
+        traceEnabled: true,
+        trace: [event],
+      },
+      {
+        shareId: 'not-recording',
+        saved: true,
+        connected: true,
+        status: 'live',
+        updatesReceived: 15,
+        traceEnabled: false,
+        trace: [event],
+      },
+    ],
+    received: [],
+  } as unknown as SharingRuntimeState)
+  assert.deepEqual(snapshot.following[0]?.trace, [event])
+  assert.equal(snapshot.following[0]?.traceEnabled, true)
+  assert.equal(snapshot.following[1]?.trace, undefined)
+  assert.equal(JSON.stringify(snapshot).includes('PRIVATE-URL'), false)
+})
+
 test('background viewer projection exposes only saved authorized observations, no bearer URLs', () => {
   const state = {
     following: [

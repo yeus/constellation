@@ -17,6 +17,7 @@ internal object ShareServiceContract {
   const val ACTION_SET_PEER_NAMES = "space.taskyon.constellation.SET_PEER_NAMES"
   const val ACTION_RECEIVER_START = "space.taskyon.constellation.RECEIVER_START"
   const val ACTION_RECEIVER_STOP = "space.taskyon.constellation.RECEIVER_STOP"
+  const val EXTRA_OPEN_SHARING_SETTINGS = "space.taskyon.constellation.OPEN_SHARING_SETTINGS"
   @Volatile var receiverStatus: String? = null
   @Volatile var currentStatus: String? = null
   @Volatile var serviceRunning: Boolean = false
@@ -100,14 +101,15 @@ internal object ShareNotification {
       )
     }
     if (receiving) {
-      val generation = ReceiverOwnershipFence(context).snapshot().generation
-      val stopFollowing = Intent(context, LocationShareService::class.java)
-        .setAction(ShareServiceContract.ACTION_RECEIVER_STOP)
-        .putExtra(ShareServiceContract.EXTRA_REQUEST, "{\"generation\":$generation}")
-      builder.addAction(0, "Stop background following", PendingIntent.getService(
-        context, ShareServiceContract.NOTIFICATION_ID + 2, stopFollowing,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-      ))
+      context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { settings ->
+        // Preserve NEW_TASK and other flags supplied by the launcher intent.
+        settings.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        settings.putExtra(ShareServiceContract.EXTRA_OPEN_SHARING_SETTINGS, true)
+        builder.addAction(0, "Open sharing settings", PendingIntent.getActivity(
+          context, ShareServiceContract.NOTIFICATION_ID + 2, settings,
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ))
+      }
     }
     context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
       launch.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP

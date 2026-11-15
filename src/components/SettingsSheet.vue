@@ -32,10 +32,10 @@
       <p v-if="review" class="settings-review">
         {{
           hasShares
-            ? 'Review once to replace your existing per-link behavior with these global settings.'
+            ? 'Review once to apply your global preferences to existing links.'
             : isAndroid
-              ? 'Background sharing is the Android default. Enable permissions to set it up, or choose sharing only while the app is open.'
-              : 'Choose how this device shares your location.'
+              ? 'Choose your preferred mode, even without Android permissions; the fallback is shown below.'
+              : 'Choose your preferred mode. Background sharing will fall back to foreground-only.'
         }}
       </p>
       <fieldset :disabled="busy">
@@ -46,7 +46,7 @@
             type="button"
             :class="{ 'choice--selected': draft.publication === 'foreground' }"
             :aria-pressed="draft.publication === 'foreground'"
-            @click="draft = { ...draft, publication: 'foreground' }"
+            @click="changeDraft({ ...draft, publication: 'foreground' })"
           >
             <AppIcon aria-hidden="true" /><strong>While app is open</strong
             ><span>Pause when hidden</span>
@@ -56,26 +56,21 @@
             type="button"
             :class="{ 'choice--selected': draft.publication === 'background' }"
             :aria-pressed="draft.publication === 'background'"
-            :disabled="!backgroundAllowed"
-            @click="draft = { ...draft, publication: 'background' }"
+            @click="changeDraft({ ...draft, publication: 'background' })"
           >
             <BackgroundIcon aria-hidden="true" /><strong>In background</strong
             ><span>Android notification</span>
           </button>
         </div>
       </fieldset>
-      <p v-if="!isAndroid" class="field-help">
-        Background sharing requires the native Android app. It is unavailable in this browser or
-        desktop app.
+      <p v-if="fallbackNotice" class="settings-permissions" role="status">
+        <strong>Requested mode (save to keep it); execution restricted.</strong>
+        {{ fallbackNotice }}
       </p>
-      <div v-else-if="!backgroundAllowed" class="settings-permissions">
+      <div v-if="isAndroid && !backgroundAllowed" class="settings-permissions">
         <p>
-          To enable background sharing, allow device location, all-the-time location and
-          notifications. Device location services must also be enabled.
-        </p>
-        <p class="field-help">
-          On newer Android versions, choose Permissions → Location → Allow all the time in the app’s
-          system settings, then return here.
+          Missing permissions do not prevent editing settings. Grant Android location, background
+          location, and notifications to use background sharing.
         </p>
         <button
           :class="review ? 'primary-action' : 'secondary-action'"
@@ -85,16 +80,16 @@
         >
           {{ review ? 'Enable background sharing' : 'Enable permissions' }}
         </button>
-        <button
-          class="secondary-action"
-          type="button"
-          :disabled="busy"
-          @click="emit('save', { ...draft, publication: 'foreground' })"
-        >
-          Use while app is open
-        </button>
       </div>
-      <fieldset :disabled="busy || draft.publication !== 'background' || !backgroundAllowed">
+      <p
+        v-if="isAndroid && permissions && !permissions.servicesEnabled"
+        class="settings-location-off"
+        role="status"
+      >
+        {{ deviceLocationNotice(false, hasShares ? 1 : 0) }}
+        Changing settings still works while Location is off.
+      </p>
+      <fieldset :disabled="busy">
         <legend>Update frequency</legend>
         <div class="choice-grid choice-grid--two">
           <button
@@ -102,7 +97,7 @@
             type="button"
             :aria-pressed="draft.battery === 'balanced'"
             :class="{ 'choice--selected': draft.battery === 'balanced' }"
-            @click="draft = { ...draft, battery: 'balanced' }"
+            @click="changeDraft({ ...draft, battery: 'balanced' })"
           >
             <BalancedIcon aria-hidden="true" /><strong>Balanced</strong><span>About every 5 s</span>
           </button>
@@ -111,7 +106,7 @@
             type="button"
             :aria-pressed="draft.battery === 'saver'"
             :class="{ 'choice--selected': draft.battery === 'saver' }"
-            @click="draft = { ...draft, battery: 'saver' }"
+            @click="changeDraft({ ...draft, battery: 'saver' })"
           >
             <BatteryIcon aria-hidden="true" /><strong>Battery saver</strong
             ><span>About every 30 s</span>
@@ -122,37 +117,53 @@
             type="checkbox"
             :checked="draft.network === 'pause-when-metered'"
             @change="
-              draft = {
+              changeDraft({
                 ...draft,
                 network: ($event.target as HTMLInputElement).checked
                   ? 'pause-when-metered'
                   : 'always',
-              }
+              })
             "
           />Pause updates on metered networks and Data Saver</label
         >
       </fieldset>
       <p class="field-help">
-        Background battery and network settings take effect only in background mode. Metered
-        networks, Data Saver and Doze can delay updates. Pausing updates keeps the link active;
-        updates resume automatically when the restriction ends.
+        Update frequency and network preferences remain saved even if background mode is unavailable
+        or unselected. Effective fallback: these controls are inactive in foreground-only mode. Doze
+        and network restrictions can still delay updates. Updates paused by the saved network policy
+        resume automatically when the restriction ends, subject to Android process availability.
       </p>
-      <section v-if="isAndroid" class="android-readiness" aria-label="Background following">
-        <h3>Keep following in background</h3>
-        <label class="settings-network">
+      <section
+        v-if="isAndroid"
+        class="android-readiness android-readiness--following"
+        aria-label="Background following"
+      >
+        <h3>Background following</h3>
+        <label class="settings-network settings-following-switch">
           <input
             type="checkbox"
             :checked="backgroundFollowing"
-            :disabled="busy || (!backgroundFollowing && savedFollowCount === 0)"
+            :disabled="busy"
             @change="emit('setBackgroundFollowing', ($event.target as HTMLInputElement).checked)"
           />
-          Keep following saved peers while this app is in the background
+          <strong>Keep receiving saved peers' locations in the background</strong>
         </label>
         <p class="field-help">
-          Off by default. {{ savedFollowCount }} saved peer(s). When enabled, Android shows an
-          ongoing notification with Stop background following. Updates can still be delayed by Doze,
-          lack of network access or device policy; this is not guaranteed continuous delivery. Only
-          saved, authorized, non-expired subscriptions are restored.
+          On by default. {{ savedFollowCount }} saved peer(s). The preference does not change when
+          Android disconnects or restarts the receiver. If background reception is restricted, the
+          fallback is receiving while this app is open; subscriptions remain saved.
+        </p>
+        <p class="field-help" role="status">
+          Android receiver: {{ backgroundReceiverActive ? 'running' : 'not running' }}.
+          {{
+            backgroundFollowing && !backgroundReceiverActive && savedFollowCount > 0
+              ? 'The preference is enabled, but the receiver is not active. Check permissions or reopen the app.'
+              : ''
+          }}
+        </p>
+        <p v-if="!backgroundFollowing && backgroundReceiverActive" class="field-help" role="alert">
+          Background following is turned off, but the Android receiver is still running. Use the
+          notification's Stop action if stopping it here failed.
         </p>
       </section>
       <section
@@ -188,19 +199,14 @@
         </p>
       </section>
       <p v-if="error" role="alert" class="settings-error">{{ error }}</p>
-      <button
-        class="primary-action"
-        type="button"
-        :disabled="busy || (draft.publication === 'background' && !backgroundAllowed)"
-        @click="emit('save', draft)"
-      >
+      <button class="primary-action" type="button" :disabled="busy" @click="emit('save', draft)">
         {{ busy ? 'Please wait…' : 'Save settings' }}
       </button>
     </section>
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { trapDialogFocus } from './dialogFocus.ts'
 import {
   LucideSmartphone as AppIcon,
@@ -210,6 +216,11 @@ import {
 } from '@lucide/vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { SharingBehavior } from '../sharing/sharingBehavior.ts'
+import {
+  canConfigureBackgroundSharing,
+  sharingFallbackNotice,
+  deviceLocationNotice,
+} from '../android/locationReadiness.ts'
 import type {
   AndroidSharingSetup,
   AndroidSystemSettingsTarget,
@@ -219,6 +230,7 @@ const props = defineProps<{
   isAndroid: boolean
   permissions?: AndroidSharingSetup['permissions']
   backgroundFollowing: boolean
+  backgroundReceiverActive: boolean
   savedFollowCount: number
   devicePolicies?: AndroidSharingSetup['devicePolicies']
   review: boolean
@@ -242,8 +254,23 @@ onUnmounted(() => {
   else document.querySelector<HTMLButtonElement>('button[aria-label="Open menu"]')?.focus()
 })
 const draft = ref({ ...props.behavior })
+const dirty = ref(false)
+watch(
+  () => props.behavior,
+  (behavior) => {
+    if (!dirty.value) draft.value = { ...behavior }
+  },
+  { deep: true },
+)
+const changeDraft = (behavior: SharingBehavior): void => {
+  dirty.value = true
+  draft.value = behavior
+}
+const fallbackNotice = computed(() =>
+  sharingFallbackNotice(draft.value, props.isAndroid, props.permissions),
+)
 const backgroundAllowed = computed(
-  () => props.isAndroid && !!props.permissions && Object.values(props.permissions).every(Boolean),
+  () => props.isAndroid && canConfigureBackgroundSharing(props.permissions),
 )
 const policyRows = computed(() => {
   const permissions = props.permissions
@@ -361,6 +388,21 @@ fieldset:disabled {
 .android-readiness h3 {
   font-size: 1rem;
   margin: 0 0 0.5rem;
+}
+.android-readiness--following {
+  border: 2px solid var(--border);
+  border-radius: 0.85rem;
+  padding: 1rem;
+}
+.settings-following-switch {
+  align-items: center;
+  padding: 0.6rem 0;
+  font-size: 0.95rem;
+}
+.settings-following-switch input {
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
 }
 .android-policy-row {
   display: flex;

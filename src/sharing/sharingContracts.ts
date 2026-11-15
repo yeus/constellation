@@ -58,6 +58,8 @@ export interface FollowSummary {
   readonly shareId: string
   readonly peerId?: string
   readonly sourceName?: string
+  /** Initial nickname shared with everyone holding this particular link. */
+  readonly linkName?: string
   readonly localName: string
   readonly displayName?: string
   readonly color: string
@@ -68,6 +70,8 @@ export interface FollowSummary {
   readonly lastLocationAt?: number
   readonly updatesReceived: number
   readonly traceEnabled?: boolean
+  /** Service owns the follow, but its current snapshot has not arrived yet. */
+  readonly receiverStatusPending?: boolean
   readonly trace?: readonly FollowTraceEvent[]
   readonly expiresAt: number | null
   readonly returnPromptSeen: boolean
@@ -82,7 +86,7 @@ export interface OldShareSummary {
   readonly name?: string
   readonly peerId?: string
   readonly endedAt: number
-  readonly reason: 'revoked' | 'expired'
+  readonly reason: 'revoked' | 'expired' | 'stopped'
 }
 
 export interface SharingRuntimeState {

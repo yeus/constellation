@@ -1,5 +1,14 @@
 const EVENT_CODES = [
   'app.started',
+  'app.visibility',
+  'app.connectivity',
+  'sharing.background.following',
+  'sharing.background.following.preference',
+  'sharing.background.following.preference.loaded',
+  'android.power.optimization',
+  'android.power.saver',
+  'android.power.restricted',
+  'android.network.data-saver',
   'map.webgl.unavailable',
   'map.runtime.ready',
   'map.style.loaded',
@@ -24,7 +33,9 @@ const EVENT_CODES = [
   'sharing.background.viewers',
   'sharing.background.location',
   'sharing.background.connections',
+  'sharing.background.history',
   'location.provider.fallback',
+  'location.device.services',
   'sharing.session.lifecycle',
 ] as const
 
@@ -49,8 +60,12 @@ const STATES = [
   'stopped',
   'connected',
   'disconnected',
+  'visible',
+  'hidden',
+  'enabled',
+  'disabled',
 ] as const
-const LOG_LIMIT = 2_000
+const LOG_LIMIT = 40_000
 const REPEAT_WINDOW_MS = 10_000
 
 export interface SessionLogInput {
@@ -118,7 +133,7 @@ export const describeDiagnosticError = (
 }
 
 export const createSessionLog = (now: () => number, mirror?: (entry: SessionLogEntry) => void) => {
-  let entries: SessionLogEntry[] = []
+  const entries: SessionLogEntry[] = []
 
   const record = (input: SessionLogInput): void => {
     if (!EVENT_CODES.includes(input.event)) return
@@ -141,10 +156,11 @@ export const createSessionLog = (now: () => number, mirror?: (entry: SessionLogE
       last.message === entry.message &&
       entry.timestampMs - last.timestampMs <= REPEAT_WINDOW_MS
     ) {
-      entries = [...entries.slice(0, -1), { ...last, repeatCount: last.repeatCount + 1 }]
+      entries[entries.length - 1] = { ...last, repeatCount: last.repeatCount + 1 }
       return
     }
-    entries = [...entries, entry].slice(-LOG_LIMIT)
+    entries.push(entry)
+    if (entries.length > LOG_LIMIT) entries.shift()
     mirror?.(entry)
   }
 

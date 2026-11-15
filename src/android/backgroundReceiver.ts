@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { parseLocationObservationV1 } from '../location/locationObservation.ts'
 import type { BackgroundViewerSnapshot } from './backgroundViewer.ts'
+import { FollowTraceEventSchema, MAX_FOLLOW_TRACE_EVENTS } from '../sharing/followTrace.ts'
 
 const ReceiverOwner = z.enum(['activity', 'service'])
 const ReceiverSnapshot = z.object({
@@ -27,6 +28,8 @@ const ViewerStatus = z.object({
         connected: z.boolean(),
         updatesReceived: z.number().int().nonnegative(),
         lastLocationAt: z.number().optional(),
+        traceEnabled: z.boolean().optional(),
+        trace: z.array(FollowTraceEventSchema).max(MAX_FOLLOW_TRACE_EVENTS).optional(),
       }),
     )
     .max(128),

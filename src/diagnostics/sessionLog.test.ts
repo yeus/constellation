@@ -3,19 +3,19 @@ import test from 'node:test'
 
 import { createSessionLog, describeDiagnosticError } from './sessionLog.ts'
 
-test('keeps the newest 2000 entries and copies them oldest first', () => {
+test('keeps the newest 40000 entries and copies them oldest first', () => {
   let time = 0
   const log = createSessionLog(() => ++time)
-  for (let index = 0; index < 2_001; index += 1) {
+  for (let index = 0; index < 40_001; index += 1) {
     log.record({
       level: 'info',
       event: index % 2 === 0 ? 'map.style.loaded' : 'map.archive.verified',
     })
   }
 
-  assert.equal(log.snapshot().length, 2_000)
+  assert.equal(log.snapshot().length, 40_000)
   assert.equal(log.snapshot()[0]?.timestampMs, 2)
-  assert.equal(log.snapshot().at(-1)?.timestampMs, 2_001)
+  assert.equal(log.snapshot().at(-1)?.timestampMs, 40_001)
   assert.ok(
     log.format('browser').indexOf('map.archive.verified') <
       log.format('browser').lastIndexOf('map.style.loaded'),
@@ -74,6 +74,32 @@ test('records follow connection changes without a peer identifier', () => {
 
   assert.match(log.format('browser'), /sharing\.follow\.status · disconnected/)
   assert.match(log.format('browser'), /sharing\.follow\.status · connected/)
+})
+
+test('records preference changes distinctly from Android background receiver ownership', () => {
+  const log = createSessionLog(() => 1_000)
+  log.record({
+    level: 'info',
+    event: 'sharing.background.following.preference.loaded',
+    state: 'enabled',
+  })
+  log.record({
+    level: 'info',
+    event: 'sharing.background.following.preference',
+    state: 'disabled',
+    message: 'persisted',
+  })
+  log.record({
+    level: 'warning',
+    event: 'sharing.background.following',
+    state: 'enabled',
+  })
+  assert.match(
+    log.format('android'),
+    /sharing\.background\.following\.preference\.loaded · enabled/,
+  )
+  assert.match(log.format('android'), /sharing\.background\.following\.preference · disabled/)
+  assert.match(log.format('android'), /sharing\.background\.following · enabled/)
 })
 
 test('records transport-count changes without raw network addresses', () => {

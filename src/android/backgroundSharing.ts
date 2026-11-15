@@ -22,6 +22,8 @@ export type AndroidSystemSettingsTarget =
 
 export const AndroidSharingSetup = z.object({
   behavior: SharingBehavior.nullable(),
+  /** Null means a legacy WebView-only preference has not yet been migrated. */
+  backgroundFollowing: z.boolean().nullable().optional(),
   hasShares: z.boolean(),
   permissions: z.object({
     location: z.boolean(),
@@ -92,6 +94,7 @@ const isLocationState = (value: unknown): value is BrowserLocationState => {
     'delayed',
     'stale',
     'denied',
+    'services-disabled',
     'unavailable',
     'error',
   ].includes(String(value.status))
@@ -221,6 +224,7 @@ interface AndroidBackgroundSharing {
   blockViewer: (shareId: string, fingerprint: string) => Promise<AndroidBackgroundStatus>
   setup: () => Promise<AndroidSharingSetup>
   enablePermissions: () => Promise<AndroidSharingSetup>
+  setBackgroundFollowingPreference: (enabled: boolean) => Promise<AndroidSharingSetup>
   openSystemSettings: (target: AndroidSystemSettingsTarget) => Promise<void>
   setSharingBehavior: (behavior: SharingBehavior) => Promise<AndroidBackgroundStatus>
   clearOldPeers: (protection: PeerHistoryProtection) => Promise<AndroidBackgroundStatus>
@@ -374,6 +378,10 @@ const createSetupActions = (dependencies: AndroidBackgroundSharingDependencies) 
   setup: async () => AndroidSharingSetup.parse(await dependencies.invoke('android_sharing_setup')),
   enablePermissions: async () =>
     AndroidSharingSetup.parse(await dependencies.invoke('android_enable_sharing_permissions')),
+  setBackgroundFollowingPreference: async (enabled: boolean) =>
+    AndroidSharingSetup.parse(
+      await dependencies.invoke('android_set_background_following_preference', { enabled }),
+    ),
   openSystemSettings: async (target: AndroidSystemSettingsTarget) => {
     await dependencies.invoke('android_open_sharing_system_settings', { target })
   },

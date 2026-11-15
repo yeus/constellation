@@ -30,6 +30,25 @@ internal class EncryptedShareStore(
 
   @Synchronized
   fun loadPrivateState(): String? = load("private-state")
+  /** Persist requested sharing behavior separately from the effective runtime policy. */
+  @Synchronized
+  fun saveBehaviorPreference(value: String) = save("behavior-preference", value, 512)
+
+  @Synchronized
+  fun loadBehaviorPreference(): String? = load("behavior-preference")
+  /** Authoritative background following intent, readable before restoring the service. */
+  @Synchronized
+  fun saveFollowingPreference(enabled: Boolean) =
+    save("following-preference", if (enabled) "on" else "off", 8)
+
+  @Synchronized
+  fun loadFollowingPreference(): Boolean? = when (load("following-preference")) {
+    "on" -> true
+    "off" -> false
+    null -> null // Older installations migrate on the next visible launch.
+    else -> throw IllegalStateException("Protected following preference is invalid.")
+  }
+
 
   @Synchronized
   fun hasSavedShares(): Boolean {
@@ -42,6 +61,11 @@ internal class EncryptedShareStore(
   @Synchronized
   fun hasBackgroundShares(): Boolean {
     val state = loadPrivateState()?.let(::JSONObject) ?: return false
+    val requested = loadBehaviorPreference()?.let(::JSONObject)?.optString("publication")
+    // The encrypted user preference, when present, overrides stale share metadata
+    // left by a permission fallback or interrupted runtime handoff.
+    if (requested == "foreground") return false
+    if (requested == "background") return hasSavedShares()
     return listOf("shares", "endedShares").any { key ->
       val shares = state.optJSONArray(key)
       (0 until (shares?.length() ?: 0)).any { index ->
