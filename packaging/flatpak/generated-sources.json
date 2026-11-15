@@ -4223,9 +4223,9 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/vite/-/vite-7.3.6.tgz",
-        "sha512": "e173fad2ca511a349915fd6a607f9d24890adb39cbdf341f97d2a4395f4c924451ff70e5b34771681b103d396811ce412d758f2fdbec3b1a29c722a83260ee7a",
-        "dest-filename": "vite-dml0ZUBucG06Ny4zLjY=-c6d359f84a.tgz",
+        "url": "https://registry.npmjs.org/vite/-/vite-7.3.7.tgz",
+        "sha512": "0071334ce44c6e2effeda5e9ef0eca679f8309475278bb09cf482b63cc47a5cf431dd61bd2f42ee83a897e6dad3b0de00c4c4d80f8272535f133ab326051da08",
+        "dest-filename": "vite-dml0ZUBucG06Ny4zLjc=-6a3f868a33.tgz",
         "dest": "flatpak-node/yarn-berry/cache/locator"
     },
     {
