@@ -50,12 +50,32 @@ test('a subscriber opts into recording per saved share, restores that preference
     assert.equal(saved.followed[0]?.traceEnabled, true)
     assert.deepEqual(saved.followed[0]?.trace, [])
     await runtime.stop()
+    const capturedAt = Date.now() - 2_000
+    saved.followed[0] = {
+      ...saved.followed[0],
+      traceEnabled: true,
+      trace: [
+        {
+          type: 'location',
+          receivedAt: capturedAt + 1_000,
+          capturedAt,
+          latitude: 32.71,
+          longitude: -117.16,
+          accuracyMeters: 200,
+          precision: 'approximate',
+          sequence: 3,
+        },
+      ],
+    }
     runtime = makeRuntime()
     runtime.subscribe((next) => {
       state = next
     })
     await runtime.initialize()
     assert.equal(state.following[0]?.traceEnabled, true)
+    assert.equal(state.following[0]?.status, 'unavailable')
+    assert.equal(state.following[0]?.lastLocationAt, capturedAt)
+    assert.equal(state.following[0]?.trace?.length, 1)
     await runtime.setFollowTraceEnabled(source.capability.shareId, false)
     assert.equal(saved.followed[0]?.traceEnabled, undefined)
     assert.equal(saved.followed[0]?.trace, undefined)

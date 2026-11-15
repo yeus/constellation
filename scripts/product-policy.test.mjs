@@ -73,5 +73,7 @@ test('sharing separates link options from device behavior and explains encrypted
   assert.match(shareSheet, /End-to-end encrypted\. No central location storage\./)
   assert.match(shareSheet, /More info/)
   assert.match(settings, /every active and future link/)
-  assert.match(settings, /Use while app is open/)
+  assert.match(settings, /While app is open/)
+  assert.match(settings, /sharingFallbackNotice/)
+  assert.doesNotMatch(settings, /:disabled="!backgroundAllowed"/)
 })

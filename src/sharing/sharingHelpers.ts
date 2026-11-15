@@ -298,6 +298,7 @@ export const snapshot = (ctx: SharingContext) => (): PrivateState => {
     endedShares: ctx.endedShares,
     peerNamePreferences: ctx.peerNamePreferences,
     followed: ctx.followed,
+    received: ctx.received,
     approvedReturnLinks: ctx.approvedReturnLinks,
     pendingReturns: ctx.pendingReturns,
     returnOffers: ctx.returnOffers,
@@ -439,12 +440,16 @@ const restoreFollow = async (ctx: SharingContext, record: PrivateState['followed
     capability.ownerPeerId && (await verifyReturnOwner(capability))
       ? capability.ownerPeerId
       : undefined
+  if (record.lastObservation && !record.endReason && !record.approvalDenied) {
+    ctx.received.set(capability.shareId, record.lastObservation)
+  }
   ctx.followed.set(capability.shareId, {
     url: record.url,
     sourcePeerId: capability.sourcePeerId,
     peerId: knownPeerId,
     localName: record.localName,
     sourceName: record.sourceName,
+    linkSourceName: record.linkSourceName ?? record.sourceName,
     usesPrivateName:
       record.usesPrivateName ?? record.localName !== generatedFollowName(capability.shareId),
     color: record.color,
@@ -500,6 +505,9 @@ export const restoreFollows = async (ctx: SharingContext, saved: PrivateState | 
   for (const record of saved?.followed ?? []) {
     try {
       await restoreFollow(ctx, record)
+      // A revoked or denied link may come from an older snapshot: ensure its
+      // geometry is erased from protected storage, not merely hidden in the UI.
+      if (record.lastObservation && (record.endReason || record.approvalDenied)) changed = true
     } catch {
       changed = restoreExpiredFollow(ctx, record) || changed
     }

@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
 
 import { MapCameraSchema } from '../map/mapCamera.ts'
+import { parseLocationObservationV1 } from '../location/locationObservation.ts'
+import { minimalLastKnownObservation } from './lastKnownObservation.ts'
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
 import { DeviceComparison, ComparisonBudget } from './deviceComparison.ts'
 import { PeerNamePreference } from './peerNames.ts'
@@ -39,6 +41,7 @@ const FollowRecord = z.object({
   url: z.string().url().max(4_096),
   localName: z.string().max(32),
   sourceName: z.string().max(32).optional(),
+  linkSourceName: z.string().max(32).optional(),
   usesPrivateName: z.boolean().optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
   followedAt: z.number().int().positive().optional(),
@@ -47,6 +50,11 @@ const FollowRecord = z.object({
   endedAt: z.number().int().positive().optional(),
   traceEnabled: z.boolean().optional(),
   trace: z.array(FollowTraceEventSchema).max(MAX_FOLLOW_TRACE_EVENTS).optional(),
+  // Single encrypted disclosure snapshot, not a movement history.
+  lastObservation: z
+    .unknown()
+    .transform((value) => minimalLastKnownObservation(parseLocationObservationV1(value)))
+    .optional(),
   endReason: z.enum(['revoked', 'expired']).optional(),
 })
 
@@ -62,7 +70,7 @@ const LifecycleRecord = z.object({
   peerId: z.string().min(1).max(256).optional(),
   name: z.string().max(32).optional(),
   endedAt: z.number().int().positive(),
-  reason: z.enum(['revoked', 'expired']),
+  reason: z.enum(['revoked', 'expired', 'stopped']),
 })
 
 export const StoppedViewerRecord = z.object({

@@ -58,6 +58,43 @@ test('share streams may run over limited relay connections', async () => {
   assert.deepEqual(receivedOptions, { runOnLimitedConnection: true })
 })
 
+test('a stalled comparison stream dial can be cancelled on both connected and relay paths', async () => {
+  const controller = new AbortController()
+  const observed: AbortSignal[] = []
+  const connection = {
+    direct: true,
+    newStream: async (_protocol: unknown, options: { signal?: AbortSignal }) => {
+      if (options.signal) observed.push(options.signal)
+      throw new Error('Existing connection no longer usable')
+    },
+  } as unknown as Connection
+  const node = {
+    dialProtocol: async (_peer: unknown, _protocol: unknown, options: { signal?: AbortSignal }) => {
+      if (options.signal) observed.push(options.signal)
+      return new Promise<Stream>((_resolve, reject) => {
+        if (options.signal?.aborted) {
+          reject(new Error('dial cancelled'))
+          return
+        }
+        options.signal?.addEventListener('abort', () => reject(new Error('dial cancelled')), {
+          once: true,
+        })
+      })
+    },
+  } as Pick<BrowserLibp2pNode, 'dialProtocol'>
+  const dial = dialShareStream(
+    node,
+    ['/ip4/127.0.0.1/tcp/1'],
+    '/constellation/device-comparison/1.0.0',
+    [connection],
+    controller.signal,
+  )
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  controller.abort()
+  await assert.rejects(dial, /cancelled/)
+  assert.deepEqual(observed, [controller.signal, controller.signal])
+})
+
 test('prefers an existing authenticated peer connection before advertised relay addresses', async () => {
   const stream = {} as Stream
   const targets: unknown[] = []

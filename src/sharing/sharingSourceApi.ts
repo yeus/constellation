@@ -594,6 +594,25 @@ const createApproveViewer =
     if (share.approvedPeerId && share.approvedPeerId !== peerId) {
       throw new Error('Another device is already approved for this share.')
     }
+    // A pending-device grant cannot bypass the authenticated, human-confirmed
+    // device comparison by calling the runtime API directly. The challenge
+    // belongs to this exact share and viewer, is ephemeral, and must be both
+    // completed and locally confirmed before admitting any location stream.
+    const now = Date.now()
+    const verified = [...ctx.deviceComparisons.values()].some(
+      (entry) =>
+        entry.role === 'sender' &&
+        entry.shareId === shareId &&
+        entry.ownPeerId === share.capability.sourcePeerId &&
+        entry.peerId === peerId &&
+        entry.confirmedAt !== undefined &&
+        entry.confirmedAt <= now &&
+        now < entry.expiresAt &&
+        ctx.comparisonPeerIsEligible(entry),
+    )
+    if (share.requireViewerApproval && !verified) {
+      throw new Error('Confirm a matching, unexpired four-letter comparison before approving.')
+    }
     const previousPeerId = share.approvedPeerId
     share.approvedPeerId = peerId
     try {

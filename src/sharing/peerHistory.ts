@@ -60,7 +60,17 @@ export const restoreFailedPeerHistoryClear = <T>(
     ]),
   )
 
+// A local stop is historical, but does not permanently blacklist a valid invitation.
 export const hasEndedPeerShare = (
-  records: Iterable<{ shareId: string }>,
+  records: Iterable<{ shareId: string; reason?: 'revoked' | 'expired' | 'stopped' }>,
   shareId: string,
-): boolean => [...records].some((record) => record.shareId === shareId)
+): boolean =>
+  [...records].some((record) => record.shareId === shareId && record.reason !== 'stopped')
+
+// Terminal sender evidence outranks a later local stop, including concurrent teardown.
+export const canRecordLocalStop = (
+  records: Iterable<{ shareId: string; reason?: 'revoked' | 'expired' | 'stopped' }>,
+  shareId: string,
+  terminal?: 'revoked' | 'expired' | 'unavailable',
+): boolean =>
+  terminal !== 'revoked' && terminal !== 'expired' && !hasEndedPeerShare(records, shareId)

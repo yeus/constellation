@@ -51,6 +51,18 @@
       </button>
     </header>
 
+    <section
+      v-if="deviceLocationOff"
+      class="device-location-notice"
+      role="status"
+      aria-label="Device location is off"
+    >
+      <p><strong>Device location is off.</strong> {{ deviceLocationWarning }}</p>
+      <button type="button" @click="openAndroidSystemSettings('device-location')">
+        Open Android location settings
+      </button>
+    </section>
+
     <Transition name="menu-morph">
       <section v-if="menuOpen" class="app-menu" aria-label="App menu">
         <p class="eyebrow">Map style</p>
@@ -99,19 +111,11 @@
             Group nearby peers
           </label>
           <label>
-            <input
-              v-model="mapDecluttering.groupMarkerCollisions"
-              type="checkbox"
-              :disabled="!mapDecluttering.enabled"
-            />
+            <input v-model="mapDecluttering.groupMarkerCollisions" type="checkbox" />
             Group colliding markers
           </label>
           <label>
-            <input
-              v-model="mapDecluttering.groupUncertaintyOverlap"
-              type="checkbox"
-              :disabled="!mapDecluttering.enabled"
-            />
+            <input v-model="mapDecluttering.groupUncertaintyOverlap" type="checkbox" />
             Group overlapping areas
           </label>
           <label class="map-decluttering-settings__range">
@@ -125,7 +129,6 @@
               min="0.5"
               max="1"
               step="0.05"
-              :disabled="!mapDecluttering.enabled || !mapDecluttering.groupUncertaintyOverlap"
             />
           </label>
           <label class="map-decluttering-settings__range">
@@ -136,13 +139,25 @@
               min="12"
               max="48"
               step="2"
-              :disabled="!mapDecluttering.enabled || !mapDecluttering.groupMarkerCollisions"
             />
           </label>
+          <p v-if="!mapDecluttering.enabled" class="field-help" role="status">
+            Grouping is off. These settings remain saved; effective fallback: individual markers.
+          </p>
+          <p
+            v-else-if="
+              !mapDecluttering.groupMarkerCollisions || !mapDecluttering.groupUncertaintyOverlap
+            "
+            class="field-help"
+          >
+            Inactive grouping options still retain their thresholds.
+          </p>
         </details>
+        <p v-if="mapSettingsWarning" class="field-help" role="alert">{{ mapSettingsWarning }}</p>
         <button type="button" @click="openSettings">Settings</button>
         <button type="button" @click="openAbout">Privacy and licenses</button>
-        <button type="button" @click="copyLogs">Copy logs</button>
+        <button type="button" @click="shareLogs">Share logs as file</button>
+        <button v-if="!isAndroid" type="button" @click="copyLogs">Copy logs</button>
         <button type="button" @click="openBrowserDiagnostics">Diagnostics</button>
         <button type="button" @click="openDiagnostics">P2P diagnostics</button>
         <button type="button" @click="openFollowInput">Follow a link</button>
@@ -162,17 +177,18 @@
       :device-policies="sharingSetup?.devicePolicies"
       :review="behaviorReviewRequired"
       :has-shares="activeShares.length > 0"
-      :background-following="receiverOwner === 'service'"
+      :background-following="backgroundFollowingPreference"
+      :background-receiver-active="receiverOwner === 'service'"
       :saved-follow-count="
         runtimeState.following.filter(
           (entry) => entry.saved && !['expired', 'revoked'].includes(entry.status),
         ).length
       "
-      :busy="settingsBusy"
+      :busy="settingsBusy || followingPreferencePending"
       :error="settingsError"
       @close="settingsOpen = false"
       @save="saveSharingBehavior"
-      @set-background-following="setBackgroundFollowing"
+      @set-background-following="setBackgroundFollowingPreference"
       @enable-permissions="enableSharingPermissions"
       @open-system-settings="openAndroidSystemSettings"
     />
@@ -229,14 +245,49 @@
       </div>
     </section>
 
-    <section v-if="invitationPending" class="accept-card" aria-label="Location invitation">
-      <p class="eyebrow">Private location</p>
-      <strong>Someone shared their location with you</strong>
-      <p>The sender will see you as an active viewer. Nothing is accepted until you continue.</p>
-      <button class="primary-action" type="button" :disabled="accepting" @click="acceptInvitation">
-        {{ accepting ? 'Connecting…' : 'View location' }}
-      </button>
-    </section>
+    <div v-if="invitationPending" class="incoming-invitation-backdrop">
+      <section
+        class="incoming-invitation"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Location link introduction"
+      >
+        <p class="eyebrow">Constellation · Private location</p>
+        <div class="incoming-invitation__body">
+          <h1>Someone shared a location with you</h1>
+          <p>
+            You can see their location on the map after connecting. For links requiring approval,
+            the sender must approve your device first.
+          </p>
+          <p>
+            The sender can learn your device identity, that you are online, and possibly your IP
+            address when connected directly. <strong>Your location will not be shared.</strong>
+          </p>
+          <p class="field-help">
+            If approval is needed, both devices will show four letters to compare through a separate
+            trusted channel before the sender approves.
+          </p>
+        </div>
+        <div class="incoming-invitation__actions">
+          <button
+            class="primary-action"
+            type="button"
+            :disabled="accepting"
+            @click="acceptInvitation"
+          >
+            {{ accepting ? 'Connecting…' : 'See location' }}
+          </button>
+          <button
+            class="secondary-action"
+            type="button"
+            :disabled="accepting"
+            @click="cancelInvitation"
+          >
+            Cancel
+          </button>
+        </div>
+      </section>
+    </div>
 
     <DeviceComparisonSheet
       v-if="comparisonOpen && comparisonShareId"
@@ -275,21 +326,26 @@
         approval.
       </p>
       <span class="field-help">Device fingerprint: {{ pendingViewerApproval.fingerprint }}</span>
-      <strong v-if="pendingDeviceComparison" class="device-comparison-letters">{{
-        pendingDeviceComparison.letters
-      }}</strong>
-      <button
-        class="secondary-action"
-        type="button"
-        @click="openDeviceComparison(pendingViewerApproval.shareId, pendingViewerApproval.peerId)"
+      <template v-if="approvalComparisonReady">
+        <p>Compare these letters with the viewer through a trusted call or in person:</p>
+        <strong class="device-comparison-letters">{{ pendingDeviceComparison?.letters }}</strong>
+        <p class="field-help">Approve only if they match. The comparison expires in two minutes.</p>
+      </template>
+      <p
+        v-else-if="pendingDeviceComparison && comparisonNow >= pendingDeviceComparison.expiresAt"
+        class="field-help"
+        role="alert"
       >
-        Optional device comparison
-      </button>
+        This comparison expired. Ask the viewer to retry before approving.
+      </p>
+      <p v-else class="field-help" role="status">
+        Waiting for the viewer's secure four-letter comparison. Do not approve before checking.
+      </p>
       <div class="preview-actions">
         <button
           class="primary-action"
           type="button"
-          :disabled="changingViewerApproval"
+          :disabled="changingViewerApproval || !approvalComparisonReady"
           @click="approvePendingViewer"
         >
           Approve this device
@@ -313,7 +369,6 @@
         !peerListOpen &&
         !previewFollow &&
         !invitationPending &&
-        !showAppHandoff &&
         !readyShare
       "
       class="accept-card"
@@ -334,103 +389,156 @@
       </button>
     </section>
 
-    <section v-if="showAppHandoff" class="app-handoff" aria-label="Open in the Constellation app">
-      <strong>Open this link in the Android app?</strong>
-      <p>
-        Use the app to keep following in the background. Opening the app does not start sharing your
-        location.
-      </p>
-      <p>
-        If the app is not installed, get it and then reopen this link. Copy the link first so you
-        can return to it.
-      </p>
-      <div class="preview-actions">
-        <button class="secondary-action" type="button" @click="openInviteInApp">Open in app</button>
-        <button class="secondary-action" type="button" @click="copyHandoffLink">Copy link</button>
-        <a
-          class="secondary-action"
-          href="https://github.com/yeus/constellation/releases/latest"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Get the app
-        </a>
-        <button class="secondary-action" type="button" @click="dismissAppHandoff">
-          Continue in browser
-        </button>
-      </div>
-      <p class="field-help">
-        Continue in browser starts the preview here. The app redeems the link separately and may
-        need the sender's approval.
-      </p>
+    <section
+      v-if="connectingInvitation && !previewFollow"
+      class="accept-card incoming-status-card"
+      role="status"
+    >
+      <strong>Connecting securely…</strong>
+      <p>Waiting for a response from the sender. Your location is not shared.</p>
     </section>
 
-    <section v-if="previewFollow" class="accept-card" aria-label="Location preview">
-      <p class="eyebrow">Private preview</p>
-      <strong>{{ previewFollow.localName }}</strong>
-      <p v-if="previewFollow.status === 'approval-pending'">
-        No location is shared yet. The sender must approve this device first.
-      </p>
-      <p v-else-if="previewFollow.status === 'denied'">
-        The sender did not approve this device. No location is being received.
-      </p>
-      <p v-else>This location is visible now. Keep following to save it on this device.</p>
-      <button
-        v-if="previewFollow.status !== 'denied'"
-        class="secondary-action"
-        type="button"
-        @click="openDeviceComparison(previewFollow.shareId, previewFollow.peerId)"
-      >
-        Compare device letters
-      </button>
-      <div class="preview-actions">
-        <button
-          v-if="previewFollow.status !== 'denied'"
-          class="primary-action"
-          type="button"
-          :disabled="!runtimeState.canSave"
-          @click="keepFollowing(previewFollow.shareId)"
+    <section
+      v-if="previewFollow && !dismissedPreviewIds.includes(previewFollow.shareId)"
+      class="accept-card incoming-status-card"
+      aria-label="Location preview"
+      role="region"
+    >
+      <strong>{{ previewFollow.sourceName || previewFollow.localName }}</strong>
+      <template v-if="previewFollow.status === 'approval-pending'">
+        <p role="status">Waiting for sender approval</p>
+        <template
+          v-if="viewerPendingComparison && comparisonNow < viewerPendingComparison.expiresAt"
         >
-          Keep following
-        </button>
+          <strong class="device-comparison-letters">{{ viewerPendingComparison.letters }}</strong>
+          <p>Make sure these letters match the sender's screen. Your location is not shared.</p>
+        </template>
+        <p v-else-if="comparingDevice === previewFollow.shareId">Establishing secure comparison…</p>
+        <p
+          v-else-if="viewerPendingComparison && comparisonNow >= viewerPendingComparison.expiresAt"
+          role="alert"
+        >
+          The four-letter comparison expired. Retry to request a fresh code.
+        </p>
+        <p v-else-if="comparisonError" role="alert">{{ comparisonError }}</p>
+        <p v-else>Connecting securely to compare device letters…</p>
+        <div class="preview-actions">
+          <button
+            v-if="
+              comparisonError ||
+              (viewerPendingComparison && comparisonNow >= viewerPendingComparison.expiresAt)
+            "
+            class="secondary-action"
+            type="button"
+            @click="startDeviceComparison(previewFollow.shareId)"
+          >
+            Retry comparison
+          </button>
+          <button
+            class="secondary-action"
+            type="button"
+            @click="stopFollowing(previewFollow.shareId)"
+          >
+            Cancel request
+          </button>
+        </div>
+      </template>
+      <template v-else-if="previewFollow.status === 'denied'">
+        <p role="status">The sender declined this device.</p>
         <button
           class="secondary-action"
           type="button"
           @click="stopFollowing(previewFollow.shareId)"
         >
-          Stop preview
+          Dismiss
         </button>
-      </div>
-      <p v-if="!runtimeState.canSave">
-        Protected storage is unavailable on this device; preview only.
-      </p>
+      </template>
+      <template v-else>
+        <p v-if="!previewFollow.lastLocationAt" role="status">
+          Connected securely… Waiting for the first location.
+        </p>
+        <p v-else>This location is visible on the map. Your own location is not shared.</p>
+        <div class="preview-actions">
+          <button
+            class="primary-action"
+            type="button"
+            :disabled="!runtimeState.canSave"
+            @click="keepFollowing(previewFollow.shareId)"
+          >
+            Add peer
+          </button>
+          <button
+            class="secondary-action"
+            type="button"
+            @click="dismissPreview(previewFollow.shareId)"
+          >
+            Not now
+          </button>
+        </div>
+        <p v-if="!runtimeState.canSave">Protected storage is unavailable; preview only.</p>
+      </template>
     </section>
 
     <section
-      v-if="shareBackPrompt"
-      class="accept-card"
-      role="region"
-      aria-label="Share back invitation"
+      v-if="recentlyAddedPeer"
+      class="accept-card incoming-status-card"
+      aria-label="Peer added"
     >
-      <p class="eyebrow">Optional return share</p>
-      <strong>Share yours back with {{ shareBackPrompt.name }}?</strong>
-      <p>
-        Choose how long and how precisely to share. Your return link is offered only to the original
-        sender.
-      </p>
+      <strong>{{ recentlyAddedPeer.sourceName || recentlyAddedPeer.localName }} saved</strong>
+      <p>You can keep viewing the map without sharing your own location.</p>
       <div class="preview-actions">
         <button
-          class="primary-action"
+          class="secondary-action"
           type="button"
-          :disabled="creatingShare"
-          @click="openReturnShare"
+          @click="shareBackFromFollowing(recentlyAddedPeer.shareId)"
         >
           Share back
         </button>
-        <button class="secondary-action" type="button" @click="dismissShareBackPrompt">
+        <button class="secondary-action" type="button" @click="recentlyAddedPeerId = undefined">
           Not now
         </button>
       </div>
+    </section>
+
+    <section
+      v-if="pendingShareBack"
+      class="accept-card incoming-status-card"
+      role="status"
+      aria-label="Waiting for share-back acceptance"
+    >
+      <p class="eyebrow">Private return share</p>
+      <strong>{{
+        pendingShareBack.phase === 'creating' ? 'Preparing return share…' : 'Waiting for acceptance'
+      }}</strong>
+      <p>
+        Sharing
+        {{
+          pendingShareBack.precision === 'exact'
+            ? 'exact'
+            : pendingShareBack.precision === 'very-coarse'
+              ? 'city-level'
+              : 'neighbourhood-level'
+        }}
+        location with {{ pendingShareBack.peerName }}
+        {{
+          pendingShareBack.duration === 'until-revoked'
+            ? 'until stopped'
+            : `for up to ${pendingShareBack.duration === '8h' ? 'eight hours' : 'one hour'}`
+        }}.
+        {{
+          pendingShareBack.phase === 'waiting'
+            ? 'This closes when the recipient connects securely.'
+            : 'Sending a private offer…'
+        }}
+      </p>
+      <div class="preview-actions">
+        <button class="secondary-action" type="button" @click="pendingShareBack = undefined">
+          Dismiss
+        </button>
+      </div>
+      <small class="field-help"
+        >Dismiss hides this message; it does not revoke a created share.</small
+      >
     </section>
 
     <section
@@ -486,19 +594,25 @@
       :draft="shareDraft"
       :return-recipient-name="
         returnTarget
-          ? runtimeState.following.find((follow) => follow.shareId === returnTarget)?.localName ||
+          ? activeFollowing.find((follow) => follow.shareId === returnTarget)?.localName ||
             'the sender'
           : undefined
       "
       :can-submit="
-        canCreateShare(shareDraft) && !creatingShare && !settingsBusy && !behaviorReviewRequired
+        canCreateShare(shareDraft) &&
+        !creatingShare &&
+        !settingsBusy &&
+        !behaviorReviewRequired &&
+        !deviceLocationOff
       "
       :runtime-note="
-        sharingBehavior.publication === 'background'
-          ? 'Android keeps this link active in a protected foreground service and requires all-the-time location permission.'
-          : isAndroid
-            ? 'This link pauses while Constellation is hidden and resumes when you reopen it.'
-            : 'Sharing pauses when this app is hidden and stops when it is closed.'
+        deviceLocationOff
+          ? 'Device location is off. Turn on Location in Android Settings to create a new share; your other settings are still available.'
+          : sharingBehavior.publication === 'background'
+            ? 'Android keeps this link active in a protected foreground service and requires all-the-time location permission.'
+            : isAndroid
+              ? 'This link pauses while Constellation is hidden and resumes when you reopen it.'
+              : 'Sharing pauses when this app is hidden and stops when it is closed.'
       "
       @close="closeShareSheet"
       @submit="createShare"
@@ -527,23 +641,28 @@
             <CloseIcon />
           </button>
         </header>
-        <input
-          v-model="pastedLink"
-          class="share-ready__link"
-          aria-label="Paste location link"
-          placeholder="Paste a location link"
-        />
-        <button
-          v-if="canScanQr"
-          class="secondary-action"
-          type="button"
-          @click="qrScannerOpen = true"
-        >
-          <QrCode aria-hidden="true" /> Scan QR code
-        </button>
-        <button class="primary-action" type="button" @click="acceptPastedLink">
-          View location
-        </button>
+        <div class="follow-link-actions">
+          <button
+            class="primary-action"
+            type="button"
+            :disabled="pastingLink"
+            @click="pasteLocationLink"
+          >
+            <ClipboardPaste aria-hidden="true" />
+            {{ pastingLink ? 'Reading clipboard…' : 'Paste link' }}
+          </button>
+          <button
+            v-if="canScanQr"
+            class="secondary-action"
+            type="button"
+            @click="qrScannerOpen = true"
+          >
+            <QrCode aria-hidden="true" /> Scan QR code
+          </button>
+        </div>
+        <p v-if="followLinkError" class="field-help follow-link-error" role="alert">
+          {{ followLinkError }}
+        </p>
       </section>
     </div>
     <QrScannerSheet v-if="qrScannerOpen" @close="qrScannerOpen = false" @scan="acceptScannedLink" />
@@ -552,6 +671,7 @@
       v-if="peerListOpen"
       v-show="!comparisonOpen"
       :shares="activeShares"
+      :locations="locations"
       :following="activeFollowing"
       :comparisons="deviceComparisons"
       :filter="peerListFilter"
@@ -567,6 +687,7 @@
       :group-scope="groupScope"
       :clear-old-busy="clearingOldPeers"
       :share-back-busy="creatingShare"
+      :revoke-peer-busy="revokingPeer"
       :paused="sharingPaused"
       :pause-busy="changingSharingPause"
       :revoke-all-busy="revokingAllShares"
@@ -584,6 +705,7 @@
       @filter="peerListFilter = $event"
       @show="showExistingShare"
       @revoke="revokeShare"
+      @revoke-peer="revokePeer"
       @toggle-pause="toggleSharingPause"
       @revoke-all="revokeAllShares"
       @viewer-name="setViewerName"
@@ -593,26 +715,13 @@
       @focus="focusFollowing"
       @focus-all="focusAllFollowing"
       @unfollow="stopFollowing"
+      @trace-opened="refreshReceivedHistory"
       @trace-enabled="setFollowTraceEnabled"
       @trace-clear="clearFollowTrace"
       @keep="keepFollowing"
       @dismiss-stopped="dismissStoppedViewer"
       @share-back="shareBackFromFollowing"
     />
-
-    <div v-if="nicknamePrompt" class="sheet-backdrop" @click.self="nicknamePrompt = undefined">
-      <section class="share-sheet" role="dialog" aria-modal="true" aria-label="Keep following">
-        <header class="sheet-header"><h2>Keep following</h2></header>
-        <p class="field-help">Choose a nickname for this location. Only you see this name.</p>
-        <input
-          v-model="nicknamePrompt.name"
-          aria-label="Nickname"
-          maxlength="32"
-          class="share-ready__link"
-        />
-        <button class="primary-action" type="button" @click="saveNickname">Save location</button>
-      </section>
-    </div>
 
     <ShareReadySheet
       v-if="readyShare"
@@ -634,12 +743,18 @@ import type { DeviceComparison } from '../sharing/deviceComparison.ts'
 import {
   LucideLocateFixed as LocateFixed,
   LucideMenu as Menu,
+  LucideClipboardPaste as ClipboardPaste,
   LucideQrCode as QrCode,
   LucideShare2 as Share2,
 } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
 import SettingsSheet from '../components/SettingsSheet.vue'
 import { defaultSharingBehavior, type SharingBehavior } from '../sharing/sharingBehavior.ts'
+import { deviceLocationNotice, effectiveSharingBehavior } from '../android/locationReadiness.ts'
+import {
+  loadLocalSharingPreference,
+  saveLocalSharingPreference,
+} from '../sharing/sharingPreference.ts'
 import type {
   AndroidSharingSetup,
   AndroidSystemSettingsTarget,
@@ -664,6 +779,11 @@ import ShareReadySheet from '../components/ShareReadySheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
 import { createSessionLog } from '../diagnostics/sessionLog.ts'
 import { createAndroidBackgroundReceiver } from '../android/backgroundReceiver.ts'
+import {
+  readBackgroundFollowingPreference,
+  resolveNativeFollowingPreference,
+} from '../android/backgroundFollowingPreference.ts'
+import { projectFollowOwnerState } from '../android/followOwnerProjection.ts'
 import type { BackgroundViewerSnapshot } from '../android/backgroundViewer.ts'
 import { createFollowOwnership, type FollowOwner } from '../sharing/followOwnership.ts'
 import { receiveApprovedBackgroundReturns } from '../android/backgroundReturnShares.ts'
@@ -738,21 +858,23 @@ const recordSessionEvents = (
   }
 }
 
-const sessionLog = createSessionLog(
-  Date.now,
-  import.meta.env.DEV
-    ? (entry) => {
-        const method =
-          entry.level === 'warning' ? 'warn' : entry.level === 'error' ? 'error' : 'info'
-        console[method]('[constellation]', entry)
-      }
-    : undefined,
-)
+const sessionLog = createSessionLog(Date.now, (entry) => {
+  if ('__TAURI_INTERNALS__' in window && /Android/i.test(navigator.userAgent)) {
+    void invoke('android_record_session_event', {
+      event: entry.event,
+      state: entry.state ?? '',
+      level: entry.level,
+    }).catch(() => undefined)
+  }
+  if (import.meta.env.DEV) {
+    const method = entry.level === 'warning' ? 'warn' : entry.level === 'error' ? 'error' : 'info'
+    console[method]('[constellation]', entry)
+  }
+})
 sessionLog.record({ level: 'info', event: 'app.started' })
 
 const isNative = '__TAURI_INTERNALS__' in window
 const showNativeAppHint = !isNative && /Android|Linux/i.test(navigator.userAgent)
-const isAndroidBrowser = !isNative && /Android/i.test(navigator.userAgent)
 const isAndroid = isNative && /Android/i.test(navigator.userAgent)
 const androidLocationApi = isAndroid ? createTauriAndroidLocationApi() : undefined
 const locationSource = createBrowserLocationSource({
@@ -834,14 +956,26 @@ const pendingReturnOffer = computed(() => {
 const networkDiagnostics = ref(runtime.networkDiagnostics())
 const shareSheetOpen = ref(false)
 const mapFamily = ref<MapFamily>(
-  window.localStorage.getItem('constellation.map-family') === 'minimalist'
-    ? 'minimalist'
-    : 'default',
+  (() => {
+    try {
+      return window.localStorage.getItem('constellation.map-family') === 'minimalist'
+        ? 'minimalist'
+        : 'default'
+    } catch {
+      return 'default'
+    }
+  })(),
 )
+const mapSettingsWarning = ref('')
 const MAP_CACHE_BYTES_KEY = 'constellation.map-cache-bytes'
 const MAP_CACHE_DEFAULT_BYTES = 64 * 1024 * 1024
 const readMapCacheBytes = (): number => {
-  const stored = window.localStorage.getItem(MAP_CACHE_BYTES_KEY)
+  let stored: string | null
+  try {
+    stored = window.localStorage.getItem(MAP_CACHE_BYTES_KEY)
+  } catch {
+    return MAP_CACHE_DEFAULT_BYTES
+  }
   if (stored === null) return MAP_CACHE_DEFAULT_BYTES
   const bytes = Number(stored)
   return Number.isFinite(bytes) && bytes >= 0 ? bytes : MAP_CACHE_DEFAULT_BYTES
@@ -857,7 +991,8 @@ const setMapCacheMaxBytes = (bytes: number): void => {
   try {
     window.localStorage.setItem(MAP_CACHE_BYTES_KEY, String(bytes))
   } catch {
-    // The cache still uses the selected limit for this session.
+    mapSettingsWarning.value =
+      'Map cache limit applies for this session, but storage is unavailable and the choice may reset.'
   }
 }
 const clearMapCache = async (): Promise<void> => {
@@ -876,7 +1011,14 @@ const mapDecluttering = ref<MapDeclutteringPreferences>(
 )
 watch(
   mapDecluttering,
-  (preferences) => saveMapDeclutteringPreferences(window.localStorage, preferences),
+  (preferences) => {
+    try {
+      saveMapDeclutteringPreferences(window.localStorage, preferences)
+    } catch {
+      mapSettingsWarning.value =
+        'Map grouping settings apply for this session only; storage could not save them.'
+    }
+  },
   { deep: true },
 )
 const introSeenKey = 'constellation.privacy-intro-seen'
@@ -918,6 +1060,35 @@ const behaviorReviewRequired = ref(isAndroid)
 const settingsOpen = ref(false)
 const settingsBusy = ref(false)
 const settingsError = ref('')
+const backgroundFollowingPreference = ref(
+  isAndroid && readBackgroundFollowingPreference(window.localStorage),
+)
+const followingPreferencePending = ref(false)
+const loadNativeFollowingPreference = async (): Promise<void> => {
+  if (!backgroundSharing) return
+  const initial = await backgroundSharing.setup()
+  sharingSetup.value = initial
+  const enabled = await resolveNativeFollowingPreference(
+    initial.backgroundFollowing,
+    () => readBackgroundFollowingPreference(window.localStorage),
+    async (legacy) => {
+      const saved = await backgroundSharing.setBackgroundFollowingPreference(legacy)
+      sharingSetup.value = saved
+      return saved.backgroundFollowing
+    },
+  )
+  backgroundFollowingPreference.value = enabled
+  sessionLog.record({
+    level: 'info',
+    event: 'sharing.background.following.preference.loaded',
+    state: enabled ? 'enabled' : 'disabled',
+    message: 'native-encrypted-store',
+  })
+}
+const hasSavedFollow = (): boolean =>
+  runtimeState.value.following.some(
+    (follow) => follow.saved && !['revoked', 'expired', 'denied'].includes(follow.status),
+  )
 const receiverOwner = ref<FollowOwner>('activity')
 const receiverSnapshot = ref<BackgroundViewerSnapshot>()
 let followOwnerController: ReturnType<typeof createFollowOwnership> | undefined
@@ -945,16 +1116,41 @@ const receiverEffects = {
   },
 }
 
+let receiverStatusRequest = 0
+let lastReceiverHistoryDiagnostic = ''
+const applyReceiverState = (
+  native: Awaited<ReturnType<NonNullable<typeof backgroundReceiver>['ownership']>>,
+): void => {
+  receiverOwner.value = native.owner
+  receiverSnapshot.value = native.owner === 'service' ? (native.status ?? undefined) : undefined
+  const following = receiverSnapshot.value?.following ?? []
+  const diagnostic = `${native.owner}:${native.generation}:${following.length}:${following.reduce((total, entry) => total + (entry.trace?.length ?? 0), 0)}:${following.reduce((total, entry) => total + entry.updatesReceived, 0)}`
+  if (diagnostic !== lastReceiverHistoryDiagnostic) {
+    sessionLog.record({
+      level: native.owner === 'service' && !native.status ? 'warning' : 'info',
+      event: 'sharing.background.history',
+      state: native.owner === 'service' && !native.status ? 'disconnected' : 'connected',
+      message: `owner=${native.owner}; generation=${native.generation}; saved=${following.length}; recorded=${following.reduce((total, entry) => total + (entry.trace?.length ?? 0), 0)}; updates=${following.reduce((total, entry) => total + entry.updatesReceived, 0)}`,
+    })
+    lastReceiverHistoryDiagnostic = diagnostic
+  }
+}
 const setBackgroundFollowing = async (enabled: boolean): Promise<void> => {
   if (!followOwnerController || settingsBusy.value || !backgroundReceiver) return
+  ++receiverStatusRequest // Invalidate in-flight polls before changing ownership.
   settingsBusy.value = true
   settingsError.value = ''
   try {
     await followOwnerController.transition(enabled ? 'service' : 'activity')
-    receiverOwner.value = (await backgroundReceiver.ownership()).owner
+    applyReceiverState(await backgroundReceiver.ownership())
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.background.following',
+      state: receiverOwner.value === 'service' ? 'enabled' : 'disabled',
+    })
   } catch (error) {
     const current = await backgroundReceiver.ownership().catch(() => undefined)
-    if (current) receiverOwner.value = current.owner
+    if (current) applyReceiverState(current)
     settingsError.value =
       error instanceof Error ? error.message : 'Background following could not be changed.'
   } finally {
@@ -962,9 +1158,58 @@ const setBackgroundFollowing = async (enabled: boolean): Promise<void> => {
   }
 }
 
+const setBackgroundFollowingPreference = async (enabled: boolean): Promise<void> => {
+  if (!backgroundSharing || settingsBusy.value || followingPreferencePending.value) return
+  followingPreferencePending.value = true
+  settingsError.value = ''
+  let persisted = false
+  try {
+    const setup = await backgroundSharing.setBackgroundFollowingPreference(enabled)
+    if (setup.backgroundFollowing !== enabled)
+      throw new Error('Native preference verification failed.')
+    sharingSetup.value = setup
+    backgroundFollowingPreference.value = enabled
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.background.following.preference',
+      state: enabled ? 'enabled' : 'disabled',
+      message: 'native-encrypted-store',
+    })
+    persisted = true
+  } catch (error) {
+    settingsError.value =
+      error instanceof Error
+        ? error.message
+        : 'Could not save native background following preference.'
+  } finally {
+    followingPreferencePending.value = false
+  }
+  if (!persisted) return
+  // The native preference is committed before the async owner handoff.
+  // If the handoff fails, boot restore must still honor the saved opt-out.
+  if (!enabled && receiverOwner.value === 'service') {
+    await setBackgroundFollowing(false)
+  } else if (enabled && hasSavedFollow() && receiverOwner.value !== 'service') {
+    await setBackgroundFollowing(true)
+  }
+}
+const restorePreferredBackgroundFollowing = async (): Promise<void> => {
+  if (!backgroundReceiver || !followOwnerController || settingsBusy.value) return
+  if (!backgroundFollowingPreference.value && receiverOwner.value === 'service') {
+    await setBackgroundFollowing(false)
+  } else if (
+    backgroundFollowingPreference.value &&
+    receiverOwner.value !== 'service' &&
+    hasSavedFollow()
+  ) {
+    await setBackgroundFollowing(true)
+  }
+}
 const reconcileReceiverOwnership = async (): Promise<void> => {
   if (!backgroundReceiver || !followOwnerController || settingsBusy.value) return
+  const request = ++receiverStatusRequest
   const native = await backgroundReceiver.ownership()
+  if (request !== receiverStatusRequest || settingsBusy.value) return
   if (native.owner === 'activity' && followOwnerController.snapshot().owner === 'service') {
     await followOwnerController.transition('activity')
   } else if (native.owner === 'service' && followOwnerController.snapshot().owner === 'activity') {
@@ -974,8 +1219,8 @@ const reconcileReceiverOwnership = async (): Promise<void> => {
       generation: native.generation,
     })
   }
-  receiverOwner.value = native.owner
-  receiverSnapshot.value = native.owner === 'service' ? (native.status ?? undefined) : undefined
+  if (request !== receiverStatusRequest || settingsBusy.value) return
+  applyReceiverState(native)
 }
 const requireActivityFollowing = async (): Promise<void> => {
   if (receiverOwner.value === 'service') await setBackgroundFollowing(false)
@@ -1032,11 +1277,21 @@ const loadSharingSettings = async (): Promise<void> => {
     if (behaviorReviewRequired.value) settingsOpen.value = true
   } else {
     const saved = await privateStore.load()
-    sharingBehavior.value = saved?.sharingBehavior ?? defaultSharingBehavior(false)
+    sharingBehavior.value =
+      loadLocalSharingPreference(window.localStorage) ??
+      saved?.sharingBehavior ??
+      defaultSharingBehavior(false)
     if (!saved?.sharingBehavior && saved?.shares.length) {
       behaviorReviewRequired.value = true
       settingsOpen.value = true
-    } else if (!saved?.sharingBehavior) await runtime.setSharingBehavior(sharingBehavior.value)
+    }
+    const effective = effectiveSharingBehavior(sharingBehavior.value, false, undefined)
+    if (
+      !saved?.sharingBehavior ||
+      JSON.stringify(saved.sharingBehavior) !== JSON.stringify(effective)
+    ) {
+      await runtime.setSharingBehavior(effective)
+    }
   }
 }
 const saveSharingBehavior = async (behavior: SharingBehavior): Promise<void> => {
@@ -1045,17 +1300,33 @@ const saveSharingBehavior = async (behavior: SharingBehavior): Promise<void> => 
   settingsError.value = ''
   try {
     if (backgroundSharing) {
-      backgroundStatus.value = await backgroundSharing.setSharingBehavior(behavior)
+      try {
+        backgroundStatus.value = await backgroundSharing.setSharingBehavior(behavior)
+      } catch (error) {
+        // Android may commit the requested preference before a runtime handoff
+        // times out. Read the durable preference rather than losing the choice.
+        const saved = await backgroundSharing.setup().catch(() => undefined)
+        if (!saved?.behavior || JSON.stringify(saved.behavior) !== JSON.stringify(behavior))
+          throw error
+        settingsError.value =
+          'Preference saved, but the Android service could not confirm applying it. The foreground-only fallback is used until available; check permissions and retry.'
+      }
       const setup = await backgroundSharing.setup()
       sharingSetup.value = setup
-      if (!setup.behavior) throw new Error('The settings save could not be confirmed.')
+      if (!setup.behavior || JSON.stringify(setup.behavior) !== JSON.stringify(behavior)) {
+        throw new Error('Android did not confirm the saved preference.')
+      }
       sharingBehavior.value = setup.behavior
     } else {
-      await runtime.setSharingBehavior(behavior)
+      await runtime.setSharingBehavior(effectiveSharingBehavior(behavior, false, undefined))
       sharingBehavior.value = { ...behavior }
+      if (!saveLocalSharingPreference(window.localStorage, behavior)) {
+        settingsError.value =
+          'Preference is active but local storage failed. It may reset after restarting this app.'
+      }
     }
     behaviorReviewRequired.value = false
-    settingsOpen.value = false
+    settingsOpen.value = Boolean(settingsError.value)
     updateLocationOwnership()
   } catch {
     if (backgroundSharing) {
@@ -1066,7 +1337,7 @@ const saveSharingBehavior = async (behavior: SharingBehavior): Promise<void> => 
       }
     }
     settingsError.value =
-      'The settings save could not be confirmed. Reopen Settings to check the current behavior, then retry if needed.'
+      'Could not confirm the requested setting was saved. No fallback will bypass Android permissions. Retry.'
   } finally {
     settingsBusy.value = false
   }
@@ -1077,6 +1348,9 @@ const enableSharingPermissions = async (): Promise<void> => {
   settingsError.value = ''
   try {
     sharingSetup.value = await backgroundSharing.enablePermissions()
+    if (sharingBehavior.value.publication === 'background') {
+      await backgroundSharing.setSharingBehavior(sharingBehavior.value)
+    }
   } catch {
     settingsError.value =
       'Permissions could not be enabled. You can use sharing while the app is open, or retry.'
@@ -1105,66 +1379,82 @@ const followInputOpen = ref(false)
 const qrScannerOpen = ref(false)
 const canScanQr = Boolean(window.isSecureContext && navigator.mediaDevices)
 const selectedFollowId = ref<string>()
-const pastedLink = ref('')
+const pastingLink = ref(false)
+const followLinkError = ref('')
 const locationMap = ref<InstanceType<typeof LocationMap>>()
-const shareDraft = ref(createShareDraft(suggestedPeerName(crypto.randomUUID())))
+// Never recycle a generated share nickname during this session, including
+// when opening multiple links to the same device. Existing links are also reserved.
+const generatedShareNicknames = new Set<string>()
+const freshShareNickname = (): string => {
+  const reserved = new Set([
+    ...generatedShareNicknames,
+    ...runtimeState.value.shares.flatMap(({ name }) => (name ? [name] : [])),
+    ...(backgroundStatus.value?.shares ?? []).flatMap(({ name }) => (name ? [name] : [])),
+    ...runtimeState.value.oldSharing.flatMap(({ name }) => (name ? [name] : [])),
+    ...(backgroundStatus.value?.oldSharing ?? []).flatMap(({ name }) => (name ? [name] : [])),
+  ])
+  let nickname = suggestedPeerName(crypto.randomUUID())
+  for (let tries = 0; tries < 128 && reserved.has(nickname); tries++) {
+    nickname = suggestedPeerName(crypto.randomUUID())
+  }
+  // The legacy two-word generator has only 64 combinations. Keep names fresh
+  // even when a device creates more links than that in a single session.
+  while (reserved.has(nickname)) {
+    nickname = `${suggestedPeerName(crypto.randomUUID())} ${crypto.randomUUID().slice(0, 4)}`
+  }
+  generatedShareNicknames.add(nickname)
+  return nickname
+}
+const shareDraft = ref(createShareDraft(freshShareNickname()))
 const creatingShare = ref(false)
 const accepting = ref(false)
 const readyShare = ref<ShareSummary>()
 const readyShareIsReturn = ref(false)
 const invitationPending = ref(false)
 const invitationUrl = ref<string>()
-const previewInvite = ref<{ shareId: string; url: string }>()
-const pendingBrowserInvite = ref<{ shareId: string; url: string }>()
-const browserLocationDeferred = ref(!isNative && window.location.hash.startsWith('#share='))
-const nicknamePrompt = ref<{ shareId: string; name: string }>()
-const shareBackPrompt = ref<{ shareId: string; name: string }>()
+const connectingInvitation = ref(false)
+const incomingShareId = ref<string>()
+const pendingMapFocusId = ref<string>()
+const attemptedAutoComparisons = new Set<string>()
+const dismissedPreviewIds = ref<readonly string[]>([])
+const recentlyAddedPeerId = ref<string>()
+const pendingShareBack = ref<{
+  sourceShareId: string
+  peerName: string
+  precision: LocationPrecision
+  duration: ShareDuration
+  phase: 'creating' | 'waiting'
+  returnShareId?: string
+}>()
+const INCOMING_VIEWER_SENSOR_KEY = 'constellation.incoming-no-auto-gps'
+const readIncomingSensorDeferral = (): boolean => {
+  try {
+    return sessionStorage.getItem(INCOMING_VIEWER_SENSOR_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const browserLocationDeferred = ref(
+  window.location.hash.startsWith('#share=') || readIncomingSensorDeferral(),
+)
+const setIncomingSensorDeferral = (deferred: boolean): void => {
+  browserLocationDeferred.value = deferred
+  try {
+    if (deferred) sessionStorage.setItem(INCOMING_VIEWER_SENSOR_KEY, '1')
+    else sessionStorage.removeItem(INCOMING_VIEWER_SENSOR_KEY)
+  } catch {
+    // Storage is optional; the in-memory flag remains authoritative.
+  }
+}
 const returnTarget = ref<string>()
 const localError = ref('')
 const copyNotice = ref('')
 let copyNoticeTimeout: number | undefined
 let statusNoticeTimeout: number | undefined
 const statusNoticeVisible = ref(true)
-let markingReturnPrompt = false
-const offerConnectedReturnShare = (state: SharingRuntimeState): void => {
-  if (
-    markingReturnPrompt ||
-    shareBackPrompt.value ||
-    nicknamePrompt.value ||
-    readyShare.value ||
-    shareSheetOpen.value ||
-    creatingShare.value
-  ) {
-    return
-  }
-  const follow = state.following.find(
-    (entry) => entry.saved && entry.connected && !entry.returnPromptSeen,
-  )
-  if (!follow) return
-  markingReturnPrompt = true
-  void runtime
-    .markReturnPromptSeen(follow.shareId)
-    .then(() => {
-      const current = runtimeState.value.following.find((entry) => entry.shareId === follow.shareId)
-      if (current?.returnPromptSeen) {
-        shareBackPrompt.value = {
-          shareId: current.shareId,
-          name: current.localName || current.sourceName || 'this person',
-        }
-      }
-    })
-    .catch((error) => {
-      localError.value = error instanceof Error ? error.message : 'Could not save this choice.'
-    })
-    .finally(() => {
-      markingReturnPrompt = false
-    })
-}
-
 const closeShareReady = (): void => {
   readyShare.value = undefined
   readyShareIsReturn.value = false
-  offerConnectedReturnShare(runtimeState.value)
 }
 
 const dismissReadyShareOnNewRecipient = (
@@ -1175,22 +1465,25 @@ const dismissReadyShareOnNewRecipient = (
   if (shareId && hasNewShareRecipient(shareId, previous, next)) closeShareReady()
 }
 
+// Distinguish repeated openings of the same bearer URL from an older async acceptance.
+let invitationOpeningId = 0
 const offerInvitation = (url: string): void => {
   try {
     const { shareId } = parseShareInvitation(url)
+    invitationOpeningId += 1
     introOpen.value = false
     invitationUrl.value = url
-    if (isNative) {
-      invitationPending.value = true
-    } else if (isAndroidBrowser && !appHandoffDismissed.value.includes(shareId)) {
-      // Do not redeem the link before the visitor chooses a destination. A
-      // browser redemption can enter single-recipient approval with the browser
-      // identity and leave the offered native destination unable to connect.
-      pendingBrowserInvite.value = { shareId, url }
-    } else {
-      pendingBrowserInvite.value = undefined
-      void previewInvitation(url)
+    incomingShareId.value = shareId
+    invitationPending.value = true
+    // Opening a link must not request the recipient's GPS location.
+    if (!activeShares.value.length) {
+      setIncomingSensorDeferral(true)
+      updateLocationOwnership()
     }
+    dismissedPreviewIds.value = dismissedPreviewIds.value.filter((id) => id !== shareId)
+    attemptedAutoComparisons.delete(shareId)
+    recentlyAddedPeerId.value = undefined
+    // An incoming link never initiates a P2P connection before explicit consent.
   } catch {
     if (url.split('#')[1]?.startsWith('share=')) {
       localError.value = 'This location link is invalid or expired.'
@@ -1227,7 +1520,6 @@ const unsubscribe = runtime.subscribe((next) => {
   const previous = runtimeState.value
   runtimeState.value = next
   dismissReadyShareOnNewRecipient(previous, next)
-  offerConnectedReturnShare(next)
   const latestNetwork = runtime.networkDiagnostics()
   recordSessionEvents(networkDiagnostics.value, latestNetwork)
   if (transportSummary(networkDiagnostics.value) !== transportSummary(latestNetwork)) {
@@ -1240,6 +1532,8 @@ const unsubscribe = runtime.subscribe((next) => {
   networkDiagnostics.value = latestNetwork
 })
 let backgroundPoll: number | undefined
+let locationReadinessPoll: number | undefined
+let comparisonClock: number | undefined
 let receiverPoll: number | undefined
 let sharedTextPoll: number | undefined
 let checkingSharedText = false
@@ -1247,6 +1541,8 @@ const receiveSharedText = async (): Promise<void> => {
   if (!isAndroid || checkingSharedText) return
   checkingSharedText = true
   try {
+    const settings = await invoke<{ open: boolean }>('android_take_settings_request')
+    if (settings.open) openSettings()
     const { text } = await invoke<{ text: string }>('android_take_shared_text')
     if (!text) return
     const invitation = invitationFromSharedText(text)
@@ -1346,6 +1642,13 @@ const activeShares = computed(() =>
     }),
   ),
 )
+watch([activeShares, pendingShareBack], ([shares, pending]) => {
+  if (pending?.phase !== 'waiting' || !pending.returnShareId) return
+  const share = shares.find(({ shareId }) => shareId === pending.returnShareId)
+  // A session only appears here after the authenticated, recipient-bound
+  // return link is redeemed; creating the link alone does not close the card.
+  if (share && share.viewerCount > 0) pendingShareBack.value = undefined
+})
 const peerNamePreferences = computed(() => [
   ...(backgroundStatus.value?.peerNamePreferences ?? []),
   ...(runtimeState.value.peerNamePreferences ?? []),
@@ -1410,88 +1713,29 @@ const oldSharing = computed(() => {
     ).values(),
   ].sort((left, right) => right.endedAt - left.endedAt)
 })
-const activeFollowing = computed(() => {
-  const ownedByService = receiverOwner.value === 'service'
-  const native = new Map(receiverSnapshot.value?.following.map((entry) => [entry.shareId, entry]))
-  return runtimeState.value.following
-    .map((entry) => {
-      if (!ownedByService || !entry.saved) return entry
-      const current = native.get(entry.shareId)
-      return current
-        ? { ...entry, ...current }
-        : { ...entry, connected: false, status: 'unavailable' as const }
-    })
-    .filter((entry) => entry.status !== 'expired' && entry.status !== 'revoked')
-})
-const previewFollow = computed(() => activeFollowing.value.find((entry) => !entry.saved))
-const APP_HANDOFF_DISMISSED_KEY = 'constellation.app-handoff-dismissed'
-const readAppHandoffDismissed = (): readonly string[] => {
-  try {
-    const value: unknown = JSON.parse(
-      window.localStorage.getItem(APP_HANDOFF_DISMISSED_KEY) ?? '[]',
-    )
-    return Array.isArray(value)
-      ? value.filter((entry): entry is string => typeof entry === 'string').slice(-50)
-      : []
-  } catch {
-    return []
-  }
-}
-const appHandoffDismissed = ref<readonly string[]>(readAppHandoffDismissed())
-const appHandoffInvite = computed(() => pendingBrowserInvite.value ?? previewInvite.value)
-const showAppHandoff = computed(
-  () =>
-    isAndroidBrowser &&
-    appHandoffInvite.value !== undefined &&
-    !appHandoffDismissed.value.includes(appHandoffInvite.value.shareId),
+const activeFollowing = computed(() =>
+  projectFollowOwnerState(
+    runtimeState.value.following,
+    receiverOwner.value,
+    receiverSnapshot.value,
+  ).filter((entry) => entry.status !== 'expired' && entry.status !== 'revoked'),
 )
-const dismissAppHandoff = (): void => {
-  const invite = appHandoffInvite.value
-  if (!invite) return
-  appHandoffDismissed.value = [...new Set([...appHandoffDismissed.value, invite.shareId])].slice(
-    -50,
-  )
-  try {
-    window.localStorage.setItem(
-      APP_HANDOFF_DISMISSED_KEY,
-      JSON.stringify(appHandoffDismissed.value),
-    )
-  } catch {
-    // A dismissed prompt may reappear when storage is unavailable.
-  }
-  pendingBrowserInvite.value = undefined
-  sessionLog.record({ level: 'info', event: 'sharing.app_handoff.dismissed' })
-  if (previewFollow.value?.shareId !== invite.shareId) void previewInvitation(invite.url)
-}
-const copyHandoffLink = async (): Promise<void> => {
-  const url = appHandoffInvite.value?.url
-  if (!url) return
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable.')
-    await navigator.clipboard.writeText(url)
-    copyNotice.value = 'Link copied. Reopen it after installing the app.'
-    if (copyNoticeTimeout !== undefined) window.clearTimeout(copyNoticeTimeout)
-    copyNoticeTimeout = window.setTimeout(() => {
-      copyNotice.value = ''
-      copyNoticeTimeout = undefined
-    }, 6_000)
-    sessionLog.record({ level: 'info', event: 'sharing.app_handoff.copy' })
-  } catch {
-    localError.value = 'Could not copy the link. Use the address bar instead.'
-  }
-}
-const openInviteInApp = (): void => {
-  const url = appHandoffInvite.value?.url
-  if (!url) return
-  sessionLog.record({ level: 'info', event: 'sharing.app_handoff.launch' })
-  window.location.assign(url)
-}
+const previewFollow = computed(
+  () =>
+    activeFollowing.value.find(
+      (entry) => !entry.saved && entry.shareId === incomingShareId.value,
+    ) ?? activeFollowing.value.find((entry) => !entry.saved),
+)
+const recentlyAddedPeer = computed(() =>
+  activeFollowing.value.find((entry) => entry.saved && entry.shareId === recentlyAddedPeerId.value),
+)
 const comparisonOpen = ref(false)
 const comparisonShareId = ref<string>()
 const comparisonPeerId = ref<string>()
 const comparisonMismatch = ref(false)
 const comparisonError = ref<string>()
 const comparingDevice = ref<string>()
+const comparisonNow = ref(Date.now())
 const deviceComparisons = computed(() => [
   ...(runtimeState.value.deviceComparisons ?? []),
   ...(backgroundStatus.value?.deviceComparisons ?? []),
@@ -1648,6 +1892,25 @@ const pendingDeviceComparison = computed(() =>
       entry.peerId === pendingViewerApproval.value?.peerId,
   ),
 )
+const approvalComparisonReady = computed(() =>
+  Boolean(
+    pendingDeviceComparison.value && pendingDeviceComparison.value.expiresAt > comparisonNow.value,
+  ),
+)
+const viewerPendingComparison = computed(() =>
+  deviceComparisons.value.find(
+    (entry) => entry.role === 'viewer' && entry.shareId === previewFollow.value?.shareId,
+  ),
+)
+// A single automatic comparison per consented link; retries require a deliberate tap.
+watch(
+  () => [previewFollow.value?.shareId, previewFollow.value?.status] as const,
+  ([shareId, status]) => {
+    if (!shareId || status !== 'approval-pending' || attemptedAutoComparisons.has(shareId)) return
+    attemptedAutoComparisons.add(shareId)
+    void startDeviceComparison(shareId)
+  },
+)
 const senderComparisonAttention = computed(() =>
   deviceComparisons.value.find(
     (entry) =>
@@ -1672,6 +1935,7 @@ const recenterLabel = computed(() => {
     stale: 'Last known location',
     acquiring: 'Finding your location',
     denied: 'Location denied',
+    'services-disabled': 'Device location off',
     'permission-required': 'Location off',
     unavailable: 'Location unavailable',
     error: 'Location error',
@@ -1681,8 +1945,8 @@ const recenterLabel = computed(() => {
     : `Center on my location. ${freshness}`
 })
 const receivedLocations = computed(() =>
-  receiverOwner.value === 'service'
-    ? (receiverSnapshot.value?.received ?? [])
+  receiverOwner.value === 'service' && receiverSnapshot.value
+    ? receiverSnapshot.value.received
     : runtimeState.value.received,
 )
 const locations = computed(() => {
@@ -1714,6 +1978,18 @@ const viewableIds = computed(() =>
     .filter((entry) => activeFollowing.value.some((follow) => follow.shareId === entry.shareId))
     .map(({ shareId }) => shareId),
 )
+// The first authenticated fix from a newly opened link becomes the initial map focus.
+watch(
+  [locations, locationMap],
+  ([visible, map]) => {
+    if (!map || !pendingMapFocusId.value) return
+    const location = visible.find((entry) => entry.id === pendingMapFocusId.value)
+    if (!location) return
+    map.centerOn(location)
+    pendingMapFocusId.value = undefined
+  },
+  { flush: 'post' },
+)
 
 const effectivePeerStatus = computed(() => {
   if (backgroundStatus.value?.state === 'sharing') return 'online'
@@ -1730,7 +2006,14 @@ const connectionLabel = computed(
       error: 'Connection error',
     })[effectivePeerStatus.value],
 )
+const deviceLocationOff = computed(
+  () => isAndroid && sharingSetup.value?.permissions.servicesEnabled === false,
+)
+const deviceLocationWarning = computed(() =>
+  deviceLocationNotice(!deviceLocationOff.value, activeShares.value.length),
+)
 const ownLocationLabel = computed(() => {
+  if (deviceLocationOff.value) return 'Device location off'
   if (ownObservation.value) return 'Your position ready'
   if (ownLocationState.value.status === 'denied') return 'Location denied'
   if (ownLocationState.value.status === 'acquiring') return 'Finding your location'
@@ -1779,20 +2062,52 @@ watch(
   { immediate: true },
 )
 
+const exportedSessionLogs = (): string =>
+  sessionLog.format(isAndroid ? 'android' : isNative ? 'desktop' : 'browser')
+
+const shareLogs = async (): Promise<void> => {
+  menuOpen.value = false
+  localError.value = ''
+  try {
+    const text = exportedSessionLogs()
+    if (isAndroid) {
+      await invoke('android_share_session_logs', { text })
+      return
+    }
+    const file = new File(
+      [text],
+      `constellation-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`,
+      {
+        type: 'text/plain',
+      },
+    )
+    if (navigator.canShare?.({ files: [file] }) && navigator.share) {
+      await navigator.share({ files: [file], title: 'Constellation session logs' })
+      return
+    }
+    const url = URL.createObjectURL(file)
+    try {
+      const download = document.createElement('a')
+      download.href = url
+      download.download = file.name
+      download.click()
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    localError.value = 'Could not share logs as a file.'
+  }
+}
+
 const copyLogs = async (): Promise<void> => {
   menuOpen.value = false
   localError.value = ''
   copyNotice.value = ''
   if (copyNoticeTimeout !== undefined) window.clearTimeout(copyNoticeTimeout)
-  const runtime =
-    '__TAURI_INTERNALS__' in window
-      ? /Android/i.test(navigator.userAgent)
-        ? 'android'
-        : 'desktop'
-      : 'browser'
   try {
     if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable.')
-    await navigator.clipboard.writeText(sessionLog.format(runtime))
+    await navigator.clipboard.writeText(exportedSessionLogs())
     copyNotice.value = 'Copied logs to clipboard.'
     copyNoticeTimeout = window.setTimeout(() => {
       copyNotice.value = ''
@@ -1805,8 +2120,13 @@ const copyLogs = async (): Promise<void> => {
 
 const selectMapFamily = (family: MapFamily): void => {
   mapFamily.value = family
-  window.localStorage.setItem('constellation.map-family', family)
-  menuOpen.value = false
+  try {
+    window.localStorage.setItem('constellation.map-family', family)
+    menuOpen.value = false
+  } catch {
+    mapSettingsWarning.value = 'Map style applies for this session only; storage could not save it.'
+    // Keep the menu visible so the user sees the warning.
+  }
 }
 const openAbout = (): void => {
   aboutOpen.value = true
@@ -1825,6 +2145,7 @@ const dismissIntro = (): void => {
   window.localStorage.setItem(introSeenKey, '1')
 }
 const openFollowInput = (): void => {
+  followLinkError.value = ''
   peerListOpen.value = false
   followInputOpen.value = true
   menuOpen.value = false
@@ -1866,7 +2187,7 @@ const openNewShare = (): void => {
     return
   }
   peerListOpen.value = false
-  shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
+  shareDraft.value = createShareDraft(freshShareNickname())
   returnTarget.value = undefined
   shareSheetOpen.value = true
 }
@@ -1884,8 +2205,7 @@ const updateAcknowledgement = (acknowledged: boolean) => {
   shareDraft.value = acknowledgeUntilRevoked(shareDraft.value, acknowledged)
 }
 const regenerateShareName = (): void => {
-  let name = suggestedPeerName(crypto.randomUUID())
-  while (name === shareDraft.value.name) name = suggestedPeerName(crypto.randomUUID())
+  const name = freshShareNickname()
   shareDraft.value = setName(shareDraft.value, name)
 }
 const updateName = (name: string) => {
@@ -1915,7 +2235,7 @@ watch(
   { immediate: true, flush: 'post' },
 )
 const centerOnOwnLocation = (): void => {
-  browserLocationDeferred.value = false
+  setIncomingSensorDeferral(false)
   if (!ownObservation.value) {
     locationSource.start()
     localError.value = 'Waiting for your location…'
@@ -1953,25 +2273,48 @@ const focusAllFollowing = (): void => {
   locationMap.value?.focusLocations(peerLocations)
   peerListOpen.value = false
 }
-const acceptPastedLink = (): void => {
+const openIncomingLink = (rawLink: string, origin: 'clipboard' | 'qr'): void => {
+  const link = rawLink.trim()
   try {
-    const link = pastedLink.value.trim()
     parseShareInvitation(link)
-    introOpen.value = false
-    invitationUrl.value = link
-    if (isNative) invitationPending.value = true
-    else void previewInvitation(link)
-    followInputOpen.value = false
-    pastedLink.value = ''
+  } catch (error) {
+    followLinkError.value =
+      error instanceof Error && /expired/i.test(error.message)
+        ? 'This location link has expired.'
+        : origin === 'clipboard'
+          ? 'Clipboard does not contain a valid location link.'
+          : 'The scanned QR code does not contain a valid location link.'
+    return
+  }
+  followLinkError.value = ''
+  followInputOpen.value = false
+  offerInvitation(link)
+}
+
+const pasteLocationLink = async (): Promise<void> => {
+  if (pastingLink.value) return
+  pastingLink.value = true
+  followLinkError.value = ''
+  try {
+    if (!navigator.clipboard?.readText) throw new Error('Clipboard API unavailable.')
+    const link = (await navigator.clipboard.readText()).trim()
+    if (!followInputOpen.value) return
+    if (!link) {
+      followLinkError.value = 'Your clipboard is empty.'
+      return
+    }
+    openIncomingLink(link, 'clipboard')
   } catch {
-    localError.value = 'That is not a valid location link.'
+    if (followInputOpen.value)
+      followLinkError.value =
+        'Clipboard access unavailable. Allow clipboard access or scan a QR code.'
+  } finally {
+    pastingLink.value = false
   }
 }
 
 const acceptScannedLink = (url: string): void => {
-  followInputOpen.value = false
-  pastedLink.value = ''
-  offerInvitation(url)
+  openIncomingLink(url, 'qr')
 }
 
 type ShareCreationContext = {
@@ -1994,7 +2337,7 @@ const beginShareCreation = (): ShareCreationContext => {
     ...(shareBackTarget ? { viewerCapacity: 1 as const, requireViewerApproval: true } : {}),
   }
   readyShareIsReturn.value = Boolean(shareBackTarget)
-  browserLocationDeferred.value = false
+  setIncomingSensorDeferral(false)
   creatingShare.value = true
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.share.create.started' })
@@ -2107,8 +2450,8 @@ const createBackgroundShare = async (
   return adoptBackgroundOwnership(created, context, sharing)
 }
 
-const sendReturnShare = async (context: ShareCreationContext): Promise<void> => {
-  if (!context.shareBackTarget || !readyShare.value) return
+const sendReturnShare = async (context: ShareCreationContext): Promise<boolean> => {
+  if (!context.shareBackTarget || !readyShare.value) return false
   try {
     await runtime.offerReturnShare(
       context.shareBackTarget,
@@ -2119,194 +2462,218 @@ const sendReturnShare = async (context: ShareCreationContext): Promise<void> => 
     )
     await runtime.markReturnPromptSeen(context.shareBackTarget)
     readyShare.value = undefined
+    return true
   } catch (error) {
     localError.value =
       error instanceof Error ? error.message : 'Send this return link to the sender manually.'
+    return false
   }
 }
 
 const completeShareCreation = (context: ShareCreationContext): void => {
   shareSheetOpen.value = false
   if (returnTarget.value === context.shareBackTarget) returnTarget.value = undefined
-  shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
+  shareDraft.value = createShareDraft(freshShareNickname())
   collapseActions()
   sessionLog.record({ level: 'info', event: 'sharing.share.create.succeeded' })
 }
 
 const createShare = async (): Promise<void> => {
+  if (deviceLocationOff.value) {
+    localError.value = 'Device location is off. Turn it on in Android Settings to start sharing.'
+    return
+  }
   if (behaviorReviewRequired.value || settingsBusy.value) {
     openSettings()
     return
   }
   if (creatingShare.value) return
-  const context = beginShareCreation()
+  let context = beginShareCreation()
   try {
+    if (context.shareBackTarget) {
+      await requireActivityFollowing()
+      // Resolve the recipient after reclaiming the native viewer identity.
+      context = {
+        ...context,
+        returnFollow: runtimeState.value.following.find(
+          ({ shareId }) => shareId === context.shareBackTarget,
+        ),
+      }
+    }
     validateReturnShareTarget(context)
     readyShare.value =
       context.useBackground && backgroundSharing
         ? await createBackgroundShare(context, backgroundSharing)
         : await runtime.createShare(context.draft)
-    await sendReturnShare(context)
+    if (
+      context.shareBackTarget &&
+      pendingShareBack.value?.sourceShareId !== context.shareBackTarget
+    ) {
+      pendingShareBack.value = {
+        sourceShareId: context.shareBackTarget,
+        peerName:
+          context.returnFollow?.displayName || context.returnFollow?.localName || 'the sender',
+        precision: context.draft.precision,
+        duration: context.draft.duration,
+        phase: 'creating',
+      }
+    }
+    const returnShareId = readyShare.value?.shareId
+    const sent = await sendReturnShare(context)
+    if (
+      context.shareBackTarget &&
+      pendingShareBack.value?.sourceShareId === context.shareBackTarget
+    ) {
+      pendingShareBack.value =
+        sent && returnShareId
+          ? { ...pendingShareBack.value, phase: 'waiting', returnShareId }
+          : undefined
+    }
     completeShareCreation(context)
   } catch (error) {
+    if (context.shareBackTarget) pendingShareBack.value = undefined
     sessionLog.record({ level: 'error', event: 'sharing.share.create.failed' })
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'
   } finally {
     creatingShare.value = false
+    if (context.shareBackTarget && backgroundFollowingPreference.value)
+      void restorePreferredBackgroundFollowing()
     if (backgroundSharing) updateLocationOwnership()
+  }
+}
+
+const cancelInvitation = (): void => {
+  invitationOpeningId += 1
+  invitationPending.value = false
+  invitationUrl.value = undefined
+  incomingShareId.value = undefined
+  if (window.location.hash.startsWith('#share=')) {
+    window.history.replaceState({}, '', window.location.pathname + window.location.search)
   }
 }
 
 const acceptInvitation = async (): Promise<void> => {
   if (accepting.value) return
+  const url = invitationUrl.value
+  const openingId = invitationOpeningId
+  if (!url) return
   accepting.value = true
+  connectingInvitation.value = true
+  invitationPending.value = false
   localError.value = ''
   sessionLog.record({ level: 'info', event: 'sharing.follow.accept.started' })
   try {
-    const url = invitationUrl.value
-    if (!url) throw new Error('The share link is unavailable.')
     const { shareId } = parseShareInvitation(url)
     await requireActivityFollowing()
-    await runtime.acceptShare(url, { saved: false })
+    const previous = runtimeState.value.following.find((entry) => entry.shareId === shareId)
+    pendingMapFocusId.value = shareId
+    if (!previous) await runtime.acceptShare(url, { saved: false })
     collapseActions()
-    if (invitationUrl.value === url) {
-      invitationPending.value = false
-      invitationUrl.value = undefined
-      window.history.replaceState({}, '', window.location.pathname)
-    }
-    const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-    if (
-      follow &&
-      follow.status !== 'approval-pending' &&
-      follow.status !== 'denied' &&
-      runtimeState.value.canSave
-    ) {
-      nicknamePrompt.value = { shareId, name: follow.localName }
-    } else if (!runtimeState.value.canSave) {
-      localError.value = 'Protected storage is unavailable; preview only.'
-    } else if (follow?.status === 'denied') {
-      localError.value = 'The sender did not approve this device for the location share.'
-    }
-    sessionLog.record({ level: 'info', event: 'sharing.follow.accept.succeeded' })
-  } catch (error) {
-    sessionLog.record({ level: 'error', event: 'sharing.follow.accept.failed' })
-    localError.value = error instanceof Error ? error.message : 'Could not open the share.'
-  } finally {
-    accepting.value = false
-  }
-}
-
-const previewInvitation = async (url: string): Promise<void> => {
-  if (accepting.value) return
-  accepting.value = true
-  localError.value = ''
-  const shareId = parseShareInvitation(url).shareId
-  if (pendingBrowserInvite.value?.shareId === shareId) pendingBrowserInvite.value = undefined
-  previewInvite.value = { shareId, url }
-  try {
-    await requireActivityFollowing()
-    await runtime.acceptShare(url, { saved: false })
-    collapseActions()
-    if (invitationUrl.value === url) {
+    if (invitationOpeningId === openingId && invitationUrl.value === url) {
       invitationUrl.value = undefined
       window.history.replaceState({}, '', window.location.pathname + window.location.search)
     }
+    if (previous?.saved) recentlyAddedPeerId.value = shareId
+    sessionLog.record({ level: 'info', event: 'sharing.follow.accept.succeeded' })
   } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Could not preview the location.'
+    if (invitationOpeningId === openingId) {
+      invitationPending.value = true
+      sessionLog.record({ level: 'error', event: 'sharing.follow.accept.failed' })
+      localError.value = error instanceof Error ? error.message : 'Could not open the share.'
+    }
   } finally {
+    connectingInvitation.value = false
     accepting.value = false
   }
 }
 
-const keepFollowing = (shareId: string): void => {
+const dismissPreview = (shareId: string): void => {
+  dismissedPreviewIds.value = [...new Set([...dismissedPreviewIds.value, shareId])]
+}
+
+const keepFollowing = async (shareId: string): Promise<void> => {
   const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-  if (follow) nicknamePrompt.value = { shareId, name: follow.localName }
+  if (!follow || follow.status === 'denied' || follow.status === 'approval-pending') return
+  try {
+    await requireActivityFollowing()
+    await runtime.saveFollowing(shareId, follow.localName)
+    await runtime.markReturnPromptSeen(shareId)
+    if (backgroundFollowingPreference.value && isAndroid) {
+      void restorePreferredBackgroundFollowing()
+    }
+    recentlyAddedPeerId.value = shareId
+    // Saving an incoming peer must not start the viewer's GPS or a location permission prompt.
+    updateVisibility()
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not save this peer.'
+  }
 }
 
 const traceError = ref('')
-const setFollowTraceEnabled = async (shareId: string, enabled: boolean): Promise<void> => {
+const refreshReceivedHistory = (): void => {
   traceError.value = ''
-  try {
-    await requireActivityFollowing()
-    await runtime.setFollowTraceEnabled(shareId, enabled)
-  } catch (error) {
-    traceError.value = error instanceof Error ? error.message : 'Could not update recording.'
-  }
+  if (receiverOwner.value !== 'service') return
+  void (async () => {
+    if (document.visibilityState === 'visible') await backgroundSharing?.setVisible(true)
+    await reconcileReceiverOwnership()
+  })().catch(() => {
+    traceError.value = 'Could not refresh background receiver history. Retry after reconnecting.'
+  })
 }
-const clearFollowTrace = async (shareId: string): Promise<void> => {
+const editFollowTrace = async (action: () => Promise<void>, message: string): Promise<void> => {
   traceError.value = ''
+  // The service owns the encrypted follow records in background mode. Return
+  // ownership to the Activity for this edit, then restore it even on failure.
+  // Previously this operation silently disabled background receiving entirely.
+  const restoreBackground = receiverOwner.value === 'service'
   try {
     await requireActivityFollowing()
-    await runtime.clearFollowTrace(shareId)
+    await action()
   } catch (error) {
-    traceError.value = error instanceof Error ? error.message : 'Could not clear history.'
-  }
-}
-
-const saveNickname = async (): Promise<void> => {
-  if (!nicknamePrompt.value) return
-  try {
-    const { shareId, name } = nicknamePrompt.value
-    await requireActivityFollowing()
-    await runtime.saveFollowing(shareId, name)
-    const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
-    if (
-      follow &&
-      follow.status !== 'approval-pending' &&
-      follow.status !== 'denied' &&
-      !follow.returnPromptSeen
-    ) {
-      await runtime.markReturnPromptSeen(shareId)
-      shareBackPrompt.value = { shareId, name: follow.localName || 'this person' }
+    traceError.value = error instanceof Error ? error.message : message
+  } finally {
+    if (restoreBackground && receiverOwner.value === 'activity') {
+      await setBackgroundFollowing(true)
+      const resumed = await backgroundReceiver?.ownership().catch(() => undefined)
+      if (resumed?.owner !== 'service' && !traceError.value) {
+        traceError.value = settingsError.value || 'Could not resume background following.'
+      }
     }
-    nicknamePrompt.value = undefined
-    browserLocationDeferred.value = false
-    offerConnectedReturnShare(runtimeState.value)
-    updateVisibility()
-  } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Could not save this location.'
   }
 }
+const setFollowTraceEnabled = (shareId: string, enabled: boolean): Promise<void> =>
+  editFollowTrace(
+    () => runtime.setFollowTraceEnabled(shareId, enabled),
+    'Could not update recording.',
+  )
+const clearFollowTrace = (shareId: string): Promise<void> =>
+  editFollowTrace(() => runtime.clearFollowTrace(shareId), 'Could not clear history.')
 
-const openReturnShare = (): void => {
-  const target = shareBackPrompt.value?.shareId
-  if (!target) return
-  returnTarget.value = target
-  shareBackPrompt.value = undefined
-  shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
-  browserLocationDeferred.value = false
-  shareSheetOpen.value = true
-}
-
-const dismissShareBackPrompt = (): void => {
-  shareBackPrompt.value = undefined
-  offerConnectedReturnShare(runtimeState.value)
-}
-
-const shareBackFromFollowing = async (shareId: string): Promise<void> => {
-  const follow = runtimeState.value.following.find((entry) => entry.shareId === shareId)
+const shareBackFromFollowing = (shareId: string): void => {
+  const follow = activeFollowing.value.find((entry) => entry.shareId === shareId)
   if (
     !follow ||
-    follow.status === 'approval-pending' ||
-    follow.status === 'denied' ||
+    ['approval-pending', 'denied', 'expired', 'revoked'].includes(follow.status) ||
     creatingShare.value
   )
     return
-  try {
-    await runtime.markReturnPromptSeen(shareId)
-    returnTarget.value = shareId
-    shareDraft.value = createShareDraft(suggestedPeerName(crypto.randomUUID()))
-    browserLocationDeferred.value = false
-    peerListOpen.value = false
-    shareSheetOpen.value = true
-  } catch (error) {
-    localError.value = error instanceof Error ? error.message : 'Could not prepare a return share.'
+  if (behaviorReviewRequired.value || settingsBusy.value) {
+    openSettings()
+    return
   }
+  if (deviceLocationOff.value) {
+    localError.value = 'Enable device location before sharing back.'
+    return
+  }
+  peerListOpen.value = false
+  recentlyAddedPeerId.value = undefined
+  returnTarget.value = shareId
+  shareDraft.value = createShareDraft(freshShareNickname())
+  shareSheetOpen.value = true
 }
 const closeShareSheet = (): void => {
   shareSheetOpen.value = false
   returnTarget.value = undefined
-  offerConnectedReturnShare(runtimeState.value)
 }
 
 const changingReturnOffer = ref(false)
@@ -2401,16 +2768,32 @@ const blockViewer = async (shareId: string, fingerprint: string): Promise<void> 
 const changingViewerApproval = ref(false)
 const approvePendingViewer = async (): Promise<void> => {
   const request = pendingViewerApproval.value
+  const comparison = pendingDeviceComparison.value
   if (!request || changingViewerApproval.value) return
+  // Never grant location access for an unverified or expired approval request.
+  if (!comparison || !approvalComparisonReady.value || comparison.peerId !== request.peerId) {
+    localError.value = 'Compare the four letters with the viewer before approving.'
+    return
+  }
   changingViewerApproval.value = true
   try {
     if (backgroundStatus.value?.shares.some((share) => share.shareId === request.shareId)) {
       if (!backgroundSharing) throw new Error('Background sharing is unavailable.')
+      backgroundStatus.value = await backgroundSharing.deviceComparison(
+        request.shareId,
+        comparison.challenge,
+        'confirm',
+      )
+      if (Date.now() >= comparison.expiresAt)
+        throw new Error('Verification expired. Request a new comparison.')
       backgroundStatus.value = await backgroundSharing.approveViewer(
         request.shareId,
         request.peerId,
       )
     } else {
+      await runtime.confirmDeviceComparison(request.shareId, comparison.challenge)
+      if (Date.now() >= comparison.expiresAt)
+        throw new Error('Verification expired. Request a new comparison.')
       await runtime.approveViewer(request.shareId, request.peerId)
     }
   } catch (error) {
@@ -2479,9 +2862,40 @@ const revokeAllShares = async (): Promise<void> => {
   }
 }
 const stopFollowing = async (shareId: string): Promise<void> => {
-  await requireActivityFollowing()
-  await runtime.stopFollowing(shareId)
-  if (selectedFollowId.value === shareId) peerListOpen.value = false
+  try {
+    await requireActivityFollowing()
+    await runtime.stopFollowing(shareId)
+    if (selectedFollowId.value === shareId) peerListOpen.value = false
+  } finally {
+    if (backgroundFollowingPreference.value) void restorePreferredBackgroundFollowing()
+  }
+}
+
+const revokingPeer = ref(false)
+const revokePeer = async (targets: {
+  followingShareIds: string[]
+  dedicatedShareIds: string[]
+  viewerConnections: { shareId: string; fingerprint: string }[]
+}): Promise<void> => {
+  if (revokingPeer.value) return
+  revokingPeer.value = true
+  try {
+    // Block only this peer on shared links; revoking their whole link would
+    // disconnect unrelated viewers holding the same bearer capability.
+    for (const shareId of targets.dedicatedShareIds) await revokeShare(shareId)
+    for (const connection of targets.viewerConnections)
+      await blockViewerChecked(connection.shareId, connection.fingerprint)
+    if (targets.followingShareIds.length) {
+      await requireActivityFollowing()
+      for (const shareId of targets.followingShareIds) await runtime.stopFollowing(shareId)
+    }
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : 'Could not revoke this peer.'
+  } finally {
+    if (targets.followingShareIds.length && backgroundFollowingPreference.value)
+      void restorePreferredBackgroundFollowing()
+    revokingPeer.value = false
+  }
 }
 
 const clearingOldPeers = ref(false)
@@ -2527,25 +2941,99 @@ const updateLocationOwnership = (): void => {
   )
   if (serviceOwnsLocation) locationSource.stop()
 }
+const refreshDeviceLocationReadiness = async (): Promise<void> => {
+  if (!backgroundSharing || document.visibilityState !== 'visible' || settingsBusy.value) return
+  try {
+    const setup = await backgroundSharing.setup()
+    const previousPermissions = sharingSetup.value?.permissions
+    const previous = previousPermissions?.servicesEnabled
+    const policySignals = [
+      ['android.power.optimization', 'batteryOptimizationExempt'],
+      ['android.power.saver', 'powerSaverEnabled'],
+      ['android.power.restricted', 'backgroundRestricted'],
+      ['android.network.data-saver', 'dataSaverEnabled'],
+    ] as const
+    for (const [event, key] of policySignals) {
+      const value = setup.devicePolicies?.[key]
+      if (value === undefined || value === sharingSetup.value?.devicePolicies?.[key]) continue
+      sessionLog.record({ level: 'info', event, state: value ? 'enabled' : 'disabled' })
+    }
+    sharingSetup.value = setup
+    if (previous !== undefined && previous !== setup.permissions.servicesEnabled) {
+      sessionLog.record({
+        level: setup.permissions.servicesEnabled ? 'info' : 'warning',
+        event: 'location.device.services',
+        message: setup.permissions.servicesEnabled ? 'enabled' : 'disabled',
+      })
+      updateLocationOwnership()
+    }
+    if (
+      previousPermissions &&
+      sharingBehavior.value.publication === 'background' &&
+      JSON.stringify(previousPermissions) !== JSON.stringify(setup.permissions)
+    ) {
+      // Permission recovery applies the persisted request, not a stale runtime fallback.
+      await backgroundSharing.setSharingBehavior(sharingBehavior.value)
+    }
+  } catch {
+    if (settingsOpen.value) settingsError.value = 'Could not check permissions. Please retry.'
+  }
+}
+type SameDocumentNavigationEvent = Event & {
+  navigationType?: string
+  destination?: { url?: string; sameDocument?: boolean }
+}
+const handleLocationNavigation = (event: Event): void => {
+  const navigation = event as SameDocumentNavigationEvent
+  if (navigation.navigationType !== 'push' || !navigation.destination?.sameDocument) return
+  const url = navigation.destination.url
+  // hashchange alone misses a repeated navigation to the identical link URL.
+  if (url && new URL(url).hash.startsWith('#share=')) offerInvitation(url)
+}
+const navigationTarget = (window as Window & { navigation?: EventTarget }).navigation
+const handleLocationHashChange = (): void => {
+  if (
+    window.location.hash.startsWith('#share=') &&
+    !(invitationPending.value && invitationUrl.value === window.location.href)
+  )
+    offerInvitation(window.location.href)
+}
+let lastVisibility: boolean | undefined
+const recordConnectivity = (): void => {
+  sessionLog.record({
+    level: navigator.onLine ? 'info' : 'warning',
+    event: 'app.connectivity',
+    state: navigator.onLine ? 'online' : 'offline',
+  })
+}
 const updateVisibility = (): void => {
-  if (document.visibilityState === 'visible' && settingsOpen.value && backgroundSharing)
-    void backgroundSharing
-      .setup()
-      .then((setup) => {
-        sharingSetup.value = setup
-      })
-      .catch(() => {
-        settingsError.value = 'Could not check permissions. Please retry.'
-      })
-
+  if (document.visibilityState === 'visible') void refreshDeviceLocationReadiness()
   const visible = document.visibilityState === 'visible'
+  if (lastVisibility !== visible) {
+    sessionLog.record({
+      level: 'info',
+      event: 'app.visibility',
+      state: visible ? 'visible' : 'hidden',
+    })
+    lastVisibility = visible
+  }
   if (visible) void reconcileReceiverOwnership().catch(() => undefined)
   updateLocationOwnership()
   void backgroundSharing?.setVisible(visible).catch(() => undefined)
 }
 onMounted(() => {
+  // Link consent must appear immediately, even if protected-store or native startup is slow.
+  if (window.location.hash.startsWith('#share=')) offerInvitation(window.location.href)
+  comparisonClock = window.setInterval(() => {
+    comparisonNow.value = Date.now()
+  }, 1_000)
   document.addEventListener('visibilitychange', updateVisibility)
   window.addEventListener('keydown', onMenuKeyDown)
+  window.addEventListener('online', recordConnectivity)
+  window.addEventListener('offline', recordConnectivity)
+  recordConnectivity()
+  navigationTarget?.addEventListener('navigate', handleLocationNavigation)
+  window.addEventListener('hashchange', handleLocationHashChange)
   if (isAndroid) {
     void receiveSharedText().catch(() => undefined)
     sharedTextPoll = window.setInterval(
@@ -2554,13 +3042,13 @@ onMounted(() => {
     )
   }
   void (async () => {
+    if (isAndroid) await loadNativeFollowingPreference()
     updateVisibility()
     const native = await backgroundReceiver?.ownership()
     if (native?.owner !== 'service') await migrateAndroidSourceShares()
     if (native?.owner === 'service') await runtime.setFollowingSuspended(true)
     if (native) {
-      receiverSnapshot.value = native.status ?? undefined
-      receiverOwner.value = native.owner
+      applyReceiverState(native)
       followOwnerController = createFollowOwnership(receiverEffects, {
         owner: native.owner,
         generation: native.generation,
@@ -2568,6 +3056,7 @@ onMounted(() => {
     }
     await runtime.initialize()
     await loadSharingSettings()
+    await restorePreferredBackgroundFollowing()
     if (backgroundSharing) {
       await refreshBackgroundStatus().catch(() => undefined)
       updateVisibility()
@@ -2575,12 +3064,12 @@ onMounted(() => {
         () => void refreshBackgroundStatus().catch(() => undefined),
         1_000,
       )
+      locationReadinessPoll = window.setInterval(() => void refreshDeviceLocationReadiness(), 5_000)
       receiverPoll = window.setInterval(
         () => void reconcileReceiverOwnership().catch(() => undefined),
         5_000,
       )
     }
-    offerInvitation(window.location.href)
   })().catch((error) => {
     localError.value =
       error instanceof Error ? error.message : 'Protected shares could not be opened.'
@@ -2588,11 +3077,17 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', updateVisibility)
+  window.removeEventListener('online', recordConnectivity)
+  window.removeEventListener('offline', recordConnectivity)
   window.removeEventListener('keydown', onMenuKeyDown)
+  window.removeEventListener('hashchange', handleLocationHashChange)
+  navigationTarget?.removeEventListener('navigate', handleLocationNavigation)
   unmounted = true
   stopDeepLinks()
   unsubscribe()
   if (backgroundPoll !== undefined) window.clearInterval(backgroundPoll)
+  if (locationReadinessPoll !== undefined) window.clearInterval(locationReadinessPoll)
+  if (comparisonClock !== undefined) window.clearInterval(comparisonClock)
   if (receiverPoll !== undefined) window.clearInterval(receiverPoll)
   if (sharedTextPoll !== undefined) window.clearInterval(sharedTextPoll)
   if (copyNoticeTimeout !== undefined) window.clearTimeout(copyNoticeTimeout)

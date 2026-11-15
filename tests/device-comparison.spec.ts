@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test'
 
-import { continueInBrowserIfOffered, openShareCreator } from './fixtures/peer-navigation.ts'
+import {
+  continueInBrowserIfOffered,
+  expandPeerDetails,
+  openPeerList,
+  openShareCreator,
+} from './fixtures/peer-navigation.ts'
 for (const requireApproval of [true, false]) {
   test(`device comparison over authenticated peers: ${requireApproval ? 'manual approval' : 'first-device claim'}`, async ({
     page,
@@ -48,7 +53,10 @@ test('viewer and sender compare and independently confirm device letters through
     await continueInBrowserIfOffered(viewer)
     await expect(outgoing).toHaveCount(0, { timeout: 30_000 })
     const preview = viewer.getByRole('region', { name: 'Location preview' })
-    await preview.getByRole('button', { name: 'Compare device letters' }).click()
+    await expect(preview.getByRole('button', { name: 'Add peer' })).toBeVisible({ timeout: 30_000 })
+    const peers = await openPeerList(viewer)
+    await expandPeerDetails(peers.locator('.peer-list__item').first())
+    await peers.getByRole('button', { name: 'Verify connection' }).click()
     const viewerDialog = viewer.getByRole('dialog', { name: 'Verify connection' })
     await viewerDialog.getByRole('button', { name: 'Start verification' }).click()
     const viewerLetters = viewerDialog.locator('.device-comparison-letters')

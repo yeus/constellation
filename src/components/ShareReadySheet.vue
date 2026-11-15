@@ -18,18 +18,17 @@
         :aria-pressed="enlarged"
         @click="enlarged = !enlarged"
       >
-        <img
-          class="share-ready__qr"
-          :class="{ 'share-ready__qr--enlarged': enlarged }"
-          :src="qrCode"
-          alt="Location share QR code"
-        />
+        <img class="share-ready__qr" :src="qrCode" alt="Location share QR code" />
       </button>
+      <p v-if="showQr" class="share-ready__waiting" role="status">
+        Waiting for a viewer to connect… Leave this screen open if you like; it closes automatically
+        when a new viewer connects. You can also close it yourself.
+      </p>
       <p class="field-help">
         {{
           returnShare
             ? 'The return link could not be sent directly. Share it with the original sender.'
-            : 'Anyone with this link can view the shared location until it expires or you stop it.'
+            : 'Share this link only with people you trust. Your viewer limit and approval choices determine who can see your location.'
         }}
       </p>
       <input class="share-ready__link" aria-label="Share link" :value="url" readonly />

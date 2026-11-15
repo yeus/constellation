@@ -56,6 +56,8 @@ test('keeps source-owned disclosure precision when adapting observations', () =>
     precision: 'approximate',
     radiusMeters: 800,
     state: 'live',
+    capturedAt: 1_000,
+    expiresAt: 31_000,
   })
 })
 

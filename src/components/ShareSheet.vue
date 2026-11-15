@@ -1,7 +1,7 @@
 <template>
   <div class="sheet-backdrop share-backdrop" @click.self="emit('close')">
     <section
-      v-show="!privacyOpen && !precisionHelpOpen"
+      v-show="!privacyOpen && !precisionHelpOpen && !nameHelpOpen"
       class="share-sheet share-sheet--create"
       role="dialog"
       aria-modal="true"
@@ -21,15 +21,27 @@
         Sharing back to {{ returnRecipientName }}. Only this sender receives the private offer.
       </p>
       <div class="share-name">
-        <label for="share-name-input">Share a name (optional)</label>
+        <div>
+          <label for="share-name-input">Nickname shared on this link</label>
+          <button
+            ref="nameHelpButton"
+            type="button"
+            class="precision-help"
+            aria-label="Explain shared nicknames"
+            aria-haspopup="dialog"
+            @click="nameHelpOpen = true"
+          >
+            <CircleHelpIcon aria-hidden="true" />
+          </button>
+        </div>
         <div class="share-name__input">
           <input
             id="share-name-input"
-            aria-label="Share a name"
+            aria-label="Name to share"
             type="text"
             maxlength="32"
             :value="draft.name"
-            placeholder="What should viewers call you?"
+            placeholder="Random nickname for this link"
             @input="emit('name', ($event.target as HTMLInputElement).value)"
           />
           <button
@@ -42,11 +54,10 @@
             <Dices aria-hidden="true" />
           </button>
         </div>
+        <p class="field-help">
+          A fresh nickname per link, shared with everyone who gains access to it.
+        </p>
       </div>
-      <p class="field-help">
-        Fresh suggestion for this share. Edit it, or clear it to share no name.
-      </p>
-
       <fieldset>
         <legend>
           Precision
@@ -125,7 +136,7 @@
       </label>
 
       <fieldset v-if="!returnRecipientName">
-        <legend>Viewers</legend>
+        <legend>How many viewers?</legend>
         <div class="viewer-options">
           <button
             v-for="option in viewerOptions"
@@ -150,7 +161,20 @@
             />{{ option.label }}
           </button>
         </div>
-        <p class="field-help">Viewers see you, not each other. Return shares come only to you.</p>
+        <p class="field-help">
+          This limits how many devices can use the link. Viewers cannot see each other.
+        </p>
+        <p v-if="draft.viewerCapacity !== 1" class="field-help" role="status">
+          Anyone with this link and its secret code can start viewing without your approval
+          {{
+            draft.duration === 'until-revoked'
+              ? 'until you stop sharing.'
+              : 'until the link expires.'
+          }}
+        </p>
+        <p v-if="draft.duration === 'until-revoked' && draft.viewerCapacity !== 1" class="warning">
+          This link can be forwarded and has no expiry. New devices can join until you stop sharing.
+        </p>
         <label v-if="draft.viewerCapacity === 1" class="warning">
           <input
             type="checkbox"
@@ -159,7 +183,7 @@
           />
           <span
             >Approve the recipient device before sharing (recommended). Without approval, the first
-            device using this link permanently claims it.</span
+            device opening the link gets access automatically and uses the only viewer slot.</span
           >
         </label>
       </fieldset>
@@ -182,6 +206,7 @@
     </section>
     <SharingPrivacyDialog v-if="privacyOpen" @close="closePrivacy" />
     <PrecisionHelpDialog v-if="precisionHelpOpen" @close="closePrecisionHelp" />
+    <ShareNameHelpDialog v-if="nameHelpOpen" @close="closeNameHelp" />
   </div>
 </template>
 
@@ -201,6 +226,7 @@ import {
 } from '@lucide/vue'
 import PrecisionHelpDialog from './PrecisionHelpDialog.vue'
 import SharingPrivacyDialog from './SharingPrivacyDialog.vue'
+import ShareNameHelpDialog from './ShareNameHelpDialog.vue'
 import CloseIcon from './icons/CloseIcon.vue'
 import type { LocationPrecision, ShareDraft, ShareDuration, ViewerCapacity } from '../shareDraft.ts'
 import { VERY_COARSE_RADIUS_METERS } from '../shareDraft.ts'
@@ -228,6 +254,13 @@ const privacyOpen = ref(false)
 const privacyButton = ref<HTMLButtonElement>()
 const precisionHelpOpen = ref(false)
 const precisionHelpButton = ref<HTMLButtonElement>()
+const nameHelpOpen = ref(false)
+const nameHelpButton = ref<HTMLButtonElement>()
+const closeNameHelp = async (): Promise<void> => {
+  nameHelpOpen.value = false
+  await nextTick()
+  nameHelpButton.value?.focus()
+}
 const closePrecisionHelp = async (): Promise<void> => {
   precisionHelpOpen.value = false
   await nextTick()
@@ -249,7 +282,7 @@ const viewerOptions: readonly { label: string; value: ViewerCapacity }[] = [
   { label: '1', value: 1 },
   { label: '10', value: 10 },
   { label: '50', value: 50 },
-  { label: 'No share cap', value: 'unlimited' },
+  { label: 'No limit', value: 'unlimited' },
 ]
 </script>
 

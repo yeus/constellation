@@ -11,6 +11,7 @@ import {
 } from './android-emulator.mjs'
 import { androidApkCandidates } from './copy-android-apk.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
+import { summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const apk = 'dist/constellation-android-debug-x86_64.apk'
@@ -26,10 +27,9 @@ const run = (executable, args, options = {}) =>
 const adbPath = androidTool('adb')
 const adbEnvironment = androidAdbEnvironment()
 
-const restartAdbServer = () => {
-  run(adbPath, ['kill-server'], { env: adbEnvironment })
-  run(adbPath, ['start-server'], { env: adbEnvironment })
-}
+// The ADB daemon is shared across emulator processes. Killing it here races
+// with active debug sessions and makes unrelated test controls disconnect.
+const ensureAdbServer = () => run(adbPath, ['start-server'], { env: adbEnvironment })
 
 const adb = (args, options = {}, serial) =>
   execFileSync(adbPath, [...(serial ? ['-s', serial] : []), ...args], {
@@ -173,13 +173,33 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
   }
 }
 
-const runManagedPowerCycle = async () => {
+const runManagedRestore = async (reason = 'boot') => {
   const selected = profile('modern')
+  let relay
   let before
   let after
   try {
+    // Keep the deterministic P2P relay across cold boot or package replacement.
+    relay = spawn(process.execPath, ['scripts/e2e-relay.mjs'], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: 'ignore',
+    })
+    const relayDeadline = Date.now() + 30_000
+    let relayReady = false
+    while (Date.now() < relayDeadline) {
+      if (relay.exitCode !== null) throw new Error('The local P2P relay exited during setup.')
+      relayReady = await fetch('http://127.0.0.1:9113/health')
+        .then((response) => response.ok)
+        .catch(() => false)
+      if (relayReady) break
+      await wait(250)
+    }
+    if (!relayReady) throw new Error('The local P2P relay did not start.')
+
     before = await startProfile(selected)
-    run(adbPath, ['-s', before.serial, 'install', '-r', apk], { env: adbEnvironment })
+    adb(['reverse', 'tcp:9111', 'tcp:9111'], {}, before.serial)
+    run(adbPath, ['-s', before.serial, 'install', '-r', threeWayApk], { env: adbEnvironment })
     const prepareOutput = execFileSync(
       process.execPath,
       ['scripts/test-android.mjs', '--reboot-prepare-smoke'],
@@ -198,9 +218,33 @@ const runManagedPowerCycle = async () => {
       throw new Error('Reboot preparation returned invalid synthetic share state.')
     }
 
-    await stopEmulator(before.child, before.serial)
-    before = undefined
-    after = await startProfile(selected, undefined, { uninstall: false })
+    if (reason === 'boot') {
+      await stopEmulator(before.child, before.serial)
+      before = undefined
+      after = await startProfile(selected, undefined, { uninstall: false })
+    } else {
+      // Updating an installed background publisher must restart only its existing grants.
+      adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'], {}, before.serial)
+      adb(['logcat', '-c'], {}, before.serial)
+      run(adbPath, ['-s', before.serial, 'install', '-r', threeWayApk], {
+        env: adbEnvironment,
+      })
+      after = before
+      before = undefined
+      let replacementBroadcast = false
+      for (let attempt = 0; attempt < 40 && !replacementBroadcast; attempt += 1) {
+        replacementBroadcast = adb(
+          ['logcat', '-d', '-s', 'ConstellationRestore:I', '*:S'],
+          {},
+          after.serial,
+        ).includes('MY_PACKAGE_REPLACED')
+        if (!replacementBroadcast) await wait(250)
+      }
+      if (!replacementBroadcast) {
+        throw new Error('MY_PACKAGE_REPLACED was not observed after the in-place update.')
+      }
+    }
+    adb(['reverse', 'tcp:9111', 'tcp:9111'], {}, after.serial)
     run(process.execPath, ['scripts/test-android.mjs', '--reboot-verify-smoke'], {
       env: {
         ...adbEnvironment,
@@ -212,6 +256,7 @@ const runManagedPowerCycle = async () => {
   } finally {
     if (after) await stopEmulator(after.child, after.serial)
     if (before) await stopEmulator(before.child, before.serial)
+    relay?.kill('SIGTERM')
   }
 }
 
@@ -238,6 +283,11 @@ const runThreeWay = async () => {
         ...(process.argv.includes('--dual-role-standby-smoke')
           ? ['--dual-role-standby-smoke']
           : []),
+        ...(process.argv.includes('--dual-role-process-restart')
+          ? ['--dual-role-process-restart']
+          : []),
+        ...(process.argv.includes('--dual-role-restart-only') ? ['--dual-role-restart-only'] : []),
+        ...(process.argv.includes('--power-recovery-matrix') ? ['--power-recovery-matrix'] : []),
         ...(process.argv.includes('--dual-role-permission-revocation-smoke')
           ? ['--dual-role-permission-revocation-smoke']
           : []),
@@ -251,6 +301,30 @@ const runThreeWay = async () => {
         },
       },
     )
+  } catch (error) {
+    // Preserve privacy: no raw logcat, locations, peer identities or invitation URLs.
+    const diagnostics = [first, second].filter(Boolean).map((device, index) => {
+      const read = (args) => {
+        try {
+          return adb(args, {}, device.serial)
+        } catch {
+          return ''
+        }
+      }
+      return {
+        device: index === 0 ? 'source' : 'receiver',
+        // The child test may have already force-stopped this app in its finally.
+        processAliveAfterChildCleanup: Boolean(read(['shell', 'pidof', packageName]).trim()),
+        crash: summarizeAndroidNativeCrash(
+          read(['logcat', '-b', 'crash', '-d', '-t', '500']),
+          packageName,
+        ),
+      }
+    })
+    console.error(
+      '[android-acceptance] two-device failed diagnostics: ' + JSON.stringify(diagnostics),
+    )
+    throw error
   } finally {
     if (second) await stopEmulator(second.child, second.serial)
     if (first) await stopEmulator(first.child, first.serial)
@@ -283,7 +357,7 @@ const buildThreeWayApk = () => {
   fs.copyFileSync(source, threeWayApk)
 }
 
-restartAdbServer()
+ensureAdbServer()
 const main = async () => {
   const soakMinutes = parseStandbySoakMinutes(process.argv)
   if (
@@ -342,7 +416,9 @@ const main = async () => {
     } else buildThreeWayApk()
     await runThreeWay()
     console.log(
-      'Two Android devices validated independent Doze recovery, authenticated ACK and optional dual-role state merge.',
+      process.argv.includes('--dual-role-restart-only')
+        ? 'Two Android emulators validated durable dual-role restart and authenticated location receive.'
+        : 'Two Android devices validated independent Doze recovery, authenticated ACK and optional dual-role state merge.',
     )
     return
   }
@@ -360,7 +436,11 @@ const main = async () => {
         ...(process.argv.includes('--receiver-process-restart')
           ? ['--receiver-process-restart']
           : []),
-        ...(process.argv.includes('--notification-stop-ui') ? ['--notification-stop-ui'] : []),
+        ...(process.argv.includes('--receiver-history-smoke') ? ['--receiver-history-smoke'] : []),
+        ...(process.argv.includes('--notification-settings-ui') ||
+        process.argv.includes('--notification-stop-ui')
+          ? ['--notification-settings-ui']
+          : []),
         ...process.argv.filter((argument) => argument.startsWith('--standby-soak-minutes=')),
       ],
       threeWayApk,
@@ -375,6 +455,13 @@ const main = async () => {
     console.log('Android service-only process recovery retained the same source identity.')
     return
   }
+  if (process.argv.includes('--power-state-matrix')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile('modern', undefined, ['--power-state-matrix'], threeWayApk)
+    console.log('Android v0.1.5 power-state matrix completed with journal-backed evidence.')
+    return
+  }
   if (process.argv.includes('--power-network-smoke')) {
     if (!process.argv.includes('--skip-build')) buildThreeWayApk()
     if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
@@ -387,6 +474,10 @@ const main = async () => {
   }
   if (process.argv.includes('--notification-pause-smoke')) {
     await runProfile('modern', undefined, ['--notification-pause-smoke'])
+    return
+  }
+  if (process.argv.includes('--location-off-smoke')) {
+    await runProfile('modern', undefined, ['--location-off-smoke'])
     return
   }
   if (process.argv.includes('--permission-denial-smoke')) {
@@ -457,9 +548,17 @@ const main = async () => {
     console.log('Android applied the network restriction before any restricted share published.')
     return
   }
-  if (process.argv.includes('--reboot-smoke')) {
-    await runManagedPowerCycle()
-    console.log('Android power-cycle preserved protected share identity and absolute expiry.')
+  if (process.argv.includes('--reboot-smoke') || process.argv.includes('--package-replace-smoke')) {
+    if (process.argv.includes('--skip-build')) {
+      if (!fs.existsSync(threeWayApk)) {
+        throw new Error('Build the local-relay Android APK before using --skip-build.')
+      }
+    } else buildThreeWayApk()
+    const reason = process.argv.includes('--package-replace-smoke') ? 'update' : 'boot'
+    await runManagedRestore(reason)
+    console.log(
+      `Android ${reason} restored an authorized share with its original identity and expiry.`,
+    )
     return
   }
   if (process.argv.includes('--native-fallback-smoke')) {
@@ -497,6 +596,7 @@ const main = async () => {
   await runProfile('aosp', undefined, ['--no-gms-flow'])
   await runProfile('modern', undefined, ['--notification-pause-smoke'])
   await runProfile('modern', undefined, ['--permission-denial-smoke'])
+  await runProfile('modern', undefined, ['--location-off-smoke'])
   await runProfile('modern', undefined, ['--expiry-smoke'])
   await runProfile('modern', undefined, ['--foreground-only-smoke'])
   await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
@@ -505,7 +605,8 @@ const main = async () => {
   if (!fs.existsSync(threeWayApk)) buildThreeWayApk()
   await runProfile('modern', undefined, ['--power-network-smoke'], threeWayApk)
   await runProfile('modern', undefined, ['--service-restart-smoke', '--local-relay'], threeWayApk)
-  await runManagedPowerCycle()
+  await runManagedRestore('boot')
+  await runManagedRestore('update')
   console.log('Android API 29 stock/no-GMS and API 36 location-sharing tests passed.')
 }
 

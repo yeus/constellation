@@ -158,6 +158,16 @@ test('preserves link-group return approval, prompt history and old-share records
   assert.equal(current.oldSharing?.[0]?.reason, 'expired')
 })
 
+test('retains an explicit local stop as private ended history without treating it as revocation', () => {
+  const parsed = parsePrivateState({
+    ...state,
+    oldSeeing: [
+      { shareId: 'synthetic-stopped-share', name: 'River', reason: 'stopped', endedAt: 12345 },
+    ],
+  })
+  assert.equal(parsed.oldSeeing?.[0]?.reason, 'stopped')
+})
+
 test('loads legacy shares and bounded authenticated viewer history', () => {
   const legacy = parsePrivateState({
     ...state,

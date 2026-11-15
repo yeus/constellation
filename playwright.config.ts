@@ -5,11 +5,11 @@ import { browserProcessEnvironment } from './scripts/browser-environment.mjs'
 export default defineConfig({
   testDir: './tests',
   testIgnore: 'screenshots.spec.ts',
-  // Real P2P integration shares a local relay; eight concurrent browser
-  // workers caused unrelated share creation and map timing failures.
-  // Keep retries disabled so failures remain visible; override workers explicitly
-  // for performance experiments rather than turning races into passes.
-  workers: 2,
+  // The P2P cases create several browser contexts per test and share one local relay.
+  // Parallel workers make admission/comparison timeouts load-dependent; run the release
+  // gate serially, with retries disabled so genuine transport failures stay visible.
+  // Explicit --workers=N overrides remain available for concurrency stress testing.
+  workers: 1,
   fullyParallel: true,
   use: {
     baseURL: 'http://127.0.0.1:4173',

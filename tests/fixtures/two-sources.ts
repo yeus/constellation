@@ -1,16 +1,52 @@
 import { expect } from '@playwright/test'
 import type { Browser, BrowserContextOptions, Page } from '@playwright/test'
-import { continueInBrowserIfOffered, openPeerList, openShareCreator } from './peer-navigation.ts'
+import {
+  continueInBrowserIfOffered,
+  openPeerList,
+  openShareCreator,
+  pasteLocationLink,
+} from './peer-navigation.ts'
 
 const createNamedShare = async (page: Page, name: string): Promise<string> => {
   await page.goto('/')
   await expect(page.locator('button.recenter-button')).toBeVisible()
   await openShareCreator(page)
-  await page.getByRole('textbox', { name: 'Share a name' }).fill(name)
+  await page.getByRole('textbox', { name: 'Name to share' }).fill(name)
   await page.getByRole('button', { name: 'Create location link' }).click()
   const url = await page.getByLabel('Share link').inputValue({ timeout: 30_000 })
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
   return url
+}
+
+const expectSecureComparison = async (sender: Page, viewer: Page): Promise<void> => {
+  const request = sender.getByRole('region', { name: 'Viewer access request' })
+  try {
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
+      timeout: 30_000,
+    })
+  } catch (error) {
+    // Capture only categorical UI state; no nicknames, fingerprints, addresses or keys.
+    const receiver = await viewer
+      .getByRole('region', { name: 'Location preview' })
+      .evaluate((element) => ({
+        comparisonVisible: Boolean(element.querySelector('.device-comparison-letters')),
+        pending: element.textContent?.includes('Establishing secure comparison') === true,
+        errorVisible: Boolean(element.querySelector('[role="alert"]')),
+        retryVisible: [...element.querySelectorAll('button')].some((button) =>
+          button.textContent?.includes('Retry comparison'),
+        ),
+      }))
+      .catch(() => ({ unavailable: true }))
+    const source = await request
+      .evaluate((element) => ({
+        comparisonVisible: Boolean(element.querySelector('.device-comparison-letters')),
+        pending: element.textContent?.includes('Waiting for the viewer') === true,
+      }))
+      .catch(() => ({ unavailable: true }))
+    throw new Error(`Secure comparison failed: ${JSON.stringify({ receiver, source })}`, {
+      cause: error,
+    })
+  }
 }
 
 const followTwoSources = async (
@@ -23,20 +59,17 @@ const followTwoSources = async (
 ): Promise<void> => {
   await viewer.goto(firstLink)
   await continueInBrowserIfOffered(viewer)
-  await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
-    timeout: 30_000,
-  })
   const firstRequest = first.getByRole('region', { name: 'Viewer access request' })
-  await expect(firstRequest).toBeVisible({ timeout: 30_000 })
+  await expectSecureComparison(first, viewer)
   await firstRequest.getByRole('button', { name: 'Approve this device' }).click()
   await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1')
   await afterFirstFollow?.(viewer)
   const peerList = await openPeerList(viewer)
   await peerList.getByRole('button', { name: 'Add peer' }).click()
-  await viewer.getByRole('textbox', { name: 'Paste location link' }).fill(secondLink)
-  await viewer.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
+  await pasteLocationLink(viewer, secondLink)
+  await continueInBrowserIfOffered(viewer)
   const secondRequest = second.getByRole('region', { name: 'Viewer access request' })
-  await expect(secondRequest).toBeVisible({ timeout: 30_000 })
+  await expectSecureComparison(second, viewer)
   await secondRequest.getByRole('button', { name: 'Approve this device' }).click()
   await expect(viewer.locator('.dock-peers')).toContainText('Seeing 2', { timeout: 30_000 })
 }

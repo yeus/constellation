@@ -4,6 +4,8 @@ import {
   protectActivePeerHistory,
   clearPeerHistory,
   restoreFailedPeerHistoryClear,
+  canRecordLocalStop,
+  hasEndedPeerShare,
 } from './peerHistory.ts'
 
 test('cleanup preserves active peers and links but clears inactive records regardless of their reported time', () => {
@@ -46,4 +48,24 @@ test('cleanup rollback restores old records without discarding notices received 
   assert.equal(restored.get('old'), newNotice)
   assert.equal(restored.get('new')?.eventId, 'third')
   assert.deepEqual(restoreFailedPeerHistoryClear(attempted, before, attempted), before)
+})
+
+test('local stop history does not blacklist a share, while revocation still does', () => {
+  const shareId = 'synthetic-share-id'
+  const local = [{ shareId, reason: 'stopped' as const }]
+  assert.equal(hasEndedPeerShare(local, shareId), false)
+  assert.equal(
+    hasEndedPeerShare([...local, { shareId, reason: 'revoked' as const }], shareId),
+    true,
+  )
+  assert.equal(hasEndedPeerShare([{ shareId, reason: 'expired' as const }], shareId), true)
+})
+
+test('simultaneous sender end retains terminal evidence over local stopped history', () => {
+  const shareId = 'synthetic-share-id'
+  assert.equal(canRecordLocalStop([], shareId), true)
+  assert.equal(canRecordLocalStop([], shareId, 'revoked'), false)
+  assert.equal(canRecordLocalStop([], shareId, 'expired'), false)
+  assert.equal(canRecordLocalStop([{ shareId, reason: 'revoked' }], shareId), false)
+  assert.equal(canRecordLocalStop([{ shareId, reason: 'stopped' }], shareId), true)
 })

@@ -136,6 +136,7 @@ export const dialShareStream = async (
   addresses: readonly string[],
   protocol: string | string[],
   connections: readonly Connection[] = [],
+  signal?: AbortSignal,
 ): Promise<Stream> => {
   const ordered = orderShareAddresses(addresses)
   let lastError: unknown
@@ -143,7 +144,10 @@ export const dialShareStream = async (
     (left, right) => Number(right.direct) - Number(left.direct),
   )) {
     try {
-      return await connection.newStream(protocol, { runOnLimitedConnection: true })
+      return await connection.newStream(protocol, {
+        runOnLimitedConnection: true,
+        ...(signal ? { signal } : {}),
+      })
     } catch (error) {
       lastError = error
     }
@@ -152,6 +156,7 @@ export const dialShareStream = async (
     try {
       return await node.dialProtocol(multiaddr(address), protocol, {
         runOnLimitedConnection: true,
+        ...(signal ? { signal } : {}),
       })
     } catch (error) {
       lastError = error

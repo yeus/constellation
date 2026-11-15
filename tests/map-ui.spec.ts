@@ -247,6 +247,12 @@ test('persists independent local map grouping controls', async ({ page }) => {
   await settings.locator('summary').click()
   const markerGrouping = settings.getByLabel('Group colliding markers')
   const areaGrouping = settings.getByLabel('Group overlapping areas')
+  const groupEnabled = settings.getByLabel('Group nearby peers')
+  await groupEnabled.uncheck()
+  await expect(markerGrouping).toBeEnabled()
+  await expect(areaGrouping).toBeEnabled()
+  await expect(settings.locator('input[type="range"]').first()).toBeEnabled()
+  await expect(settings).toContainText('fallback: individual markers')
   await expect(markerGrouping).toBeChecked()
   await expect(areaGrouping).toBeChecked()
   await markerGrouping.uncheck()
@@ -266,11 +272,13 @@ test('persists independent local map grouping controls', async ({ page }) => {
         JSON.parse(localStorage.getItem('constellation.map-decluttering') ?? '{}'),
       ),
     )
-    .toMatchObject({ groupMarkerCollisions: false, groupUncertaintyOverlap: true })
+    .toMatchObject({ enabled: false, groupMarkerCollisions: false, groupUncertaintyOverlap: true })
   await page.reload()
   await page.getByRole('button', { name: 'Open menu' }).click()
   const restoredSettings = page.locator('.map-decluttering-settings')
   await restoredSettings.locator('summary').click()
+  await expect(restoredSettings.getByLabel('Group nearby peers')).not.toBeChecked()
+  await expect(restoredSettings.getByLabel('Group colliding markers')).toBeEnabled()
   await expect(restoredSettings.getByLabel('Group colliding markers')).not.toBeChecked()
   await expect(restoredSettings.getByLabel('Group overlapping areas')).toBeChecked()
   await expect(restoredSettings).toContainText('Area overlap: 75%')
@@ -815,10 +823,14 @@ test('offers multi-gigabyte map cache limits without downloading them upfront', 
   )
   await page.reload()
   await page.getByRole('button', { name: 'Open menu' }).click()
-  await page.locator('.map-cache-settings summary').click()
-  await expect(
-    page.locator('.map-cache-settings').getByRole('button', { name: '2 GB' }),
-  ).toHaveAttribute('aria-pressed', 'true')
+  const restoredCache = page.locator('.map-cache-settings')
+  if (!(await restoredCache.evaluate((details) => (details as HTMLDetailsElement).open))) {
+    await restoredCache.locator('summary').click()
+  }
+  await expect(restoredCache.getByRole('button', { name: '2 GB' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
 })
 
 test('caches public basemap tiles, reports usage and clears the offline cache', async ({

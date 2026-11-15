@@ -147,16 +147,13 @@ const assertBuiltApp = async (browser, origin, requests) => {
   )
 
   const waitForInvitationHandling = async (fragment) => {
-    await page.waitForFunction(
-      () => {
-        const status = document.querySelector('.connection-dock')?.textContent ?? ''
-        return ['Connecting', 'P2P online', 'Connection error'].some((label) =>
-          status.includes(label),
-        )
-      },
-      undefined,
-      { timeout: 30_000 },
-    )
+    // Incoming links must display consent before a P2P dial. Waiting for the
+    // old connection-dock state is invalid: the receiver has not consented yet.
+    await page
+      .getByRole('dialog', { name: 'Location link introduction' })
+      .waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await page.getByRole('region', { name: 'Location preview' }).count(), 0)
+    assert.equal(await page.getByRole('button', { name: 'See location' }).count(), 1)
     assert.equal(await page.evaluate(() => location.hash), `#share=${fragment}`)
     const body = await page.textContent('body')
     assert.equal(body?.includes('invalid or expired'), false)

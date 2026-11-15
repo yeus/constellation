@@ -21,24 +21,37 @@ export const openShareCreator = async (page: Page): Promise<void> => {
   await peerList.getByRole('button', { name: 'Share location' }).click()
 }
 
-export const continueInBrowserIfOffered = async (page: Page): Promise<void> => {
-  const isAndroidBrowser = await page.evaluate(() => /Android/i.test(navigator.userAgent))
-  if (!isAndroidBrowser) return
-  await page
-    .getByRole('region', { name: 'Open in the Constellation app' })
-    .getByRole('button', { name: 'Continue in browser' })
-    .click({ timeout: 30_000 })
+// Inject a test clipboard without granting unrelated location permissions to the viewer.
+export const setTestClipboardText = async (page: Page, text: string): Promise<void> => {
+  await page.evaluate((value) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: async () => value },
+    })
+  }, text)
 }
 
+export const pasteLocationLink = async (page: Page, url: string): Promise<void> => {
+  await setTestClipboardText(page, url)
+  await page
+    .getByRole('dialog', { name: 'Follow a location' })
+    .getByRole('button', { name: 'Paste link' })
+    .click()
+}
+
+export const continueInBrowserIfOffered = async (page: Page): Promise<void> => {
+  const intro = page.getByRole('dialog', { name: 'Location link introduction' })
+  await intro.getByRole('button', { name: 'See location' }).click({ timeout: 30_000 })
+}
+export const openIncomingLink = async (page: Page, url: string): Promise<void> => {
+  await page.goto(url)
+  await continueInBrowserIfOffered(page)
+}
 export const saveLocationPreview = async (page: Page): Promise<void> => {
   const preview = page.getByRole('region', { name: 'Location preview' })
-  await preview.getByRole('button', { name: 'Keep following' }).click()
-  await page
-    .getByRole('dialog', { name: 'Keep following' })
-    .getByRole('button', { name: 'Save location' })
-    .click()
-  const shareBack = page.getByRole('region', { name: 'Share back invitation' })
-  if (await shareBack.count()) await shareBack.getByRole('button', { name: 'Not now' }).click()
+  await preview.getByRole('button', { name: 'Add peer' }).click({ timeout: 30_000 })
+  const saved = page.getByRole('region', { name: 'Peer added' })
+  if (await saved.count()) await saved.getByRole('button', { name: 'Not now' }).click()
 }
 
 export const openPeerFilterMenu = async (page: Page): Promise<void> => {

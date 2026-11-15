@@ -1,7 +1,13 @@
 import { expect, test } from '@playwright/test'
 
 import { createShareInvitation } from '../src/sharing/shareLink.ts'
-import { expandPeerDetails, openPeerList, openShareCreator } from './fixtures/peer-navigation.ts'
+import {
+  expandPeerDetails,
+  openPeerList,
+  openShareCreator,
+  pasteLocationLink,
+  setTestClipboardText,
+} from './fixtures/peer-navigation.ts'
 
 test('rejects an expired pasted link before opening a viewer session', async ({ page }) => {
   const expired = await createShareInvitation({
@@ -14,9 +20,9 @@ test('rejects an expired pasted link before opening a viewer session', async ({ 
   await page.goto('/')
   const peerList = await openPeerList(page)
   await peerList.getByRole('button', { name: 'Add peer' }).click()
-  await page.getByLabel('Paste location link').fill(expired.url)
-  await page.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
-  await expect(page.locator('.toast')).toContainText(/not a valid location link|expired/i)
+  await pasteLocationLink(page, expired.url)
+  const follow = page.getByRole('dialog', { name: 'Follow a location' })
+  await expect(follow.getByRole('alert')).toContainText(/expired/i)
   await expect(page.getByText('Seeing 1')).toHaveCount(0)
 })
 
@@ -53,12 +59,16 @@ test('share setup keeps link choices on one page and explains privacy without lo
   await expect(
     form.getByRole('button', { name: 'Create location link', exact: true }),
   ).toBeVisible()
-  await form.getByLabel('Share a name').fill('Synthetic River')
+  await expect(form.getByRole('checkbox', { name: 'Share a name' })).toHaveCount(0)
+  await expect(form.getByRole('textbox', { name: 'Name to share' })).toHaveValue(
+    /^[A-Z][a-z]+ [A-Z][a-z]+$/,
+  )
+  await form.getByRole('textbox', { name: 'Name to share' }).fill('Synthetic River')
   await form.getByRole('button', { name: 'City 20 km radius', exact: true }).click()
   await form.getByRole('button', { name: '8 hours', exact: true }).click()
-  await form.getByRole('button', { name: 'No share cap', exact: true }).click()
+  await form.getByRole('button', { name: 'No limit', exact: true }).click()
   await expect(
-    form.getByRole('button', { name: 'No share cap', exact: true }).locator('svg'),
+    form.getByRole('button', { name: 'No limit', exact: true }).locator('svg'),
   ).toHaveCount(1)
   await form.getByRole('button', { name: 'More info', exact: true }).click()
   const privacy = page.getByRole('dialog', { name: 'Your location stays between devices' })
@@ -68,12 +78,12 @@ test('share setup keeps link choices on one page and explains privacy without lo
   await expect(form).not.toBeVisible()
   await page.keyboard.press('Escape')
   await expect(form.getByRole('button', { name: 'More info', exact: true })).toBeFocused()
-  await expect(form.getByLabel('Share a name')).toHaveValue('Synthetic River')
+  await expect(form.getByRole('textbox', { name: 'Name to share' })).toHaveValue('Synthetic River')
   await expect(form.getByRole('button', { name: '8 hours', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
-  await expect(form.getByRole('button', { name: 'No share cap', exact: true })).toHaveAttribute(
+  await expect(form.getByRole('button', { name: 'No limit', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
@@ -110,28 +120,37 @@ test('precision options keep their order and explain each choice without losing 
   await expect(options.nth(1)).toHaveAttribute('aria-pressed', 'true')
 })
 
-test('device behavior lives in Settings and browser background sharing is visibly unavailable', async ({
+test('browser retains the requested background mode but safely applies a foreground fallback', async ({
   page,
 }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Open menu', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true })
-  await expect(settings.getByRole('button', { name: /In background/ })).toBeDisabled()
-  await expect(settings).toContainText('native Android app')
-  await expect(settings.getByRole('button', { name: /While app is open/ })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
+  const background = settings.getByRole('button', { name: /In background/ })
+  await expect(background).toBeEnabled()
+  await background.click()
+  await expect(background).toHaveAttribute('aria-pressed', 'true')
+  await expect(settings).toContainText('Background location is available only in the Android app')
   await settings.getByRole('button', { name: 'Save settings', exact: true }).click()
   await expect(settings).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+        const { loadLocalSharingPreference } = await import('../src/sharing/sharingPreference.ts')
+        return {
+          requested: loadLocalSharingPreference(window.localStorage)?.publication,
+          effective: (await createBrowserPrivateStore().load())?.sharingBehavior?.publication,
+        }
+      }),
+    )
+    .toEqual({ requested: 'background', effective: 'foreground' })
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: 'Open menu', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await expect(settings.getByRole('button', { name: /While app is open/ })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
+  await expect(background).toHaveAttribute('aria-pressed', 'true')
+  await expect(settings).toContainText('Effective fallback')
 })
 
 test('offers direct app downloads to Android and Linux web visitors', async ({ browser }) => {
@@ -238,6 +257,24 @@ test('copies bounded session diagnostics from the top-left menu', async ({ page 
   await expect(page.getByRole('status').last()).toContainText('Copied logs to clipboard')
 })
 
+test('shares sanitized session logs as a downloadable text file without the clipboard', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Share logs as file' }).click(),
+  ])
+  expect(download.suggestedFilename()).toMatch(/^constellation-logs-.*\.txt$/)
+  const stream = await download.createReadStream()
+  let content = ''
+  for await (const part of stream) content += part.toString()
+  expect(content).toContain('Constellation session logs')
+  expect(content).toContain('Runtime: browser')
+  expect(content).toContain('app.started')
+})
+
 test('shows and copies build and browser diagnostics from the top-left menu', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -322,6 +359,57 @@ test('configures a privacy-preserving location share', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Create location link' })).toBeEnabled()
 })
 
+test('QR sharing explains automatic closing and keeps actions clear of the code on phones', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 640 })
+  await page.context().grantPermissions(['geolocation'])
+  await page.context().setGeolocation({ latitude: 32.7157, longitude: -117.1611 })
+  await page.goto('/')
+  await openShareCreator(page)
+  await page.getByRole('button', { name: 'Create location link' }).click()
+  const qr = page.getByRole('dialog', { name: 'Share this QR code' })
+  await expect(qr).toBeVisible({ timeout: 30_000 })
+  await expect(qr).toContainText('Waiting for a viewer to connect')
+  await expect(qr).toContainText('closes automatically')
+  const qrButton = qr.getByRole('button', { name: 'Enlarge QR code' })
+  const shareButton = qr.getByRole('button', { name: 'Share via system menu' })
+  const image = qr.locator('img.share-ready__qr')
+  await expect(image).toBeVisible()
+  const code = await qrButton.boundingBox()
+  const pixels = await image.boundingBox()
+  const share = await shareButton.boundingBox()
+  expect(code).not.toBeNull()
+  expect(pixels).not.toBeNull()
+  expect(share).not.toBeNull()
+  expect(Math.abs(code!.width - code!.height)).toBeLessThanOrEqual(2)
+  expect(Math.abs(pixels!.width - pixels!.height)).toBeLessThanOrEqual(2)
+  expect(Math.abs(code!.width - pixels!.width)).toBeLessThanOrEqual(2)
+  expect(code!.y + code!.height).toBeLessThan(share!.y)
+  await qrButton.click()
+  const enlarged = await qr.getByRole('button', { name: 'Reduce QR code' }).boundingBox()
+  expect(enlarged).not.toBeNull()
+  expect(Math.abs(enlarged!.width - enlarged!.height)).toBeLessThanOrEqual(2)
+  expect(enlarged!.width).toBeGreaterThanOrEqual(code!.width)
+  await expect(qr.getByRole('button', { name: 'Close' })).toBeVisible()
+  // On a wide desktop dialog the white QR surface must still be square and centered,
+  // instead of stretching across the sheet with empty space next to the image.
+  await qr.getByRole('button', { name: 'Reduce QR code' }).click()
+  await page.setViewportSize({ width: 800, height: 900 })
+  const widePanel = await qr.boundingBox()
+  const wideCode = await qr.getByRole('button', { name: 'Enlarge QR code' }).boundingBox()
+  const wideImage = await image.boundingBox()
+  expect(widePanel).not.toBeNull()
+  expect(wideCode).not.toBeNull()
+  expect(wideImage).not.toBeNull()
+  expect(Math.abs(wideCode!.width - wideCode!.height)).toBeLessThanOrEqual(2)
+  expect(Math.abs(wideCode!.width - wideImage!.width)).toBeLessThanOrEqual(2)
+  expect(wideCode!.width).toBeLessThan(widePanel!.width - 40)
+  expect(
+    Math.abs(wideCode!.x + wideCode!.width / 2 - widePanel!.x - widePanel!.width / 2),
+  ).toBeLessThanOrEqual(2)
+})
+
 test('follows live system light and dark preferences', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
@@ -346,24 +434,101 @@ test('shows local position without publishing and offers link paste', async ({ p
   await expect(page.getByText('Sharing 0')).toBeVisible()
   const peerList = await openPeerList(page)
   await peerList.getByRole('button', { name: 'Add peer' }).click()
-  await expect(page.getByRole('textbox', { name: 'Paste location link' })).toBeVisible()
+  const follow = page.getByRole('dialog', { name: 'Follow a location' })
+  await expect(follow.getByRole('button', { name: 'Paste link' })).toBeVisible()
+  await expect(follow.getByRole('button', { name: 'View location' })).toHaveCount(0)
+  await expect(follow.getByRole('textbox')).toHaveCount(0)
 })
 
-test('lets the sender optionally include a name without device behavior controls', async ({
+test('pasting a link opens consent; an empty or invalid clipboard keeps the dialog open', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const peers = await openPeerList(page)
+  await peers.getByRole('button', { name: 'Add peer' }).click()
+  const follow = page.getByRole('dialog', { name: 'Follow a location' })
+  const paste = follow.getByRole('button', { name: 'Paste link' })
+  await setTestClipboardText(page, '')
+  await paste.click()
+  await expect(follow.getByRole('alert')).toContainText('empty')
+
+  await setTestClipboardText(page, 'not a location link')
+  await paste.click()
+  await expect(follow.getByRole('alert')).toContainText('valid location link')
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: async () => {
+          throw new DOMException('Denied', 'NotAllowedError')
+        },
+      },
+    })
+  })
+  await paste.click()
+  await expect(follow.getByRole('alert')).toContainText('Clipboard access')
+
+  const invitation = await createShareInvitation({
+    baseUrl: 'http://127.0.0.1:4173/',
+    sourcePeerId: 'synthetic-source',
+    addresses: ['/dns4/relay.example/tcp/443/wss/p2p/synthetic'],
+    expiresAt: null,
+  })
+  await pasteLocationLink(page, invitation.url)
+  await expect(follow).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Location link introduction' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Location preview' })).toHaveCount(0)
+})
+
+test('Paste link reads the real permitted browser clipboard before presenting consent', async ({
+  page,
+}) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/')
+  const invitation = await createShareInvitation({
+    baseUrl: 'http://127.0.0.1:4173/',
+    sourcePeerId: 'synthetic-source',
+    addresses: ['/dns4/relay.example/tcp/443/wss/p2p/synthetic'],
+    expiresAt: null,
+  })
+  await page.evaluate((url) => navigator.clipboard.writeText(url), invitation.url)
+  const peers = await openPeerList(page)
+  await peers.getByRole('button', { name: 'Add peer' }).click()
+  await page
+    .getByRole('dialog', { name: 'Follow a location' })
+    .getByRole('button', { name: 'Paste link' })
+    .click()
+  await expect(page.getByRole('dialog', { name: 'Location link introduction' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Location preview' })).toHaveCount(0)
+})
+
+test('shares a fresh nickname without an opt-in toggle and explains link privacy', async ({
   page,
 }) => {
   await page.goto('/')
   await openShareCreator(page)
-
-  await page.getByRole('textbox', { name: 'Share a name' }).fill('River')
-  await expect(page.getByRole('button', { name: /While app is open|In background/ })).toHaveCount(0)
+  await expect(page.getByRole('checkbox', { name: 'Share a name' })).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: 'Name to share' })).toHaveValue(
+    /^[A-Z][a-z]+ [A-Z][a-z]+$/,
+  )
+  await page.getByRole('button', { name: 'Explain shared nicknames' }).click()
+  const help = page.getByRole('dialog', { name: 'Private nicknames for sharing' })
+  await expect(help).toContainText('same link')
+  await expect(help).toContainText('Different links')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: 'Explain shared nicknames' })).toBeFocused()
+  const name = page.getByRole('textbox', { name: 'Name to share' })
+  await name.fill('')
+  await expect(page.getByRole('button', { name: 'Create location link' })).toBeDisabled()
+  await name.fill('Safe alias')
   await expect(page.getByRole('button', { name: 'Create location link' })).toBeEnabled()
 })
 
 test('new share forms get a fresh editable suggestion and dice regeneration', async ({ page }) => {
   await page.goto('/')
   await openShareCreator(page)
-  const input = page.getByLabel('Share a name', { exact: true })
+  const input = page.getByRole('textbox', { name: 'Name to share' })
   const first = await input.inputValue()
   expect(first).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/)
   await page.getByRole('button', { name: 'Generate another name' }).click()
@@ -372,7 +537,24 @@ test('new share forms get a fresh editable suggestion and dice regeneration', as
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
   await openShareCreator(page)
   await expect(input).not.toHaveValue('Private choice')
+  await expect(input).not.toHaveValue(first)
   await expect(input).toHaveValue(/^[A-Z][a-z]+ [A-Z][a-z]+$/)
+})
+
+test('new share automatically discloses the generated link nickname', async ({ page }) => {
+  await page.goto('/')
+  await openShareCreator(page)
+  const initialName = await page.getByRole('textbox', { name: 'Name to share' }).inputValue()
+  expect(initialName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/)
+  await page.getByRole('button', { name: 'Create location link' }).click()
+  await expect(page.getByRole('dialog', { name: 'Share this QR code' })).toBeVisible({
+    timeout: 30_000,
+  })
+  const shareName = await page.evaluate(async () => {
+    const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+    return (await createBrowserPrivateStore().load())?.shares[0]?.name
+  })
+  expect(shareName).toBe(initialName)
 })
 
 test('nests pending share-back under its peer and offers explicit name adoption', async ({
@@ -392,6 +574,7 @@ test('nests pending share-back under its peer and offers explicit name adoption'
     createApp({
       setup: () => () =>
         h(PeerListSheet, {
+          locations: [],
           filter: 'all',
           paused: false,
           viewableIds: [],
@@ -470,6 +653,84 @@ test('nests pending share-back under its peer and offers explicit name adoption'
   await expect(renamed.locator('.peer-list__summary-name')).toHaveText('Forest')
   await expect(renamed.locator('.peer-avatar')).toContainText('F')
 })
+test('ranks received peers by estimated distance plus their uncertainty radius', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const vueModuleUrl = performance
+      .getEntriesByType('resource')
+      .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+    if (!vueModuleUrl) throw new Error('Vue module was not loaded.')
+    const { createApp, h, reactive } = await import(/* @vite-ignore */ vueModuleUrl)
+    const { default: PeerListSheet } = await import('../src/components/PeerListSheet.vue')
+    const state = reactive({
+      locations: [
+        {
+          id: 'own',
+          isOwn: true,
+          latitude: 32.72,
+          longitude: -117.16,
+          precision: 'exact',
+          accuracyMeters: 5,
+        },
+        {
+          id: 'near',
+          latitude: 32.7201,
+          longitude: -117.16,
+          precision: 'approximate',
+          radiusMeters: 2000,
+        },
+        { id: 'far', latitude: 32.723, longitude: -117.16, precision: 'exact', accuracyMeters: 10 },
+      ],
+    })
+    const follows = [
+      { shareId: 'near', peerId: 'near-peer', localName: 'Alpha near', displayName: 'Alpha near' },
+      {
+        shareId: 'far',
+        peerId: 'far-peer',
+        localName: 'Zulu precise',
+        displayName: 'Zulu precise',
+      },
+    ].map((follow) => ({
+      ...follow,
+      color: '#438ec9',
+      connected: true,
+      status: 'live',
+      saved: true,
+      expiresAt: null,
+      updatesReceived: 1,
+      returnPromptSeen: true,
+    }))
+    const container = document.createElement('div')
+    container.id = 'proximity-ranking-fixture'
+    container.addEventListener('update-radius', () => {
+      state.locations[1]!.radiusMeters = 5
+    })
+    document.body.append(container)
+    createApp({
+      setup: () => () =>
+        h(PeerListSheet, {
+          filter: 'viewing',
+          paused: false,
+          viewableIds: ['near', 'far'],
+          shareBackBusy: false,
+          stoppedViewers: [],
+          oldShares: [],
+          oldFollowing: [],
+          shares: [],
+          following: follows,
+          locations: state.locations,
+        }),
+    }).mount(container)
+  })
+  const names = page.locator('#proximity-ranking-fixture .peer-list__summary-name')
+  await expect(names).toHaveText(['Zulu precise', 'Alpha near'])
+  await page.locator('#proximity-ranking-fixture').evaluate((element) => {
+    element.dispatchEvent(new Event('update-radius'))
+  })
+  await expect(names).toHaveText(['Alpha near', 'Zulu precise'])
+})
 
 test('hides Share back for authenticated outgoing grants and keeps it for viewing-only peers', async ({
   page,
@@ -528,6 +789,7 @@ test('hides Share back for authenticated outgoing grants and keeps it for viewin
     createApp({
       setup: () => () =>
         h(PeerListSheet, {
+          locations: [],
           filter: 'all',
           paused: false,
           viewableIds: following.map(({ shareId }) => shareId),
@@ -631,6 +893,7 @@ test('peer list uses distinct main actions, one filter menu, and compact details
     createApp({
       setup: () => () =>
         h(PeerListSheet, {
+          locations: [],
           filter: state.filter,
           paused: false,
           viewableIds: ['synthetic-incoming'],
@@ -729,9 +992,18 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   await peer.getByRole('button', { name: 'Show River on map' }).click()
   expect(await peer.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false)
   await peer.locator('.peer-list__summary').click()
+  await expect(peer.locator('.peer-list__direction-actions')).toHaveCount(0)
+  await expect(peer.locator('.peer-list__direction .peer-link-item__colors')).toHaveCount(1)
+  await expect(peer.locator('.peer-list__section--connection .peer-link-item__colors')).toHaveCount(
+    0,
+  )
+  await expect(peer.locator('.peer-list__private-names')).toContainText('Unnamed viewer device')
+  await expect(peer.locator('.peer-list__private-names')).toContainText(
+    'Local label for a device viewing your location',
+  )
   await expect(peer.locator('.peer-list__direction')).toHaveCount(2)
   await expect(peer.getByRole('button', { name: 'Revoke link' })).toHaveCount(0)
-  await peer.getByRole('button', { name: 'Manage link' }).click()
+  await peer.locator('.peer-list__section--link > summary').click()
   await expect(peer.getByRole('button', { name: 'Revoke link' })).toBeVisible()
   const sections = peer.locator('.peer-list__section')
   await expect(sections.locator(':scope > summary')).toHaveCount(4)
@@ -755,7 +1027,7 @@ test('peer list uses distinct main actions, one filter menu, and compact details
     .check()
   await expect(traceDialog).toContainText('Validated update #3')
   await traceDialog.getByRole('button', { name: 'Clear history' }).click()
-  await expect(traceDialog).toContainText('No messages received')
+  await expect(traceDialog).toContainText('No messages in saved history')
   await traceDialog.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(
     peer.getByRole('button', { name: 'View received messages from River' }),
@@ -804,6 +1076,7 @@ test('selected group scope lists a Local entry and offers local settings', async
     createApp({
       setup: () => () =>
         h(PeerListSheet, {
+          locations: [],
           filter: 'group',
           paused: false,
           viewableIds: ['synthetic-followed'],
@@ -896,7 +1169,9 @@ test('filter menu floats above an empty peer list instead of being clipped', asy
   await page.screenshot({ path: test.info().outputPath('peer-list-filter-menu.png') })
 })
 
-test('Android setup requires permissions or an explicit foreground choice', async ({ page }) => {
+test('Android sharing preferences stay editable with missing permissions and show the runtime fallback', async ({
+  page,
+}) => {
   await page.goto('/')
   await page.evaluate(async () => {
     const vueUrl = performance
@@ -906,6 +1181,9 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
     const { createApp, h, reactive } = await import(/* @vite-ignore */ vueUrl)
     const { default: SettingsSheet } = await import('../src/components/SettingsSheet.vue')
     const state = reactive({
+      backgroundFollowing: true,
+      backgroundReceiverActive: false,
+      savedFollowCount: 0,
       permissions: {
         location: false,
         background: false,
@@ -931,6 +1209,9 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
           review: true,
           hasShares: false,
           ...state,
+          onSetBackgroundFollowing: (enabled: boolean) => {
+            state.backgroundFollowing = enabled
+          },
           onOpenSystemSettings: (target: string) => {
             container.dataset.systemSettings = target
           },
@@ -942,35 +1223,139 @@ test('Android setup requires permissions or an explicit foreground choice', asyn
               servicesEnabled: true,
             }
           },
-          onSave: (behavior: { publication: string }) => {
+          onSave: (behavior: { publication: string; battery: string; network: string }) => {
             container.dataset.publication = behavior.publication
+            container.dataset.battery = behavior.battery
+            container.dataset.network = behavior.network
             state.error = 'Synthetic save failure; retry is available.'
           },
         }),
     }).mount(container)
   })
   const setup = page.getByRole('dialog', { name: 'Set up sharing' })
-  await expect(setup).toContainText('Background sharing is the Android default')
+  const backgroundFollowing = setup.getByRole('checkbox', {
+    name: "Keep receiving saved peers' locations in the background",
+  })
+  await expect(backgroundFollowing).toBeChecked()
+  await expect(backgroundFollowing).toBeEnabled()
+  await backgroundFollowing.uncheck()
+  await expect(backgroundFollowing).not.toBeChecked()
+  await backgroundFollowing.check()
+  await expect(backgroundFollowing).toBeChecked()
+  await expect(setup).toContainText('Effective fallback')
   await expect(setup).toContainText('Battery saver')
   await expect(setup).toContainText('Data Saver')
   await expect(setup).toContainText('Optimized — may delay updates')
   await setup.getByRole('button', { name: 'Change Battery saver' }).click()
   await expect(page.locator('[data-system-settings="power-saver"]')).toHaveCount(1)
-  await expect(setup.getByRole('button', { name: /In background/ })).toBeDisabled()
-  await expect(setup.getByRole('button', { name: 'Save settings' })).toBeDisabled()
-  await setup.getByRole('button', { name: 'Use while app is open' }).click()
-  await expect(page.locator('[data-publication="foreground"]')).toHaveCount(1)
-  await expect(setup.getByRole('alert')).toContainText('Synthetic save failure')
-  await setup.getByRole('button', { name: 'Enable background sharing' }).click()
   await expect(setup.getByRole('button', { name: /In background/ })).toBeEnabled()
+  await expect(setup.getByRole('button', { name: 'Save settings' })).toBeEnabled()
+  await expect(setup).toContainText(
+    'Effective fallback: location sharing only while the app is open',
+  )
+  await setup.getByRole('button', { name: 'Battery saver', exact: false }).first().click()
+  await setup.getByRole('checkbox', { name: /Pause updates on metered networks/ }).check()
   await setup.getByRole('button', { name: 'Save settings' }).click()
   await expect(page.locator('[data-publication="background"]')).toHaveCount(1)
+  await expect(page.locator('[data-battery="saver"]')).toHaveCount(1)
+  await expect(page.locator('[data-network="pause-when-metered"]')).toHaveCount(1)
+  await expect(setup.getByRole('alert')).toContainText('Synthetic save failure')
+  await setup.getByRole('button', { name: 'Enable background sharing' }).click()
+  await expect(setup).not.toContainText(
+    'Effective fallback: location sharing only while the app is open',
+  )
+  await expect(setup.getByRole('button', { name: /In background/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(setup.getByRole('button', { name: 'Save settings' })).toBeEnabled()
   await setup.getByRole('button', { name: 'Save settings' }).focus()
   await page.keyboard.press('Tab')
   await expect(setup.getByRole('button', { name: 'Close settings' })).toBeFocused()
 })
+test('Android background-following preference survives reload and peer/receiver state changes', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.evaluate(() =>
+    window.localStorage.removeItem('constellation.background-following-enabled'),
+  )
+  const mount = async () =>
+    page.evaluate(async () => {
+      const vueUrl = performance
+        .getEntriesByType('resource')
+        .find((entry) => entry.name.includes('/node_modules/.vite/deps/vue.js'))?.name
+      if (!vueUrl) throw new Error('Vue was not loaded.')
+      const { createApp, h, reactive } = await import(/* @vite-ignore */ vueUrl)
+      const { default: SettingsSheet } = await import('../src/components/SettingsSheet.vue')
+      const { readBackgroundFollowingPreference, persistBackgroundFollowingPreference } =
+        await import('../src/android/backgroundFollowingPreference.ts')
+      const state = reactive({
+        preference: readBackgroundFollowingPreference(window.localStorage),
+        receiverActive: false,
+        savedFollowCount: 0,
+      })
+      const host = document.createElement('div')
+      host.dataset.testid = 'background-following-host'
+      document.body.append(host)
+      const simulate = document.createElement('button')
+      simulate.textContent = 'Simulate peer reload and receiver handoff'
+      simulate.dataset.testid = 'simulate-receiver'
+      simulate.addEventListener('click', () => {
+        state.receiverActive = !state.receiverActive
+        state.savedFollowCount = state.receiverActive ? 2 : 0
+      })
+      document.body.append(simulate)
+      createApp({
+        setup: () => () =>
+          h(SettingsSheet, {
+            behavior: { publication: 'foreground', battery: 'balanced', network: 'always' },
+            isAndroid: true,
+            review: false,
+            hasShares: false,
+            busy: false,
+            backgroundFollowing: state.preference,
+            backgroundReceiverActive: state.receiverActive,
+            savedFollowCount: state.savedFollowCount,
+            onSetBackgroundFollowing: (enabled: boolean) => {
+              state.preference = enabled
+              if (!persistBackgroundFollowingPreference(window.localStorage, enabled)) {
+                throw new Error('Test WebView storage write failed.')
+              }
+            },
+          }),
+      }).mount(host)
+    })
+  await mount()
+  const checkbox = () =>
+    page.getByRole('dialog', { name: 'Settings' }).getByRole('checkbox', {
+      name: "Keep receiving saved peers' locations in the background",
+    })
+  // Check the default first, with neither saved peers nor an active receiver.
+  await expect(checkbox()).toBeChecked()
+  await page.getByTestId('simulate-receiver').evaluate((button: HTMLElement) => button.click())
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Android receiver: running' }),
+  ).toBeVisible()
+  await expect(checkbox()).toBeChecked()
+  await checkbox().uncheck()
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'receiver is still running' }),
+  ).toBeVisible()
+  await page.reload()
+  await mount()
+  await expect(checkbox()).not.toBeChecked()
+  await checkbox().check()
+  await expect(checkbox()).toBeChecked()
+  await page.reload()
+  await mount()
+  await expect(checkbox()).toBeChecked()
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Android receiver: not running' }),
+  ).toBeVisible()
+})
 
-test('offers an Android app handoff on incoming links without starting own sharing', async ({
+test('Android browser opens shared locations directly after explicit consent without GPS prompts', async ({
   browser,
   baseURL,
 }, testInfo) => {
@@ -989,19 +1374,27 @@ test('offers an Android app handoff on incoming links without starting own shari
     viewport: { width: 390, height: 844 },
   })
   const desktopViewerContext = await browser.newContext({ baseURL })
+  await androidViewerContext.addInitScript(() => {
+    const state = window as typeof window & { ownGpsRequests: number }
+    state.ownGpsRequests = 0
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        watchPosition: () => {
+          state.ownGpsRequests += 1
+          return 1
+        },
+        getCurrentPosition: () => {
+          state.ownGpsRequests += 1
+        },
+        clearWatch: () => undefined,
+      },
+    })
+  })
   try {
     const source = await sourceContext.newPage()
     const androidViewer = await androidViewerContext.newPage()
     const desktopViewer = await desktopViewerContext.newPage()
-    await androidViewer.addInitScript(() => {
-      Object.defineProperty(navigator, 'clipboard', {
-        value: {
-          writeText: async (value: string) => {
-            ;(window as typeof window & { copiedHandoffLink?: string }).copiedHandoffLink = value
-          },
-        },
-      })
-    })
     await source.goto('/')
     await openShareCreator(source)
     await source.getByRole('button', { name: '10', exact: true }).click()
@@ -1010,67 +1403,36 @@ test('offers an Android app handoff on incoming links without starting own shari
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
 
     await androidViewer.goto(url)
-    const handoff = androidViewer.getByRole('region', {
-      name: 'Open in the Constellation app',
-    })
-    const preview = androidViewer.getByRole('region', { name: 'Location preview' })
-    await expect(handoff).toBeVisible({ timeout: 30_000 })
-    await expect(handoff).toContainText('does not start sharing your location')
-    await expect(handoff).toContainText('Copy the link')
-    await expect(handoff.getByRole('button', { name: 'Open in app' })).toBeVisible()
-    await expect(handoff.getByRole('button', { name: 'Copy link' })).toBeVisible()
-    await expect(handoff.getByRole('link', { name: 'Get the app' })).toHaveAttribute(
-      'href',
-      'https://github.com/yeus/constellation/releases/latest',
-    )
-    await expect(handoff.getByRole('button', { name: 'Continue in browser' })).toBeVisible()
-    await expect(preview).toHaveCount(0)
-    expect(
-      await androidViewer.evaluate(
-        async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
-      ),
-    ).toBe('prompt')
-
-    await handoff.getByRole('button', { name: 'Copy link' }).click()
-    await expect(
-      androidViewer.getByText('Link copied. Reopen it after installing the app.'),
-    ).toBeVisible()
-    expect(
-      await androidViewer.evaluate(
-        () => (window as typeof window & { copiedHandoffLink?: string }).copiedHandoffLink,
-      ),
-    ).toBe(url)
-    expect(
-      await androidViewer.evaluate(
-        async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
-      ),
-    ).toBe('prompt')
-
-    await handoff.getByRole('button', { name: 'Open in app' }).click()
-    await expect(androidViewer).toHaveURL(url)
-    await expect(handoff).toBeVisible({ timeout: 30_000 })
-    await expect(preview).toHaveCount(0)
-
-    await handoff.getByRole('button', { name: 'Continue in browser' }).click()
-    await expect(handoff).toHaveCount(0)
-    await expect(preview).toBeVisible({ timeout: 30_000 })
-    expect(
-      await androidViewer.evaluate(
-        async () => (await navigator.permissions.query({ name: 'geolocation' })).state,
-      ),
-    ).toBe('prompt')
+    const intro = androidViewer.getByRole('dialog', { name: 'Location link introduction' })
+    await expect(intro).toBeVisible()
+    await expect(intro).toContainText('Your location will not be shared')
+    await expect(intro.getByRole('button')).toHaveCount(2)
+    await expect(androidViewer.getByRole('region', { name: 'Location preview' })).toHaveCount(0)
+    await intro.getByRole('button', { name: 'Cancel' }).click()
+    await expect(intro).toHaveCount(0)
 
     await androidViewer.goto(url)
-    await expect(preview).toBeVisible({ timeout: 30_000 })
-    await expect(handoff).toHaveCount(0)
+    await expect(intro).toBeVisible()
+    await intro.getByRole('button', { name: 'See location' }).click()
+    const preview = androidViewer.getByRole('region', { name: 'Location preview' })
+    await expect(preview.getByRole('button', { name: 'Add peer' })).toBeVisible({
+      timeout: 30_000,
+    })
+    expect(
+      await androidViewer.evaluate(
+        () => (window as typeof window & { ownGpsRequests: number }).ownGpsRequests,
+      ),
+    ).toBe(0)
 
+    await androidViewer.goto(url)
+    await expect(intro).toBeVisible()
     await desktopViewer.goto(url)
+    const desktopIntro = desktopViewer.getByRole('dialog', { name: 'Location link introduction' })
+    await expect(desktopIntro).toBeVisible()
+    await desktopIntro.getByRole('button', { name: 'See location' }).click()
     await expect(desktopViewer.getByRole('region', { name: 'Location preview' })).toBeVisible({
       timeout: 30_000,
     })
-    await expect(
-      desktopViewer.getByRole('region', { name: 'Open in the Constellation app' }),
-    ).toHaveCount(0)
   } finally {
     await desktopViewerContext.close()
     await androidViewerContext.close()

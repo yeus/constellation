@@ -600,6 +600,66 @@ button {
   text-transform: uppercase;
 }
 
+.incoming-invitation-backdrop {
+  position: fixed;
+  z-index: 12;
+  inset: 0;
+  background: var(--surface-strong);
+  display: flex;
+  justify-content: center;
+}
+
+.incoming-invitation {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 36rem);
+  min-height: 100dvh;
+  padding: calc(2.3rem + env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+    calc(1.7rem + env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+  overflow-y: auto;
+}
+
+.incoming-invitation__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.incoming-invitation h1 {
+  font-size: clamp(1.7rem, 5vw, 2.3rem);
+  line-height: 1.16;
+  margin: 0;
+}
+
+.incoming-invitation__body p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.incoming-invitation__body strong {
+  color: var(--text);
+}
+
+.incoming-invitation__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.incoming-status-card {
+  width: min(25rem, calc(100% - 1.25rem));
+  padding: 0.9rem 1rem;
+}
+
+.incoming-status-card .device-comparison-letters {
+  display: block;
+  margin: 0.6rem 0;
+  font-size: clamp(1.6rem, 6vw, 2.2rem);
+}
+
 .sheet-backdrop {
   position: fixed;
   z-index: 10;
@@ -790,23 +850,54 @@ legend {
 }
 
 .share-ready__qr {
-  width: min(17.5rem, 100%);
-  background: #ffffff;
+  display: block;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1;
+  background: #fff;
 }
 
 .share-ready__qr-button {
+  display: block;
+  box-sizing: border-box;
+  width: min(100%, 21rem);
+  aspect-ratio: 1;
+  margin: 0 auto 0.75rem;
   padding: 0;
+  overflow: hidden;
   border: 0;
-  background: #ffffff;
+  border-radius: 0.5rem;
+  background: #fff;
   cursor: zoom-in;
 }
 
-.share-ready__qr--enlarged {
-  width: 100%;
+.share-ready__waiting {
+  margin: 0 0 0.75rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 
 .share-ready__qr-button[aria-pressed='true'] {
+  width: min(100%, 32rem);
   cursor: zoom-out;
+}
+
+.follow-link-actions > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.follow-link-actions svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.follow-link-error {
+  margin: 0.75rem 0 0;
+  color: var(--warning-text);
 }
 
 .share-ready__link {
@@ -840,6 +931,34 @@ legend {
 .runtime-note {
   margin: 0.65rem 0 0;
   text-align: center;
+}
+
+.device-location-notice {
+  position: absolute;
+  z-index: 7;
+  top: calc(5rem + env(safe-area-inset-top));
+  left: 0.75rem;
+  right: 0.75rem;
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 0.9rem;
+  background: var(--surface-strong);
+  box-shadow: 0 5px 20px var(--sheet-shadow);
+  font-size: 0.8rem;
+}
+
+.device-location-notice p {
+  margin: 0 0 0.45rem;
+}
+.device-location-notice button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .toast {

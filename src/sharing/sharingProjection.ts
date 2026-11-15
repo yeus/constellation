@@ -4,8 +4,9 @@ import type { LocationObservationV1 } from '../location/locationObservation.ts'
 import type { MapCamera } from '../map/mapCamera.ts'
 import type { ComparisonBudget, DeviceComparison } from './deviceComparison.ts'
 import { bytesToBase64Url } from './encoding.ts'
+import { minimalLastKnownObservation } from './lastKnownObservation.ts'
 import type { PeerNamePreference } from './peerNames.ts'
-import { displayedPeerName } from './peerNames.ts'
+import { displayedPeerName, displayedFollowName } from './peerNames.ts'
 import type { PendingStopNotice, PrivateState, StoppedViewerRecord } from './privateStore.ts'
 import { END_NOTICE_RETENTION_MS } from './shareLifecycle.ts'
 import type { NetworkRestriction } from './sharePolicy.ts'
@@ -47,22 +48,27 @@ type SavedFollowEntry = {
   url: string
   localName: string
   sourceName?: string
+  linkSourceName?: string
   usesPrivateName?: boolean
   color: string
   saved: boolean
   followedAt?: number
   returnPromptSeen?: boolean
   approvalDenied?: boolean
+  approvalPending?: boolean
   terminal?: 'expired' | 'revoked' | 'unavailable'
   endedAt?: number
   traceEnabled?: boolean
   trace?: readonly FollowTraceEvent[]
+  expiresAt?: number | null
+  lastObservation?: LocationObservationV1
 }
 
 const savedFollowRecord = (entry: SavedFollowEntry): PrivateState['followed'][number] => ({
   url: entry.url,
   localName: entry.localName,
   ...(entry.sourceName ? { sourceName: entry.sourceName } : {}),
+  ...(entry.linkSourceName ? { linkSourceName: entry.linkSourceName } : {}),
   ...(entry.usesPrivateName !== undefined ? { usesPrivateName: entry.usesPrivateName } : {}),
   color: entry.color,
   ...(entry.followedAt ? { followedAt: entry.followedAt } : {}),
@@ -73,6 +79,13 @@ const savedFollowRecord = (entry: SavedFollowEntry): PrivateState['followed'][nu
     : {}),
   ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
   ...(entry.traceEnabled ? { traceEnabled: true, trace: pruneFollowTrace(entry.trace ?? []) } : {}),
+  ...(entry.lastObservation &&
+  !entry.approvalDenied &&
+  !entry.approvalPending &&
+  !entry.terminal &&
+  (entry.expiresAt == null || entry.expiresAt > Date.now())
+    ? { lastObservation: minimalLastKnownObservation(entry.lastObservation) }
+    : {}),
 })
 
 export const savedFollowRecords = (
@@ -178,15 +191,22 @@ const projectFollow = (
   input: RuntimeProjectionInput,
 ): FollowSummary => {
   const observation = input.received.get(shareId)
-  const displayName = displayedPeerName(
+  // A process restart clears the live observation map, not the opted-in
+  // encrypted receive history. Preserve its latest fix timestamp without
+  // pretending that the connection or observation is still live.
+  const recordedFixAt = entry.traceEnabled
+    ? entry.trace?.filter((event) => event.type === 'location').at(-1)?.capturedAt
+    : undefined
+  const lastLocationAt = Math.max(observation?.capturedAt ?? 0, recordedFixAt ?? 0)
+  const displayName = displayedFollowName(
     entry.peerId ? input.peerNamePreferences.get(entry.peerId) : undefined,
-    entry.usesPrivateName ? entry.localName : undefined,
     entry.localName,
   )
   return {
     shareId,
     peerId: entry.peerId,
     sourceName: entry.sourceName,
+    linkName: entry.linkSourceName ?? entry.sourceName,
     displayName,
     localName: displayName,
     color: entry.color,
@@ -201,7 +221,7 @@ const projectFollow = (
     }),
     saved: entry.saved,
     ...(entry.followedAt ? { followedAt: entry.followedAt } : {}),
-    ...(observation ? { lastLocationAt: observation.capturedAt } : {}),
+    ...(lastLocationAt > 0 ? { lastLocationAt } : {}),
     updatesReceived: entry.updatesReceived,
     traceEnabled: entry.traceEnabled === true,
     ...(entry.traceEnabled ? { trace: pruneFollowTrace(entry.trace ?? [], input.now) } : {}),
@@ -268,6 +288,7 @@ export interface SnapshotProjectionInput {
   readonly endedShares: ReadonlyMap<string, EndedSourceShare>
   readonly peerNamePreferences: ReadonlyMap<string, PeerNamePreference>
   readonly followed: ReadonlyMap<string, FollowEntry>
+  readonly received: ReadonlyMap<string, LocationObservationV1>
   readonly approvedReturnLinks: ReadonlySet<string>
   readonly pendingReturns: ReadonlyMap<string, string>
   readonly returnOffers: ReadonlyMap<string, ReturnOffer>
@@ -352,7 +373,12 @@ export const snapshotPrivateState = (input: SnapshotProjectionInput): PrivateSta
     shares: snapshotShares(input),
     endedShares: snapshotEndedShares(input),
     peerNamePreferences: [...input.peerNamePreferences.values()],
-    followed: savedFollowRecords([...input.followed.values()]),
+    followed: savedFollowRecords(
+      [...input.followed.entries()].map(([shareId, entry]) => ({
+        ...entry,
+        lastObservation: input.received.get(shareId),
+      })),
+    ),
     approvedReturnLinks: [...input.approvedReturnLinks],
     pendingReturns: [...input.pendingReturns].map(([shareId, url]) => ({ shareId, url })),
     returnOffers: [...input.returnOffers.values()],

@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   PeerNamePreference,
   displayedPeerName,
+  displayedFollowName,
   advertisedPeerName,
   receiveAdvertisedName,
   nameAfterContact,
@@ -66,6 +67,22 @@ test('initial advertisements are adopted while later updates remain pending', ()
   assert.equal(displayedPeerName(updated, 'Family', 'Fallback'), 'Family')
   assert.equal(receiveAdvertisedName(updated, null).acceptedName, 'River')
   assert.equal(receiveAdvertisedName(initial, 'Forest', 'Link name').acceptedName, 'Link name')
+})
+
+test('separate share links keep distinct advertised nicknames without cross-link preference overrides', () => {
+  const preference = PeerNamePreference.parse({
+    peerId: 'same-sender',
+    associateNames: false,
+    sharedName: null,
+    receivedName: 'Trip B',
+    acceptedName: 'Trip A',
+  })
+  assert.equal(displayedFollowName(preference, 'Trip A'), 'Trip A')
+  assert.equal(displayedFollowName(preference, 'Trip B'), 'Trip B')
+  assert.equal(
+    displayedFollowName({ ...preference, associateNames: true, nickname: 'Family' }, 'Trip B'),
+    'Family',
+  )
 })
 
 test('contact names replace pending aliases but preserve accepted and private names', () => {

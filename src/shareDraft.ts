@@ -43,17 +43,26 @@ export const setDuration = (draft: ShareDraft, duration: ShareDuration): ShareDr
   ...draft,
   duration,
   untilRevokedAcknowledged: false,
+  requireViewerApproval: draft.viewerCapacity === 1 && draft.requireViewerApproval !== false,
 })
 
 export const setViewerCapacity = (
   draft: ShareDraft,
   viewerCapacity: ViewerCapacity,
-): ShareDraft => ({ ...draft, viewerCapacity })
+): ShareDraft => ({
+  ...draft,
+  viewerCapacity,
+  requireViewerApproval:
+    viewerCapacity === 1 && (draft.viewerCapacity !== 1 || draft.requireViewerApproval !== false),
+})
 
 export const setRequireViewerApproval = (
   draft: ShareDraft,
   requireViewerApproval: boolean,
-): ShareDraft => ({ ...draft, requireViewerApproval })
+): ShareDraft => ({
+  ...draft,
+  requireViewerApproval: draft.viewerCapacity === 1 && requireViewerApproval,
+})
 
 export const acknowledgeUntilRevoked = (
   draft: ShareDraft,
@@ -83,8 +92,14 @@ export const setNetworkPolicy = (draft: ShareDraft, network: ShareNetworkPolicy)
   network,
 })
 
-export const canCreateShare = (draft: ShareDraft): boolean =>
-  draft.name.length <= 32 && (draft.duration !== 'until-revoked' || draft.untilRevokedAcknowledged)
+export const canCreateShare = (draft: ShareDraft): boolean => {
+  const name = draft.name.trim()
+  return (
+    name.length > 0 &&
+    name.length <= 32 &&
+    (draft.duration !== 'until-revoked' || draft.untilRevokedAcknowledged)
+  )
+}
 
 export const shareExpiryFor = (draft: ShareDraft, now: number): number | null => {
   if (draft.duration === '1h') return now + 60 * 60 * 1_000

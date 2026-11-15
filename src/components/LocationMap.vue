@@ -54,17 +54,10 @@
           :key="member.id"
           class="location-map__group-member"
           type="button"
-          :aria-label="
-            member.isOwn
-              ? 'Open settings for my location'
-              : `Show ${member.label || 'shared location'} details`
-          "
+          :aria-label="member.isOwn ? 'Open settings for my location' : peerMarkerLabel(member)"
           @click.stop="member.isOwn ? emit('selectOwn') : emit('select', member.id)"
         >
-          <PeerAvatar
-            :name="member.isOwn ? 'Me' : member.label || 'Shared location'"
-            :color="member.color"
-          />
+          <MapPeerAvatar :location="member" :now="displayNow" />
         </button>
       </div>
       <button
@@ -73,14 +66,40 @@
         class="location-map__single-avatar"
         type="button"
         :style="{ left: `${marker.x}px`, top: `${marker.y}px` }"
-        :aria-label="`Show ${marker.location.label || 'shared location'} details`"
+        :aria-label="peerMarkerLabel(marker.location)"
         @click.stop="emit('select', marker.location.id)"
       >
-        <PeerAvatar
-          :name="marker.location.label || 'Shared location'"
-          :color="marker.location.color"
-        />
+        <MapPeerAvatar :location="marker.location" :now="displayNow" />
       </button>
+      <aside
+        v-if="offscreenPeers.length && maxOffscreenItems > 0"
+        class="location-map__offscreen-peers"
+        aria-label="Following peers outside the map"
+      >
+        <button
+          v-for="location in visibleOffscreenPeers"
+          :key="location.id"
+          type="button"
+          :title="`Center map on ${location.label || 'shared location'}`"
+          :aria-label="offscreenMarkerLabel(location)"
+          @click.stop="centerOn(location)"
+        >
+          <MapPeerAvatar :location="location" :now="displayNow" />
+        </button>
+        <button
+          v-if="offscreenPeers.length > maxOffscreenItems && maxOffscreenItems > 1"
+          type="button"
+          :aria-label="`Show all ${offscreenPeers.length} off-screen peers`"
+          @click.stop="
+            emit(
+              'areaOverflow',
+              offscreenPeers.map(({ id }) => id),
+            )
+          "
+        >
+          +{{ offscreenPeers.length - visibleOffscreenPeers.length }}
+        </button>
+      </aside>
       <aside
         v-if="presentation.largePeers.length"
         class="location-map__large-peers"
@@ -90,10 +109,10 @@
           v-for="location in visibleLargePeers"
           :key="location.id"
           type="button"
-          :aria-label="`Show ${location.label || 'shared location'} details`"
+          :aria-label="peerMarkerLabel(location)"
           @click.stop="emit('select', location.id)"
         >
-          <PeerAvatar :name="location.label || 'Shared location'" :color="location.color" />
+          <MapPeerAvatar :location="location" :now="displayNow" />
         </button>
         <button
           v-if="presentation.largePeers.length > maxStackItems"
@@ -143,6 +162,12 @@ import {
   type MapPresentation,
 } from '../location/mapPresentation.ts'
 import {
+  OFFSCREEN_RAIL_GAP_PX,
+  OFFSCREEN_RAIL_ITEM_PX,
+  offscreenRailCapacity,
+  rankOffscreenPeers,
+} from '../location/offscreenPeers.ts'
+import {
   createPmtilesRuntime,
   createWorldStyle,
   DEFAULT_WORLD_PMTILES_URL,
@@ -150,9 +175,20 @@ import {
   type MapFamily,
 } from '../map/pmtiles.ts'
 import type { MapCamera } from '../map/mapCamera.ts'
-import PeerAvatar from './PeerAvatar.vue'
+import { markerAgePresentation } from '../location/lastKnownMarker.ts'
+import MapPeerAvatar from './MapPeerAvatar.vue'
 
 const LOCATION_SOURCE_ID = 'constellation-locations'
+const displayNow = ref(Date.now())
+const peerMarkerLabel = (location: MapLocation): string => {
+  const age = markerAgePresentation(location, displayNow.value).ageLabel
+  return `Show ${location.label || 'shared location'} details${age ? `. ${age}` : ''}`
+}
+const offscreenMarkerLabel = (location: MapLocation): string => {
+  const age = markerAgePresentation(location, displayNow.value).ageLabel
+  return `Center map on ${location.label || 'shared location'}${age ? `. ${age}` : ''}`
+}
+let ageClock: number | undefined
 
 const props = withDefaults(
   defineProps<{
@@ -186,9 +222,15 @@ const presentation = ref<MapPresentation>({
   largePeers: [],
   ownAreaHidden: false,
 })
-const maxStackItems = computed(() =>
-  Math.max(1, Math.floor(Math.max(0, presentation.value.height - 160) / 49)),
-)
+const offscreenPeers = ref<readonly MapLocation[]>([])
+const maxStackItems = computed(() => {
+  const height = presentation.value.height
+  const previousLimit = Math.max(1, Math.floor(Math.max(0, height - 160) / 49))
+  // Reserve the top half for off-screen peers if both left-hand stacks exist.
+  return offscreenPeers.value.length
+    ? Math.min(previousLimit, Math.max(1, Math.floor((height * 0.35) / 49)))
+    : previousLimit
+})
 const visibleLargePeers = computed(() =>
   presentation.value.largePeers.slice(
     0,
@@ -197,6 +239,18 @@ const visibleLargePeers = computed(() =>
       : maxStackItems.value,
   ),
 )
+const bottomStackHeight = computed(() => {
+  const count = Math.min(presentation.value.largePeers.length, maxStackItems.value)
+  return 20 + count * OFFSCREEN_RAIL_ITEM_PX + Math.max(0, count - 1) * OFFSCREEN_RAIL_GAP_PX
+})
+const maxOffscreenItems = computed(() =>
+  offscreenRailCapacity(presentation.value.height, bottomStackHeight.value),
+)
+const visibleOffscreenPeers = computed(() => {
+  const limit = maxOffscreenItems.value
+  const shown = offscreenPeers.value.length > limit && limit > 1 ? limit - 1 : limit
+  return offscreenPeers.value.slice(0, shown)
+})
 const individualAvatars = ref<{ location: MapLocation; x: number; y: number }[]>([])
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
@@ -368,6 +422,19 @@ const updatePresentation = (): void => {
   if (next.ownAreaHidden !== presentation.value.ownAreaHidden)
     emit('ownAreaHidden', next.ownAreaHidden)
   presentation.value = next
+  const represented = new Set([
+    ...next.largePeers.map(({ id }) => id),
+    ...next.groups
+      .filter(({ x, y }) => x >= 0 && x <= clientWidth && y >= 0 && y <= clientHeight)
+      .flatMap(({ members }) => members.map(({ id }) => id)),
+  ])
+  const mapCenter = map.getCenter()
+  offscreenPeers.value = rankOffscreenPeers(
+    projectedLocations,
+    { width: clientWidth, height: clientHeight },
+    { latitude: mapCenter.lat, longitude: mapCenter.lng },
+    represented,
+  )
   const visible = new Set(next.mapLocations.map(({ id }) => id))
   individualAvatars.value = projectedLocations
     .filter(
@@ -456,10 +523,12 @@ watch(
 )
 onMounted(() => {
   darkScheme.addEventListener('change', updateTheme)
+  ageClock = window.setInterval(() => (displayNow.value = Date.now()), 60_000)
   initialize()
 })
 onBeforeUnmount(() => {
   darkScheme.removeEventListener('change', updateTheme)
+  if (ageClock !== undefined) window.clearInterval(ageClock)
   if (presentationFrame !== undefined) window.cancelAnimationFrame(presentationFrame)
   map?.remove()
   map = null
@@ -555,18 +624,27 @@ onBeforeUnmount(() => {
   font-size: 0.65rem;
 }
 
-.location-map__large-peers {
+.location-map__large-peers,
+.location-map__offscreen-peers {
   position: absolute;
-  bottom: 1.25rem;
   left: 0.75rem;
   display: grid;
   width: 2.6rem;
-  max-height: calc(100% - 9rem);
-  align-content: end;
   gap: 0.45rem;
   pointer-events: auto;
 }
-.location-map__large-peers button {
+.location-map__large-peers {
+  bottom: 1.25rem;
+  max-height: calc(100% - 9rem);
+  align-content: end;
+}
+.location-map__offscreen-peers {
+  top: 6rem;
+  max-height: 50%;
+  align-content: start;
+}
+.location-map__large-peers button,
+.location-map__offscreen-peers button {
   display: grid;
   width: 2.6rem;
   height: 2.6rem;
@@ -576,10 +654,11 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   background: transparent;
   color: var(--text);
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   cursor: pointer;
 }
-.location-map__large-peers :deep(.peer-avatar) {
+.location-map__large-peers :deep(.peer-avatar),
+.location-map__offscreen-peers :deep(.peer-avatar) {
   width: 2.5rem;
   height: 2.5rem;
 }

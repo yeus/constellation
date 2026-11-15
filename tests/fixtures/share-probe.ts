@@ -306,6 +306,21 @@ export const probeInitialNamesAndReturnPresence = async () => {
     await viewer.acceptShare(share.url)
     const pendingName = viewerState.following[0]!.displayName
     const request = sourceState.pendingViewerApprovals[0]!
+    // The privileged API must fail closed without a fresh, locally confirmed
+    // authenticated device comparison, not just hide the UI approval button.
+    let bypassRejected = false
+    try {
+      await source.approveViewer(request.shareId, request.peerId)
+    } catch (error) {
+      bypassRejected = error instanceof Error && /four-letter comparison/.test(error.message)
+    }
+    if (!bypassRejected) throw new Error('Direct approval bypassed device verification.')
+    await viewer.startDeviceComparison(share.shareId)
+    const code = sourceState.deviceComparisons?.find(
+      (entry) => entry.role === 'sender' && entry.peerId === request.peerId,
+    )
+    if (!code) throw new Error('The authenticated comparison was not delivered.')
+    await source.confirmDeviceComparison(share.shareId, code.challenge)
     await source.approveViewer(request.shareId, request.peerId)
     await viewer.acceptShare(share.url)
     const initialName = viewerState.following[0]!.displayName

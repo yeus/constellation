@@ -25,6 +25,13 @@ export const displayedPeerName = (
   (preference?.acceptedName !== undefined ? preference.acceptedName : preference?.receivedName) ||
   fallback
 
+// A link's own nickname must not be replaced by an accepted name from
+// another link to the same peer. Cross-link naming is explicit opt-in.
+export const displayedFollowName = (
+  preference: PeerNamePreference | undefined,
+  linkLocalName: string,
+): string => (preference?.associateNames ? preference.nickname : undefined) || linkLocalName
+
 export const advertisedPeerName = (
   preference: PeerNamePreference | undefined,
   linkName?: string,

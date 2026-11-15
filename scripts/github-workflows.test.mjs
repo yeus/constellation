@@ -155,6 +155,7 @@ test('receiver standby CI verifies process eviction and source restriction recov
   assert.match(receiverJob, /--metered-policy-smoke/)
   assert.match(receiverJob, /--restricted-start-smoke/)
   assert.match(receiverJob, /--power-network-smoke/)
+  assert.match(receiverJob, /--power-state-matrix/)
 })
 
 test('manual Android standby CI tests recovery of both independent P2P peers', () => {
@@ -170,4 +171,8 @@ test('manual Android standby CI tests recovery of both independent P2P peers', (
     /--two-android-receiver-standby-smoke --dual-role-standby-smoke --skip-build/,
   )
   assert.match(twoAndroid, /--dual-role-permission-revocation-smoke --skip-build/)
+  assert.match(
+    twoAndroid,
+    /--two-android-receiver-standby-smoke --power-recovery-matrix --skip-build/,
+  )
 })

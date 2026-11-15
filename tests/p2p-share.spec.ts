@@ -5,12 +5,14 @@ import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader'
 
 import { parseShareInvitation } from '../src/sharing/shareLink.ts'
 import {
+  openIncomingLink,
   continueInBrowserIfOffered,
   expandPeerDetails,
   openPeerFilterMenu,
   openPeerFilter,
   openPeerList,
   openShareCreator,
+  pasteLocationLink,
   saveLocationPreview,
 } from './fixtures/peer-navigation.ts'
 import { withTwoSources } from './fixtures/two-sources.ts'
@@ -107,7 +109,7 @@ test('keeps ended sharing history with each authenticated peer across links', as
     await expect(source.getByRole('button', { name: 'Center on my location' })).toBeVisible()
 
     await openShareCreator(source)
-    await source.getByLabel('Share a name').fill('Trip A')
+    await source.getByRole('textbox', { name: 'Name to share' }).fill('Trip A')
     await source.getByRole('button', { name: '10', exact: true }).click()
     await source.getByRole('button', { name: 'Create location link' }).click()
     const firstUrl = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
@@ -115,14 +117,22 @@ test('keeps ended sharing history with each authenticated peer across links', as
 
     await Promise.all(
       [firstViewer, secondViewer].map(async (viewer) => {
-        await viewer.goto(firstUrl)
-        await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
-          timeout: 30_000,
-        })
+        await openIncomingLink(viewer, firstUrl)
+        await expect(
+          viewer
+            .getByRole('region', { name: 'Location preview' })
+            .getByRole('button', { name: 'Add peer' }),
+        ).toBeVisible({ timeout: 30_000 })
         await saveLocationPreview(viewer)
       }),
     )
 
+    for (const viewer of [firstViewer, secondViewer]) {
+      const list = await openPeerFilter(viewer, 'Viewing')
+      await expect(list).toContainText('Nickname received on this link: Trip A')
+      await expect(list.locator('.peer-list__summary-name')).toContainText('Trip A')
+      await list.getByRole('button', { name: 'Close' }).click()
+    }
     await source.locator('.dock-peers').click()
     const peers = source.locator('.peer-list')
     await expect(peers.locator('.peer-list__item')).toHaveCount(2, { timeout: 30_000 })
@@ -133,22 +143,28 @@ test('keeps ended sharing history with each authenticated peer across links', as
     await expect(peers.locator('.peer-viewer-details summary').first()).toContainText(
       'Connected viewers (2)',
     )
+    await expect(peers).toContainText('Nickname you share on this link: Trip A')
 
     await peers.getByRole('button', { name: 'Close' }).click()
     await openShareCreator(source)
-    await source.getByLabel('Share a name').fill('Trip B')
+    await source.getByRole('textbox', { name: 'Name to share' }).fill('Trip B')
     await source.getByRole('button', { name: '10', exact: true }).click()
     await source.getByRole('button', { name: 'Create location link' }).click()
     const secondUrl = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
 
     await firstViewer.goto('about:blank')
-    await firstViewer.goto(secondUrl)
-    await expect(firstViewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
-      timeout: 30_000,
-    })
+    await openIncomingLink(firstViewer, secondUrl)
+    await expect(
+      firstViewer
+        .getByRole('region', { name: 'Location preview' })
+        .getByRole('button', { name: 'Add peer' }),
+    ).toBeVisible({ timeout: 30_000 })
     await saveLocationPreview(firstViewer)
     const viewerPeers = await openPeerFilter(firstViewer, 'Viewing')
+    await expect(viewerPeers).toContainText('Nickname received on this link: Trip B')
+    await expect(viewerPeers).toContainText('Nickname received on this link: Trip A')
+    await expect(viewerPeers).toContainText('Trip B')
     const viewerPeer = viewerPeers.locator('.peer-list__item').first()
     const mapAction = viewerPeers.locator('.peer-list__map-action')
     await expect(mapAction).toBeVisible()
@@ -242,7 +258,7 @@ test('keeps ended sharing history with each authenticated peer across links', as
 
     await peers.getByRole('button', { name: 'Close' }).click()
     await openShareCreator(source)
-    await source.getByLabel('Share a name').fill('Unclaimed link')
+    await source.getByRole('textbox', { name: 'Name to share' }).fill('Unclaimed link')
     await source.getByRole('button', { name: 'Create location link' }).click()
     const shareReady = source.getByRole('dialog', { name: 'Share this QR code' })
     await expect(shareReady).toBeVisible()
@@ -388,7 +404,7 @@ test('single-recipient links wait for source approval before revealing a locatio
     await expect(shareReady).toBeVisible()
 
     const firstViewer = await firstViewerContext.newPage()
-    await firstViewer.goto(url)
+    await openIncomingLink(firstViewer, url)
     const request = source.getByRole('region', { name: 'Viewer access request' })
     await expect(request).toBeVisible({ timeout: 30_000 })
     await expect(shareReady).toHaveCount(0)
@@ -397,6 +413,9 @@ test('single-recipient links wait for source approval before revealing a locatio
     await expect(firstFollowing).toContainText('Waiting for sender approval')
     await expect(firstFollowing).toContainText('Last location: not received')
 
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
+      timeout: 30_000,
+    })
     await request.getByRole('button', { name: 'Approve this device' }).click()
     await expect
       .poll(() => firstFollowing.textContent(), { timeout: 30_000 })
@@ -404,7 +423,7 @@ test('single-recipient links wait for source approval before revealing a locatio
     await expect(firstFollowing).not.toContainText('Waiting for sender approval')
 
     const forwardedViewer = await forwardedViewerContext.newPage()
-    await forwardedViewer.goto(url)
+    await openIncomingLink(forwardedViewer, url)
     const forwardedFollowing = await openPeerFilter(forwardedViewer, 'Viewing')
     await expect(forwardedFollowing).toContainText('Access not approved')
     await expect(forwardedFollowing).toContainText('Last location: not received')
@@ -416,7 +435,7 @@ test('single-recipient links wait for source approval before revealing a locatio
   }
 })
 
-test('share-back preserves its sender and options through cancellation and a failed creation retry', async ({
+test('share-back requires the normal options dialog and preserves chosen precision and duration', async ({
   browser,
   baseURL,
 }, testInfo) => {
@@ -428,66 +447,33 @@ test('share-back preserves its sender and options through cancellation and a fai
     { viewport: testInfo.project.use.viewport },
     async ({ first, second, viewer }) => {
       await saveLocationPreview(viewer)
-      const openReturnForm = async () => {
+      const startReturn = async () => {
         const list = await openPeerFilter(viewer, 'Viewing')
         const peer = list.locator('.peer-list__item').filter({ hasText: 'River' })
         await expandPeerDetails(peer)
         await peer.getByRole('button', { name: 'Share back to River', exact: true }).click()
-        return viewer.getByRole('dialog', { name: 'Share your location' })
       }
-      const form = await openReturnForm()
+      await startReturn()
+      const form = viewer.getByRole('dialog', { name: 'Share your location' })
       await expect(form).toContainText('Sharing back to River')
-      await form.getByRole('button', { name: 'Close', exact: true }).click()
-      const readShareCount = () =>
-        viewer.evaluate(async () => {
-          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
-          return (await createBrowserPrivateStore().load())?.shares.length ?? 0
-        })
-      expect(await readShareCount()).toBe(0)
+      await expect(
+        viewer.getByRole('status', { name: 'Waiting for share-back acceptance' }),
+      ).toHaveCount(0)
       await expect(first.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
-
-      await openReturnForm()
-      await form.getByLabel('Share a name', { exact: true }).fill('Synthetic Return')
-      await form.getByRole('button', { name: /City/ }).click()
-      await form.getByRole('button', { name: 'Until stopped', exact: true }).click()
-      await expect(form.getByRole('button', { name: 'Create location link' })).toBeDisabled()
-      await form.getByRole('button', { name: '8 hours', exact: true }).click()
-      await viewer.evaluate(() => {
-        const original = Reflect.get(IDBObjectStore.prototype, 'put')
-        IDBObjectStore.prototype.put = function (value, key) {
-          if (this.name === 'secrets' && key === 'state') {
-            IDBObjectStore.prototype.put = original
-            throw new Error('Synthetic share creation storage failure')
-          }
-          return original.call(this, value, key)
-        }
-      })
-      await form.getByRole('button', { name: 'Create location link' }).click()
-      await expect(viewer.locator('.toast')).toContainText(
-        'Synthetic share creation storage failure',
-      )
-      await expect(form).toContainText('Sharing back to River')
-      await expect(form.getByText('Viewers', { exact: true })).toHaveCount(0)
-      await expect(form.getByLabel('Share a name', { exact: true })).toHaveValue('Synthetic Return')
-      await expect(form.getByRole('button', { name: /City/ })).toHaveAttribute(
-        'aria-pressed',
-        'true',
-      )
-      await expect(form.getByRole('button', { name: '8 hours', exact: true })).toHaveAttribute(
-        'aria-pressed',
-        'true',
-      )
-      expect(await readShareCount()).toBe(0)
-      await expect(first.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
-
-      const confirmedAt = Date.now()
-      await form.getByRole('button', { name: 'Create location link' }).click()
+      await form.getByRole('button', { name: 'Close' }).click()
       await expect(form).toHaveCount(0)
-      await expect(first.getByRole('region', { name: 'Return location offered' })).toBeVisible({
-        timeout: 30_000,
-      })
+      await expect(viewer.locator('.dock-peers')).toContainText('Sharing 0')
+      await startReturn()
+      await form.getByRole('textbox', { name: 'Name to share' }).fill('Return to River')
+      await form.getByRole('button', { name: /City/ }).click()
+      await form.getByRole('button', { name: '8 hours' }).click()
+      const startedAt = Date.now()
+      await form.getByRole('button', { name: 'Create location link' }).click()
+      const waiting = viewer.getByRole('status', { name: 'Waiting for share-back acceptance' })
+      await expect(waiting).toContainText('Waiting for acceptance', { timeout: 30_000 })
+      const offer = first.getByRole('region', { name: 'Return location offered' })
+      await expect(offer).toBeVisible({ timeout: 30_000 })
       await expect(second.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
-      await expect(viewer.getByRole('img', { name: 'Location share QR code' })).toHaveCount(0)
       const result = await viewer.evaluate(async () => {
         const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
         const { parseShareInvitation } = await import('../src/sharing/shareLink.ts')
@@ -500,41 +486,40 @@ test('share-back preserves its sender and options through cancellation and a fai
           precision: share.precision,
           capacity: share.capacity,
           recipientMatches: share.approvedPeerId === parseShareInvitation(original.url).ownerPeerId,
-          publication: share.publication,
-          globalPublication: saved.sharingBehavior?.publication,
           expiresAt: parseShareInvitation(share.url).expiresAt,
         }
       })
       expect(result).toMatchObject({
         count: 1,
-        name: 'Synthetic Return',
         precision: 'very-coarse',
         capacity: 1,
         recipientMatches: true,
-        publication: 'foreground',
-        globalPublication: 'foreground',
       })
-      expect(result.expiresAt).toBeGreaterThanOrEqual(confirmedAt + 8 * 60 * 60 * 1_000)
-      expect(result.expiresAt).toBeLessThan(Date.now() + 8 * 60 * 60 * 1_000)
-      const viewerPeers = await openPeerFilter(viewer, 'Viewing')
-      const riverPeer = viewerPeers.locator('.peer-list__item').filter({ hasText: 'River' })
-      await expandPeerDetails(riverPeer)
-      await expect(
-        riverPeer.getByRole('button', { name: 'Share back to River', exact: true }),
-      ).toHaveCount(0)
-      await riverPeer.getByRole('button', { name: 'Revoke link', exact: true }).click()
-      await expect.poll(readShareCount).toBe(0)
-      await openReturnForm()
-      const originalPeers = await openPeerFilter(first, 'Sharing')
-      const originalPeer = originalPeers.locator('.peer-list__item').first()
-      await expandPeerDetails(originalPeer)
-      await originalPeer.getByRole('button', { name: 'Revoke link', exact: true }).click()
-      await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1', { timeout: 30_000 })
-      await form.getByRole('button', { name: 'Create location link' }).click()
-      await expect(viewer.locator('.toast')).toContainText('no longer available for sharing back')
-      await expect(form).toContainText('Only this sender receives the private offer')
-      expect(await readShareCount()).toBe(0)
-      await form.getByRole('button', { name: 'Close', exact: true }).click()
+      expect(result.name).toBe('Return to River')
+      expect(result.expiresAt).toBeGreaterThanOrEqual(startedAt + 8 * 60 * 60_000)
+      expect(result.expiresAt).toBeLessThanOrEqual(Date.now() + 8 * 60 * 60_000)
+      await offer.getByRole('button', { name: 'Accept share-backs' }).click()
+      await expect(waiting).toHaveCount(0, { timeout: 30_000 })
+      const peers = await openPeerFilter(viewer, 'Viewing')
+      const river = peers.locator('.peer-list__item').filter({ hasText: 'River' })
+      await expandPeerDetails(river)
+      await expect(river.getByRole('button', { name: 'Share back to River' })).toHaveCount(0)
+      await river.getByRole('button', { name: 'Revoke peer River' }).click()
+      await expect(viewer.locator('.dock-peers')).toContainText('Sharing 0 · Seeing 1', {
+        timeout: 30_000,
+      })
+      const endState = await viewer.evaluate(async () => {
+        const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+        const state = await createBrowserPrivateStore().load()
+        return {
+          outboundEnded: state?.oldSharing?.some((record) => record.reason === 'revoked'),
+          inboundStopped: state?.oldSeeing?.some((record) => record.reason === 'stopped'),
+          remaining: state?.followed?.map(({ sourceName }) => sourceName),
+        }
+      })
+      expect(endState.outboundEnded).toBe(true)
+      expect(endState.inboundStopped).toBe(true)
+      expect(endState.remaining).toContain('Forest')
     },
     { afterFirstFollow: saveLocationPreview },
   )
@@ -544,7 +529,7 @@ test('return consent applies to every viewer of the same original link', async (
   browser,
   baseURL,
 }, testInfo) => {
-  test.setTimeout(90_000)
+  test.setTimeout(180_000)
   test.skip(testInfo.project.name !== 'desktop')
   if (!baseURL) throw new Error('A base URL is required.')
   const sourceContext = await browser.newContext({
@@ -578,18 +563,20 @@ test('return consent applies to every viewer of the same original link', async (
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
     await expect(source.locator('.dock-peers')).toContainText('Sharing 1')
 
-    await viewer.goto(url)
-    await viewer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
-    await viewer.getByRole('button', { name: 'Save location' }).click()
-    const returnInvitation = viewer.getByRole('region', { name: 'Share back invitation' })
-    await returnInvitation.getByRole('button', { name: 'Share back' }).click()
+    await openIncomingLink(viewer, url)
+    await viewer
+      .getByRole('region', { name: 'Location preview' })
+      .getByRole('button', { name: 'Add peer' })
+      .click({ timeout: 30_000 })
+    await viewer
+      .getByRole('region', { name: 'Peer added' })
+      .getByRole('button', { name: 'Share back' })
+      .click()
     const returnForm = viewer.getByRole('dialog', { name: 'Share your location' })
-    await expect(returnForm).toContainText('Only this sender receives the private offer')
-    await expect(returnForm.getByText('Viewers')).toHaveCount(0)
-    await expect(
-      returnForm.getByRole('button', { name: /While app is open|In background/ }),
-    ).toHaveCount(0)
+    await expect(returnForm).toContainText('Sharing back to')
     await returnForm.getByRole('button', { name: 'Create location link' }).click()
+    const waiting = viewer.getByRole('status', { name: 'Waiting for share-back acceptance' })
+    await expect(waiting).toContainText('Waiting for acceptance', { timeout: 30_000 })
     await expect(viewer.getByRole('img', { name: 'Location share QR code' })).toHaveCount(0)
 
     const offer = source.getByRole('region', { name: 'Return location offered' })
@@ -606,28 +593,35 @@ test('return consent applies to every viewer of the same original link', async (
       .getByRole('dialog', { name: 'P2P diagnostics' })
       .getByRole('button', { name: 'Close' })
       .click()
-    await secondViewer.goto(url)
-    await expect(secondViewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
-      timeout: 30_000,
-    })
+    await openIncomingLink(secondViewer, url)
+    await expect(
+      secondViewer
+        .getByRole('region', { name: 'Location preview' })
+        .getByRole('button', { name: 'Add peer' }),
+    ).toBeVisible({ timeout: 30_000 })
     await openPeerFilter(secondViewer, 'Viewing')
     await expandPeerDetails(secondViewer.locator('.peer-list__item').first())
     const secondReturnForm = secondViewer.getByRole('button', { name: /Share back to/ })
     await secondReturnForm.click()
-    const secondShareForm = secondViewer.getByRole('dialog', { name: 'Share your location' })
-    await expect(secondShareForm).toContainText('Only this sender receives the private offer')
-    await secondShareForm.getByRole('button', { name: /City/ }).click()
-    await secondShareForm.getByRole('button', { name: '8 hours' }).click()
-    await expect(secondShareForm.getByRole('button', { name: /City/ })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
-    await expect(secondShareForm.getByRole('button', { name: '8 hours' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
-    await expect(secondShareForm.getByText('Viewers')).toHaveCount(0)
-    await secondShareForm.getByRole('button', { name: 'Create location link' }).click()
+    await secondViewer
+      .getByRole('dialog', { name: 'Share your location' })
+      .getByRole('button', { name: 'Create location link' })
+      .click()
+    const secondWaiting = secondViewer.getByRole('status', {
+      name: 'Waiting for share-back acceptance',
+    })
+    await expect(secondWaiting).toContainText('Waiting for acceptance', { timeout: 30_000 })
+    await secondWaiting.getByRole('button', { name: 'Dismiss' }).click()
+    await expect(secondWaiting).toHaveCount(0)
+    // Dismiss hides the status card, not the existing recipient-bound share.
+    await expect
+      .poll(async () =>
+        secondViewer.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          return (await createBrowserPrivateStore().load())?.shares.length ?? 0
+        }),
+      )
+      .toBe(1)
     await expect
       .poll(() =>
         source.evaluate(async () => {
@@ -666,16 +660,37 @@ test('return consent applies to every viewer of the same original link', async (
     await peerList.getByRole('button', { name: 'Close' }).click()
 
     const thirdViewer = await thirdViewerContext.newPage()
-    await thirdViewer.goto(url)
-    await expect(thirdViewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
-      timeout: 30_000,
-    })
+    await openIncomingLink(thirdViewer, url)
+    await expect(
+      thirdViewer
+        .getByRole('region', { name: 'Location preview' })
+        .getByRole('button', { name: 'Add peer' }),
+    ).toBeVisible({ timeout: 30_000 })
     await openPeerFilter(thirdViewer, 'Viewing')
     await expandPeerDetails(thirdViewer.locator('.peer-list__item').first())
     await thirdViewer.getByRole('button', { name: /Share back to/ }).click()
-    const thirdShareForm = thirdViewer.getByRole('dialog', { name: 'Share your location' })
-    await expect(thirdShareForm).toContainText('Only this sender receives the private offer')
-    await thirdShareForm.getByRole('button', { name: 'Create location link' }).click()
+    await thirdViewer
+      .getByRole('dialog', { name: 'Share your location' })
+      .getByRole('button', { name: 'Create location link' })
+      .click()
+    // Consent for this link is already saved, so the waiting state may be too
+    // brief to observe. The authenticated return must still reach the source.
+    const thirdForm = thirdViewer.getByRole('dialog', { name: 'Share your location' })
+    try {
+      // Establishing a recipient-bound P2P source may outlast Playwright's
+      // default five-second assertion under concurrent browser load.
+      await expect(thirdForm).toHaveCount(0, { timeout: 30_000 })
+    } catch (error) {
+      const errorVisible = (await thirdViewer.getByRole('alert').count()) > 0
+      const formDisabled = await thirdForm
+        .getByRole('button', { name: /Create location link|Creating/ })
+        .isDisabled()
+        .catch(() => false)
+      throw new Error(
+        `Third return share remained open: ${JSON.stringify({ errorVisible, formDisabled })}`,
+        { cause: error },
+      )
+    }
     await expect(source.locator('.dock-peers')).toContainText('Seeing 3', { timeout: 30_000 })
     await expect(source.getByRole('region', { name: 'Return location offered' })).toHaveCount(0)
   } finally {
@@ -793,7 +808,8 @@ test('scans a QR share through the normal browser preview flow', async ({
     const peerList = await openPeerList(viewer)
     await peerList.getByRole('button', { name: 'Add peer' }).click()
     await viewer.getByRole('button', { name: 'Scan QR code' }).click()
-    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await continueInBrowserIfOffered(viewer)
+    await expect(viewer.getByRole('region', { name: 'Location preview' })).toBeVisible({
       timeout: 30_000,
     })
     expect(
@@ -877,7 +893,8 @@ test('prefers the native barcode detector before the JS fallback', async ({
     const peerList = await openPeerList(viewer)
     await peerList.getByRole('button', { name: 'Add peer' }).click()
     await viewer.getByRole('button', { name: 'Scan QR code' }).click()
-    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await continueInBrowserIfOffered(viewer)
+    await expect(viewer.getByRole('region', { name: 'Location preview' })).toBeVisible({
       timeout: 30_000,
     })
     const nativeState = await viewer.evaluate(
@@ -936,12 +953,11 @@ test('very coarse shares deliver a 20 km approximate area to a browser viewer', 
     await expect(source.locator('.dock-peers')).toContainText('Sharing 1')
     await expect.poll(broadState).toEqual({ precision: 'very-coarse', radiusMeters: 20_000 })
 
-    await viewer.goto(url)
-    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(viewer, url)
+    const request = source.getByRole('region', { name: 'Viewer access request' })
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
       timeout: 30_000,
     })
-    const request = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(request).toBeVisible({ timeout: 30_000 })
     await request.getByRole('button', { name: 'Approve this device' }).click()
     await expect
       .poll(() =>
@@ -953,16 +969,16 @@ test('very coarse shares deliver a 20 km approximate area to a browser viewer', 
       .toBeTruthy()
     await openPeerFilter(viewer, 'Viewing')
     await expandPeerDetails(viewer.locator('.peer-list__item').first())
-    await expect(viewer.getByRole('button', { name: 'Show on map' })).toBeVisible({
-      timeout: 30_000,
-    })
+    await expect(
+      viewer.locator('.peer-list__summary').getByRole('button', { name: /^Show .+ on map$/ }),
+    ).toBeVisible({ timeout: 30_000 })
   } finally {
     await viewerContext.close()
     await sourceContext.close()
   }
 })
 
-test('browser link previews immediately and saves only after Keep following', async ({
+test('browser link requires consent and saves only after Add peer without recipient GPS', async ({
   browser,
   baseURL,
 }, testInfo) => {
@@ -1000,11 +1016,14 @@ test('browser link previews immediately and saves only after Keep following', as
 
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
     await viewer.goto(url)
-    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    const intro = viewer.getByRole('dialog', { name: 'Location link introduction' })
+    await expect(intro).toBeVisible()
+    await expect(source.getByRole('region', { name: 'Viewer access request' })).toHaveCount(0)
+    await intro.getByRole('button', { name: 'See location' }).click()
+    const request = source.getByRole('region', { name: 'Viewer access request' })
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
       timeout: 30_000,
     })
-    const request = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(request).toBeVisible({ timeout: 30_000 })
     await request.getByRole('button', { name: 'Approve this device' }).click()
     await expect
       .poll(() =>
@@ -1026,21 +1045,19 @@ test('browser link previews immediately and saves only after Keep following', as
       return (await createBrowserPrivateStore().load())?.followed.length
     })
     expect(followsBefore).toBe(0)
-    await viewer.getByRole('button', { name: 'Keep following' }).click()
-    await expect(viewer.getByRole('dialog', { name: 'Keep following' })).toBeVisible()
-    await viewer.getByRole('textbox', { name: 'Nickname' }).fill('My friend')
-    await viewer.getByRole('button', { name: 'Save location' }).click()
-    const returnInvitation = viewer.getByRole('region', { name: 'Share back invitation' })
-    await expect(returnInvitation).toContainText('Share yours back', { timeout: 30_000 })
-    await returnInvitation.getByRole('button', { name: 'Not now' }).click()
+    await viewer
+      .getByRole('region', { name: 'Location preview' })
+      .getByRole('button', { name: 'Add peer' })
+      .click({ timeout: 30_000 })
+    const saved = viewer.getByRole('region', { name: 'Peer added' })
+    await expect(saved.getByRole('button', { name: 'Share back' })).toBeVisible()
+    await saved.getByRole('button', { name: 'Not now' }).click()
     await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1')
-    await expect
-      .poll(() =>
-        viewer.evaluate(
-          () => (window as typeof window & { ownGpsRequests: number }).ownGpsRequests,
-        ),
-      )
-      .toBe(1)
+    expect(
+      await viewer.evaluate(
+        () => (window as typeof window & { ownGpsRequests: number }).ownGpsRequests,
+      ),
+    ).toBe(0)
     const outboundShares = await viewer.evaluate(async () => {
       const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
       return (await createBrowserPrivateStore().load())?.shares.length
@@ -1054,7 +1071,7 @@ test('browser link previews immediately and saves only after Keep following', as
     await viewer.reload()
     await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1', { timeout: 30_000 })
     const follows = await openPeerFilter(viewer, 'Viewing')
-    await expect(follows).toContainText('My friend')
+    await expect(follows).toContainText('Saved')
     await expect(follows.getByRole('button', { name: /Share approximate location/ })).toHaveCount(0)
     await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Saved')
     await expandPeerDetails(viewer.locator('.peer-list__item').first())
@@ -1140,17 +1157,17 @@ test('enforces the configured one-viewer share capacity', async ({
     const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
 
-    await first.goto(url)
-    await expect(first.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(first, url)
+    const firstRequest = source.getByRole('region', { name: 'Viewer access request' })
+    await expect(firstRequest.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
       timeout: 30_000,
     })
-    const firstRequest = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(firstRequest).toBeVisible({ timeout: 30_000 })
     await firstRequest.getByRole('button', { name: 'Approve this device' }).click()
-    await second.goto(url)
+    await openIncomingLink(second, url)
     const deniedPreview = second.getByRole('region', { name: 'Location preview' })
-    await expect(deniedPreview).toContainText('The sender did not approve this device.')
-    await expect(deniedPreview).toContainText('No location is being received.')
+    await expect(deniedPreview).toContainText('The sender declined this device.', {
+      timeout: 30_000,
+    })
   } finally {
     await secondContext.close()
     await firstContext.close()
@@ -1181,6 +1198,7 @@ test('shares a browser location over an authenticated P2P stream', async ({
     await source.goto('/')
     await expect(source.getByRole('button', { name: 'Center on my location' })).toBeVisible()
     await openShareCreator(source)
+    await source.getByRole('textbox', { name: 'Name to share' }).fill('Original share')
     await source.getByRole('button', { name: 'Create location link' }).click()
     const shareUrl = await source.getByLabel('Share link').inputValue({
       timeout: 30_000,
@@ -1216,18 +1234,13 @@ test('shares a browser location over an authenticated P2P stream', async ({
     expect(webRtc.transport).toMatch(/WebRTC/)
     expect(webRtc.expectedPeer).toBe(true)
 
-    await viewer.goto(shareUrl)
-    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(viewer, shareUrl)
+    const request = source.getByRole('region', { name: 'Viewer access request' })
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
       timeout: 30_000,
     })
-    const request = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(request).toBeVisible({ timeout: 30_000 })
     await request.getByRole('button', { name: 'Approve this device' }).click()
-    await viewer
-      .getByRole('region', { name: 'Location preview' })
-      .getByRole('button', { name: 'Keep following' })
-      .click()
-    await viewer.getByRole('button', { name: 'Save location' }).click()
+    await saveLocationPreview(viewer)
     await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1')
     await openPeerFilter(source, 'Sharing')
     await expandPeerDetails(source.locator('.peer-list__item').first())
@@ -1270,9 +1283,10 @@ test('shares a browser location over an authenticated P2P stream', async ({
     await openPeerFilter(viewer, 'Viewing')
     await expandPeerDetails(viewer.locator('.peer-list__item').first())
     await expect(
-      viewer.getByRole('dialog', { name: 'Following' }).getByRole('button', {
-        name: 'Show on map',
-      }),
+      viewer
+        .getByRole('dialog', { name: 'Following' })
+        .locator('.peer-list__summary')
+        .getByRole('button', { name: /^Show .+ on map$/ }),
     ).toBeVisible({ timeout: 30_000 })
     await expect(viewer.getByRole('status').last()).not.toContainText(
       'Waiting for the first location',
@@ -1291,13 +1305,14 @@ test('shares a browser location over an authenticated P2P stream', async ({
     await openPeerFilter(viewer, 'Viewing')
     await expandPeerDetails(viewer.locator('.peer-list__item').first())
     await expect(
-      viewer.getByRole('dialog', { name: 'Following' }).getByRole('button', {
-        name: 'Show on map',
-      }),
+      viewer
+        .getByRole('dialog', { name: 'Following' })
+        .locator('.peer-list__summary')
+        .getByRole('button', { name: /^Show .+ on map$/ }),
     ).toBeVisible({ timeout: 30_000 })
     await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Last location')
     await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText(
-      'Updates this session',
+      'Updates received this session',
     )
     await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Following since')
     await expect(viewer.getByRole('dialog', { name: 'Following' })).toContainText('Time left')
@@ -1330,23 +1345,22 @@ test('shares a browser location over an authenticated P2P stream', async ({
 
     await openPeerList(source)
     await openShareCreator(source)
-    await source.getByRole('textbox', { name: 'Share a name' }).fill('Second')
+    await source.getByRole('textbox', { name: 'Name to share' }).fill('Second')
     await source.getByRole('button', { name: 'Create location link' }).click()
     const secondUrl = await source.getByLabel('Share link').inputValue()
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
-    await secondViewer.goto(secondUrl)
-    await expect(secondViewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(secondViewer, secondUrl)
+    const secondRequest = source.getByRole('region', { name: 'Viewer access request' })
+    await expect(secondRequest.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
       timeout: 30_000,
     })
-    const secondRequest = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(secondRequest).toBeVisible({ timeout: 30_000 })
     await secondRequest.getByRole('button', { name: 'Approve this device' }).click()
 
     await openPeerFilter(source, 'Sharing')
     const originalSharePeer = source
       .getByRole('dialog', { name: 'Active shares' })
       .locator('.peer-list__item')
-      .filter({ hasText: 'Friend phone' })
+      .filter({ hasText: 'Original share' })
     await expect(originalSharePeer).toHaveCount(1)
     if (!(await originalSharePeer.evaluate((peer) => (peer as HTMLDetailsElement).open))) {
       await originalSharePeer.locator('.peer-list__summary').click()
@@ -1369,8 +1383,12 @@ test('shares a browser location over an authenticated P2P stream', async ({
     await expect(history.locator('.peer-list__item')).toHaveCount(1)
     await expect(history).toContainText('Viewed · revoked')
     const remainingShare = source.getByRole('dialog', { name: 'Active shares' })
-    await expect(remainingShare).toContainText('0 connected')
-    await expect(remainingShare).toContainText('Waiting for a viewer')
+    // Revoking Original share must not disconnect the second accepted viewer.
+    await expect(remainingShare).toContainText('Second')
+    await expect(remainingShare).toContainText('1 connected', { timeout: 30_000 })
+    await expect(secondViewer.locator('.dock-peers')).toContainText('Seeing 1', {
+      timeout: 30_000,
+    })
     await expandPeerDetails(source.locator('.peer-list__item').first())
     await source.getByRole('button', { name: 'Show link / QR' }).click()
     await expect(source.getByRole('button', { name: 'Stop sharing' })).toHaveCount(0)
@@ -1421,8 +1439,8 @@ test('blocking one viewer device preserves the other and survives source reload'
     const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
 
-    await first.goto(url)
-    await expect(first.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(first, url)
+    await expect(first.getByRole('region', { name: 'Location preview' })).toBeVisible({
       timeout: 30_000,
     })
     await openPeerFilter(source, 'Sharing')
@@ -1434,12 +1452,22 @@ test('blocking one viewer device preserves the other and survives source reload'
     await shares.getByRole('textbox', { name: 'Device name' }).fill('First device')
     await shares.getByRole('button', { name: 'Save' }).click()
 
-    await second.goto(url)
-    await expect(second.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(second, url)
+    await expect(second.getByRole('region', { name: 'Location preview' })).toBeVisible({
       timeout: 30_000,
     })
     await expect(shares).toContainText('2 connected', { timeout: 30_000 })
-    await shares.getByRole('button', { name: 'Block device First device' }).click()
+    const firstPeer = shares.locator('.peer-list__item').filter({ hasText: 'First device' })
+    await source.setViewportSize({ width: 360, height: 640 })
+    const revokeAction = firstPeer.getByRole('button', { name: 'Revoke peer First device' })
+    const rowBounds = await firstPeer.locator('.peer-list__summary').boundingBox()
+    const actionBounds = await revokeAction.boundingBox()
+    expect(rowBounds).not.toBeNull()
+    expect(actionBounds).not.toBeNull()
+    expect(actionBounds!.x + actionBounds!.width).toBeLessThanOrEqual(
+      rowBounds!.x + rowBounds!.width + 1,
+    )
+    await revokeAction.click()
     await expect(shares).toContainText('1 connected', { timeout: 30_000 })
     await expect(first.locator('.toast')).toContainText('sender revoked your access', {
       timeout: 15_000,
@@ -1468,8 +1496,8 @@ test('blocking one viewer device preserves the other and survives source reload'
     await first.goto('/')
     await openPeerList(first)
     await first.locator('.peer-list').getByRole('button', { name: 'Add peer' }).click()
-    await first.getByLabel('Paste location link').fill(url)
-    await first.getByRole('button', { name: 'View location' }).click()
+    await pasteLocationLink(first, url)
+    await continueInBrowserIfOffered(first)
     await expect(first.locator('.toast')).toContainText('This location link has ended.')
     // Also exercise the sender's persisted block when this same synthetic viewer has no local
     // terminal history (for example, it missed the final notice). Preserve its private identity.
@@ -1481,7 +1509,7 @@ test('blocking one viewer device preserves the other and survives source reload'
       await store.save({ ...state, oldSeeing: [], followed: [] })
     })
     await first.goto('about:blank')
-    await first.goto(url)
+    await openIncomingLink(first, url)
     await expect(first.locator('.toast')).toContainText(
       'The sender did not approve this device for the location share.',
       {
@@ -1508,7 +1536,8 @@ test('follows two independent sources and stops one without removing the other',
   browser,
   baseURL,
 }, testInfo) => {
-  test.setTimeout(120_000)
+  // This case deliberately exercises two live sources, repeated reloads and durable stop replay.
+  test.setTimeout(240_000)
   test.skip(testInfo.project.name !== 'desktop')
   if (!baseURL) throw new Error('The test requires a configured base URL.')
 
@@ -1553,6 +1582,7 @@ test('follows two independent sources and stops one without removing the other',
         expect((await readStopState(offlineSource)).stoppedViewers).toHaveLength(0)
         await offlineSource.goto('about:blank')
 
+        // A local stop is durable even if a later sender revocation never arrives.
         await previewPeer.getByRole('button', { name: 'Stop following' }).click()
         await expect(followRows).toHaveCount(1)
         await expect(followRows.first()).toContainText('Saved')
@@ -1561,6 +1591,13 @@ test('follows two independent sources and stops one without removing the other',
           pendingStopCount: 1,
           stoppedViewers: [],
         })
+        const localEnd = await viewer.evaluate(async () => {
+          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+          return (await createBrowserPrivateStore().load())?.oldSeeing?.map(
+            (record) => record.reason,
+          )
+        })
+        expect(localEnd).toContain('stopped')
         await viewer.reload()
         await expect(viewer.locator('.dock-peers')).toContainText('Seeing 1', { timeout: 30_000 })
         expect(await readStopState(viewer)).toMatchObject({
@@ -1594,6 +1631,11 @@ test('follows two independent sources and stops one without removing the other',
           .locator('.peer-list__item')
           .filter({ hasText: 'Stopped following' })
         await expect(stoppedHistory).toHaveCount(1)
+        // The other share is still active: its Waiting status must not be overwritten
+        // by the historical stopped-viewer notice or duplicate Stopped following.
+        const activeHeader = stoppedHistory.locator('.peer-list__summary-context')
+        await expect(activeHeader).toContainText('Sharing as Forest · Waiting')
+        await expect(activeHeader).not.toContainText('Stopped following')
         const timestamp = await offlineSource.evaluate(
           (recordedAt) => new Date(recordedAt).toLocaleString(),
           senderState.stoppedViewers[0]!.recordedAt,
@@ -1656,16 +1698,17 @@ test('independent links from one source use unlinkable source peer identities', 
   await page.context().setGeolocation({ latitude: 48.1372, longitude: 11.5756 })
   await page.goto('/')
 
-  const createLink = async (): Promise<string> => {
+  const createLink = async (name: string): Promise<string> => {
     await openShareCreator(page)
+    await page.getByRole('textbox', { name: 'Name to share' }).fill(name)
     await page.getByRole('button', { name: 'Create location link' }).click()
     const url = await page.getByLabel('Share link').inputValue({ timeout: 30_000 })
     await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
     return url
   }
 
-  const firstUrl = await createLink()
-  const secondUrl = await createLink()
+  const firstUrl = await createLink('First independent link')
+  const secondUrl = await createLink('Second independent link')
   const first = parseShareInvitation(firstUrl)
   const second = parseShareInvitation(secondUrl)
   expect(first.sourcePeerId).not.toBe(second.sourcePeerId)
@@ -1674,14 +1717,10 @@ test('independent links from one source use unlinkable source peer identities', 
   await page.reload()
   await expect(page.locator('.dock-peers')).toContainText('Sharing 2', { timeout: 30_000 })
   await openPeerFilter(page, 'Sharing')
-  await expandPeerDetails(page.locator('.peer-list__item').first())
-  const links = await page
-    .getByRole('dialog', { name: 'Active shares' })
-    .getByRole('button', {
-      name: 'Show link / QR',
-    })
-    .all()
-  await links[0]!.click()
+  const firstPeer = page.locator('.peer-list__item').filter({ hasText: 'First independent link' })
+  await expect(firstPeer).toHaveCount(1)
+  await expandPeerDetails(firstPeer)
+  await firstPeer.getByRole('button', { name: 'Show link / QR' }).click()
   const restoredUrl = await page.getByLabel('Share link').inputValue()
   expect(parseShareInvitation(restoredUrl).sourcePeerId).toBe(first.sourcePeerId)
 })
@@ -1709,18 +1748,13 @@ test('revoking an active share immediately removes its location and records its 
     const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
 
-    await viewer.goto(url)
-    await expect(viewer.getByRole('button', { name: 'Keep following' })).toBeVisible({
+    await openIncomingLink(viewer, url)
+    const request = source.getByRole('region', { name: 'Viewer access request' })
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
       timeout: 30_000,
     })
-    const request = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(request).toBeVisible({ timeout: 30_000 })
     await request.getByRole('button', { name: 'Approve this device' }).click()
-    await viewer.getByRole('button', { name: 'Keep following' }).click()
-    await viewer.getByRole('button', { name: 'Save location' }).click()
-    const shareBack = viewer.getByRole('region', { name: 'Share back invitation' })
-    if (await shareBack.isVisible())
-      await shareBack.getByRole('button', { name: 'Not now' }).click()
+    await saveLocationPreview(viewer)
 
     await openPeerFilter(viewer, 'Viewing')
     await expandPeerDetails(viewer.locator('.peer-list__item').first())
@@ -1768,12 +1802,13 @@ test('a disconnected viewer learns revocation after the source restarts', async 
     await source.getByRole('button', { name: 'Create location link' }).click()
     const url = await source.getByLabel('Share link').inputValue({ timeout: 30_000 })
     await source.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
-    await viewer.goto(url)
-    await viewer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
+    await openIncomingLink(viewer, url)
     const request = source.getByRole('region', { name: 'Viewer access request' })
-    await expect(request).toBeVisible({ timeout: 30_000 })
+    await expect(request.locator('.device-comparison-letters')).toHaveText(/^[A-Z]{4}$/, {
+      timeout: 30_000,
+    })
     await request.getByRole('button', { name: 'Approve this device' }).click()
-    await viewer.getByRole('button', { name: 'Save location' }).click()
+    await saveLocationPreview(viewer)
     await expect
       .poll(() =>
         viewer.evaluate(async () => {

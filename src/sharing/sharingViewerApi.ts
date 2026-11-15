@@ -1,6 +1,6 @@
 import type { FollowEntry, SharingRuntime, SourceShare } from './sharingContracts.ts'
 
-import { hasEndedPeerShare } from './peerHistory.ts'
+import { canRecordLocalStop, hasEndedPeerShare } from './peerHistory.ts'
 import { appendFollowTrace } from './followTrace.ts'
 import { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
 export { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
@@ -316,7 +316,13 @@ const prepareViewerComparison = async (ctx: SharingContext, shareId: string) => 
   return { follow, capability, node, ownPeerId, run }
 }
 
-const openComparisonPort = async (node: BrowserLibp2pNode, capability: ShareCapability) => {
+const COMPARISON_DIAL_TIMEOUT_MS = 20_000
+
+const openComparisonPort = async (
+  node: BrowserLibp2pNode,
+  capability: ShareCapability,
+  signal: AbortSignal,
+) => {
   const stream = await dialShareStream(
     node,
     capability.addresses,
@@ -328,6 +334,7 @@ const openComparisonPort = async (node: BrowserLibp2pNode, capability: ShareCapa
           connection.status === 'open' &&
           connection.remotePeer.toString() === capability.sourcePeerId,
       ),
+    signal,
   )
   try {
     requireComparisonStreamPeer(stream, node.getConnections(), capability.sourcePeerId)
@@ -345,14 +352,12 @@ const assertComparisonResult = (
   run: { cancelled: boolean },
   result: { expiresAt: number },
 ) => {
-  if (
-    run.cancelled ||
-    Date.now() >= result.expiresAt ||
-    result.expiresAt > Date.now() + COMPARISON_TTL_MS ||
-    ctx.followed.get(shareId) !== follow
-  ) {
-    throw new Error('Device comparison expired or cancelled.')
-  }
+  if (run.cancelled) throw new Error('Device comparison was cancelled.')
+  if (Date.now() >= result.expiresAt) throw new Error('Device comparison expired.')
+  if (result.expiresAt > Date.now() + COMPARISON_TTL_MS)
+    throw new Error('Device comparison expiry was invalid.')
+  if (ctx.followed.get(shareId) !== follow)
+    throw new Error('Device comparison was interrupted by a follow-state change.')
 }
 
 const storeViewerComparison = (
@@ -404,16 +409,33 @@ const createStartDeviceComparison =
   (ctx: SharingContext): SharingRuntime['startDeviceComparison'] =>
   async (shareId) => {
     const { follow, capability, node, ownPeerId, run } = await prepareViewerComparison(ctx, shareId)
+    const controller = new AbortController()
+    let timeout: number | undefined
+    let timedOut = false
     try {
       await ctx.reserveDeviceComparison(shareId, ownPeerId)
-      const port = await openComparisonPort(node, capability)
+      if (run.cancelled) throw new Error('Device comparison was cancelled.')
+      // The P2P stream dial used to have no deadline. A stalled remote handler
+      // must return an error and allow explicit retry, not hold UI forever.
+      timeout = window.setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, COMPARISON_DIAL_TIMEOUT_MS)
+      run.close = () => Promise.resolve(controller.abort())
+      const port = await openComparisonPort(node, capability, controller.signal)
+      window.clearTimeout(timeout)
+      timeout = undefined
       run.close = () => port.close()
       try {
         await finishViewerComparison(ctx, shareId, follow, capability, ownPeerId, run, port)
       } finally {
         await port.close()
       }
+    } catch (error) {
+      if (timedOut) throw new Error('Secure comparison connection timed out. Retry manually.')
+      throw error
     } finally {
+      if (timeout !== undefined) window.clearTimeout(timeout)
       ctx.comparisonRuns.delete(shareId)
     }
   }
@@ -668,7 +690,8 @@ const pendingFollowEntry = (
 const applyPendingFollow = async (ctx: SharingContext, state: FollowState, denied: boolean) => {
   const entry = pendingFollowEntry(ctx, state, denied)
   ctx.followed.set(state.capability.shareId, entry)
-  if (denied) ctx.received.delete(state.capability.shareId)
+  // A renewed approval request is not current authorization to show an old fix.
+  ctx.received.delete(state.capability.shareId)
   if (ctx.followed.get(state.capability.shareId)?.saved) await ctx.persist()
   await state.messagePort.close()
   ctx.publish({
@@ -761,8 +784,9 @@ const receiveObservation = async (
         observation,
         receivedAt: Date.now(),
       })
-      scheduleTracePersist(ctx)
     }
+    // Saving one encrypted last fix is independent of opting into receive history.
+    if (entry?.saved) scheduleTracePersist(ctx)
     ctx.publish({ message: '' })
   } catch {
     // Invalid or unauthenticated location payloads are ignored without retaining their data.
@@ -1182,14 +1206,33 @@ const createStopFollowing =
     const pendingReturn = ctx.pendingReturns.get(shareId)
     const eventId = randomToken()
     const { shouldQueue, pending } = await preparePendingStop(ctx, entry, eventId)
+    const historyKey = JSON.stringify([shareId, entry.peerId ?? null])
+    const previousHistory = ctx.oldSeeing.get(historyKey)
+    const localStop = canRecordLocalStop(ctx.oldSeeing.values(), shareId, entry.terminal)
+      ? {
+          shareId,
+          ...(entry.peerId ? { peerId: entry.peerId } : {}),
+          name: entry.localName,
+          reason: 'stopped' as const,
+          endedAt: Date.now(),
+        }
+      : undefined
+    if (localStop) ctx.rememberLifecycleRecord(ctx.oldSeeing, localStop)
     const previousQueue = queuePendingStop(ctx, pending)
     ctx.followed.delete(shareId)
     ctx.received.delete(shareId)
     ctx.pendingReturns.delete(shareId)
     try {
-      if (shouldQueue || entry.saved) await ctx.persist()
+      if (shouldQueue || entry.saved || (localStop && ctx.privateStateAvailable && ctx.store))
+        await ctx.persist()
     } catch (error) {
-      restoreFollowingState(ctx, shareId, entry, observation, pendingReturn, previousQueue)
+      if (localStop && ctx.oldSeeing.get(historyKey) === localStop) {
+        if (previousHistory) ctx.oldSeeing.set(historyKey, previousHistory)
+        else ctx.oldSeeing.delete(historyKey)
+      }
+      // A concurrent authenticated remote end must never be rolled back to an active follow.
+      if (!hasEndedPeerShare(ctx.oldSeeing.values(), shareId))
+        restoreFollowingState(ctx, shareId, entry, observation, pendingReturn, previousQueue)
       throw error
     }
     ctx.viewerClosers.delete(shareId)
@@ -1245,11 +1288,14 @@ const scheduleTracePersist = (ctx: SharingContext): void => {
     ctx.traceSaveTimer !== undefined
   )
     return
-  const delay = Math.max(0, 30_000 - (Date.now() - ctx.lastTraceSavedAt))
+  // Persist the first received fix immediately; rate-limit subsequent updates.
+  const delay = ctx.lastTraceSavedAt ? Math.max(0, 15_000 - (Date.now() - ctx.lastTraceSavedAt)) : 0
   ctx.traceSaveTimer = window.setTimeout(() => {
     ctx.traceSaveTimer = undefined
     ctx.lastTraceSavedAt = Date.now()
-    void ctx.persist().catch(() => ctx.publish({ message: 'Received history could not be saved.' }))
+    void ctx
+      .persist()
+      .catch(() => ctx.publish({ message: 'Received location state could not be saved.' }))
   }, delay)
 }
 

@@ -19,6 +19,8 @@ export interface MapLocation {
   readonly label?: string
   readonly color?: string
   readonly state?: 'live' | 'delayed' | 'stale'
+  readonly capturedAt?: number
+  readonly expiresAt?: number
 }
 
 interface LocationProperties {
@@ -44,6 +46,8 @@ export const locationObservationToMapLocation = (
     ? { accuracyMeters: observation.accuracyMeters }
     : { radiusMeters: observation.accuracyMeters }),
   state,
+  capturedAt: observation.capturedAt,
+  expiresAt: observation.expiresAt,
   ...(display.label ? { label: display.label } : {}),
   ...(display.color ? { color: display.color } : {}),
 })

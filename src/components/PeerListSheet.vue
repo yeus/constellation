@@ -116,13 +116,8 @@
           <span class="peer-list__summary-name">{{ peer.name }}</span>
           <small class="peer-list__summary-context">
             {{ peerContext(peer) }} · {{ peerStatus(peer) }}
-            <template v-if="peer.stopped.some(({ dismissed }) => !dismissed)">
-              ·
-              {{
-                new Date(
-                  peer.stopped.find(({ dismissed }) => !dismissed)!.recordedAt,
-                ).toLocaleString()
-              }}
+            <template v-if="!peer.shares.length && !peer.following.length && peerEndTime(peer)">
+              · {{ new Date(peerEndTime(peer)!).toLocaleString() }}
             </template>
           </small>
           <button
@@ -145,6 +140,17 @@
           >
             <MapPin aria-hidden="true" />
           </button>
+          <button
+            v-if="hasPeerRevokeTargets(peer)"
+            class="peer-list__revoke-peer"
+            type="button"
+            :disabled="revokePeerBusy"
+            :aria-label="`Revoke peer ${peer.name}`"
+            title="Stop following this peer and block their access on shared links"
+            @click.stop.prevent="emit('revokePeer', peerRevokeTargets(peer))"
+          >
+            <UserX aria-hidden="true" /> <span>Revoke</span>
+          </button>
         </summary>
 
         <div class="peer-list__details">
@@ -160,24 +166,22 @@
             <div v-if="peer.following.length" class="peer-list__direction">
               <span class="peer-list__direction-label">{{ peer.name }}’s location to you</span>
               <span class="peer-list__direction-status">{{ incomingSummary(peer) }}</span>
-            </div>
-            <div class="peer-list__direction-actions">
-              <button
-                v-if="peerShareIds(peer).length > 0"
-                class="peer-text-action"
-                type="button"
-                @click="openDetails($event)"
+              <div
+                v-for="follow in peer.following"
+                :key="`color:${follow.shareId}`"
+                class="peer-link-item__colors"
+                :aria-label="`Location color for ${follow.displayName || follow.localName}`"
               >
-                Manage link
-              </button>
-              <button
-                v-if="peerFollowIds(peer).length > 0"
-                class="peer-text-action"
-                type="button"
-                @click="emit('focusPeer', peerFollowIds(peer))"
-              >
-                Show on map
-              </button>
+                <button
+                  v-for="color in FOLLOW_COLORS"
+                  :key="color"
+                  type="button"
+                  :style="{ backgroundColor: color }"
+                  :aria-label="`Use ${color} color`"
+                  :aria-pressed="follow.color === color"
+                  @click="emit('color', follow.shareId, color)"
+                />
+              </div>
             </div>
           </div>
           <details class="peer-list__section peer-list__section--names" open>
@@ -188,7 +192,9 @@
             <div class="peer-list__section-content">
               <div class="peer-list__names-grid">
                 <div class="peer-list__private-names">
-                  <span class="peer-list__field-label">Your nickname</span>
+                  <span v-if="peer.following.length" class="peer-list__field-label"
+                    >Private name for locations you receive</span
+                  >
                   <div
                     v-for="follow in peer.following"
                     :key="`name:${follow.shareId}`"
@@ -217,6 +223,11 @@
                       </button>
                     </template>
                   </div>
+                  <span
+                    v-if="peer.shares.some(({ viewer }) => viewer)"
+                    class="peer-list__field-label"
+                    >Local label for a device viewing your location</span
+                  >
                   <div
                     v-for="connection in peer.shares.filter(({ viewer }) => viewer)"
                     :key="`device-name:${connection.share.shareId}`"
@@ -247,9 +258,7 @@
                       <button type="button" @click="editingViewer = undefined">Cancel</button>
                     </template>
                     <template v-else>
-                      <span>{{
-                        connection.viewer?.localName || connection.viewer?.displayName || peer.name
-                      }}</span>
+                      <span>{{ connection.viewer?.localName || 'Unnamed viewer device' }}</span>
                       <button
                         type="button"
                         :aria-label="`Edit device name for connection ${connection.viewer?.fingerprint}`"
@@ -297,7 +306,10 @@
                     <span>Share my name</span
                     ><span class="peer-list__switch-track" aria-hidden="true" />
                   </button>
-                  <p class="field-help">Your nickname stays private.</p>
+                  <p class="field-help">
+                    Your private nickname stays local. This optional profile name is separate from
+                    the random nickname already shared on each link.
+                  </p>
                   <div v-if="editingProfile === peer.peerId" class="peer-list__name-editor">
                     <label v-if="shareProfileName">
                       Name to share
@@ -427,6 +439,10 @@
                   }}
                   · viewing your location</strong
                 >
+                <span class="field-help"
+                  >Nickname you share on this link:
+                  {{ connection.share.name || 'Not shared (older link)' }}</span
+                >
                 <span
                   >Last connected
                   {{ new Date(connection.viewer!.lastSeenAt).toLocaleString() }}</span
@@ -467,18 +483,27 @@
                 class="peer-link-item"
               >
                 <strong>{{ follow.displayName || follow.localName || 'Shared location' }}</strong>
+                <span class="field-help"
+                  >Nickname received on this link:
+                  {{ follow.linkName || 'Not shared (older link)' }}</span
+                >
                 <span
                   >{{ statusLabel(follow.status) }} · {{ follow.saved ? 'Saved' : 'Preview' }}</span
                 >
-                <span
-                  >Last location:
+                <span>
+                  Last location:
                   {{
-                    follow.lastLocationAt
-                      ? `${new Date(follow.lastLocationAt).toLocaleString()} · ${elapsed(follow.lastLocationAt)} ago`
-                      : 'not received'
+                    follow.receiverStatusPending
+                      ? 'checking background receiver'
+                      : follow.lastLocationAt
+                        ? `${new Date(follow.lastLocationAt).toLocaleString()} · ${elapsed(follow.lastLocationAt)} ago`
+                        : 'not received'
                   }}
-                  · Updates this session: {{ follow.updatesReceived }}</span
-                >
+                  · Updates received this session:
+                  {{ follow.receiverStatusPending ? 'checking' : follow.updatesReceived }}
+                  · Recorded events (last 24 h):
+                  {{ follow.receiverStatusPending ? 'checking' : (follow.trace?.length ?? 0) }}
+                </span>
                 <span
                   >Following since:
                   {{
@@ -491,22 +516,7 @@
                     follow.expiresAt === null ? 'until stopped' : remaining(follow.expiresAt)
                   }}</span
                 >
-                <label class="peer-trace-optin">
-                  <input
-                    type="checkbox"
-                    :checked="follow.traceEnabled === true"
-                    :disabled="!follow.saved"
-                    :aria-label="`Record received history for ${follow.displayName || follow.localName}`"
-                    @change="
-                      emit(
-                        'traceEnabled',
-                        follow.shareId,
-                        ($event.target as HTMLInputElement).checked,
-                      )
-                    "
-                  />
-                  Record received history for 24 hours
-                </label>
+                <small v-if="traceError" class="field-help" role="alert">{{ traceError }}</small>
                 <small v-if="!follow.saved" class="field-help"
                   >Save this subscription to enable local recording.</small
                 >
@@ -555,17 +565,6 @@
                 >
                   Share back
                 </button>
-                <div class="peer-link-item__colors" aria-label="Location color">
-                  <button
-                    v-for="color in FOLLOW_COLORS"
-                    :key="color"
-                    type="button"
-                    :style="{ backgroundColor: color }"
-                    :aria-label="`Use ${color} color`"
-                    :aria-pressed="follow.color === color"
-                    @click="emit('color', follow.shareId, color)"
-                  />
-                </div>
                 <div class="peer-link-item__actions">
                   <button
                     v-if="viewableIds.includes(follow.shareId)"
@@ -612,7 +611,8 @@
               <div v-for="ended in peer.ended" :key="ended.key" class="peer-history-item">
                 <strong>{{ ended.name }}</strong>
                 <span
-                  >{{ ended.kind === 'sharing' ? 'Shared' : 'Viewed' }} · {{ ended.reason }} ·
+                  >{{ ended.kind === 'sharing' ? 'Shared' : 'Viewed' }} ·
+                  {{ ended.reason === 'stopped' ? 'stopped locally' : ended.reason }} ·
                   {{ new Date(ended.endedAt).toLocaleString() }}</span
                 >
               </div>
@@ -691,12 +691,17 @@
       <p v-if="!selectedTraceFollow.saved" class="field-help">
         Save the subscription first. Temporary previews cannot store history.
       </p>
+      <p v-else-if="selectedTraceFollow.receiverStatusPending" class="field-help" role="status">
+        Checking the background receiver for saved history. An unavailable receiver is not evidence
+        that no messages were recorded.
+      </p>
       <p v-else-if="!selectedTraceFollow.traceEnabled" class="field-help">
         Recording is off. Turn it on to start a private 24-hour trace. Earlier messages cannot be
         recovered.
       </p>
       <p v-else-if="!selectedTraceFollow.trace?.length" class="field-help">
-        No messages received since recording was enabled.
+        No messages in saved history. The update count above may include observations from before
+        recording was enabled. Cleared or unrecorded messages cannot be recovered.
       </p>
       <ol v-else class="peer-trace-list" aria-label="Received message history">
         <li
@@ -753,6 +758,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import {
   LucideMapPin as MapPin,
   LucidePause as PauseIcon,
+  LucideUserX as UserX,
   LucidePlay as PlayIcon,
   LucideFunnel as FilterIcon,
   LucideShare2 as ShareIcon,
@@ -766,6 +772,8 @@ import {
   LucideList as ListIcon,
   LucideChevronDown as ChevronDown,
 } from '@lucide/vue'
+import type { MapLocation } from '../location/mapModel.ts'
+import { rankPeersByProximity } from '../location/peerRanking.ts'
 import type { DeviceComparison } from '../sharing/deviceComparison.ts'
 import CloseIcon from './icons/CloseIcon.vue'
 import PeerAvatar from './PeerAvatar.vue'
@@ -773,6 +781,7 @@ import { advertisedPeerName, type PeerNamePreference } from '../sharing/peerName
 import { canClearPeerRecord, protectActivePeerHistory } from '../sharing/peerHistory.ts'
 import type { StoppedViewerRecord } from '../sharing/privateStore.ts'
 import { FOLLOW_COLORS, type FollowSummary, type ShareSummary } from '../sharing/sharingRuntime.ts'
+import { followActivitySummary } from '../sharing/followPresentation.ts'
 
 type PeerFilter = 'all' | 'sharing' | 'viewing' | 'both' | 'group'
 type OldPeerRecord = {
@@ -780,7 +789,7 @@ type OldPeerRecord = {
   peerId?: string
   name?: string
   endedAt: number
-  reason: 'revoked' | 'expired'
+  reason: 'revoked' | 'expired' | 'stopped'
 }
 type PeerLink = { share: ShareSummary; viewer?: NonNullable<ShareSummary['viewers']>[number] }
 type PeerEntry = {
@@ -806,6 +815,7 @@ const props = defineProps<{
   peerNamePreferences?: readonly PeerNamePreference[]
   shares: readonly ShareSummary[]
   following: readonly FollowSummary[]
+  locations: readonly MapLocation[]
   filter: PeerFilter
   viewableIds: readonly string[]
   limitedIds?: readonly string[]
@@ -816,6 +826,7 @@ const props = defineProps<{
   paused: boolean
   pauseBusy?: boolean
   revokeAllBusy?: boolean
+  revokePeerBusy?: boolean
   stoppedViewers: readonly StoppedViewerRecord[]
   oldShares: readonly OldPeerRecord[]
   oldFollowing: readonly OldPeerRecord[]
@@ -834,6 +845,13 @@ const emit = defineEmits<{
   dismissStopped: [shareId: string, peerId: string]
   show: [share: ShareSummary]
   revoke: [shareId: string]
+  revokePeer: [
+    targets: {
+      followingShareIds: string[]
+      dedicatedShareIds: string[]
+      viewerConnections: { shareId: string; fingerprint: string }[]
+    },
+  ]
   viewerName: [shareId: string, fingerprint: string, name: string]
   viewerBlock: [shareId: string, fingerprint: string]
   name: [shareId: string, name: string]
@@ -843,6 +861,7 @@ const emit = defineEmits<{
   unfollow: [shareId: string]
   keep: [shareId: string]
   shareBack: [shareId: string]
+  traceOpened: [shareId: string]
   traceEnabled: [shareId: string, enabled: boolean]
   traceClear: [shareId: string]
   compareDevice: [shareId: string, peerId?: string]
@@ -858,6 +877,7 @@ let traceTrigger: HTMLElement | null = null
 const openTraceDialog = (shareId: string, event: MouseEvent): void => {
   traceTrigger = event.currentTarget as HTMLElement
   traceShareId.value = shareId
+  emit('traceOpened', shareId)
   void nextTick(() => traceCloseButton.value?.focus())
 }
 const closeTraceDialog = (): void => {
@@ -952,14 +972,6 @@ const hasClearableHistory = computed(() => {
     canClearPeerRecord(record, protection),
   )
 })
-const openDetails = (event: Event): void => {
-  const target = event.currentTarget
-  if (!(target instanceof HTMLElement)) return
-  const item = target.closest('.peer-list__item')
-  const linkSection = item?.querySelector<HTMLDetailsElement>('.peer-list__section--link')
-  if (linkSection) linkSection.open = true
-  item?.querySelector<HTMLElement>('.peer-list__section--link summary')?.focus()
-}
 const showEnded = ref(false)
 const totalConnectedViewers = computed(() =>
   props.shares.reduce((count, share) => count + share.viewerCount, 0),
@@ -1165,10 +1177,10 @@ const peers = computed(() => {
     props.oldFollowing,
     props.stoppedViewers,
   )
-  return [...entries.values()]
+  const filtered = [...entries.values()]
     .map((entry) => decoratePeerEntry(entry, props.peerNamePreferences))
     .filter((entry) => matchesPeerFilter(entry, props.filter, showEnded.value, props.limitedIds))
-    .sort((left, right) => left.name.localeCompare(right.name))
+  return rankPeersByProximity(filtered, props.locations)
 })
 
 const pendingAdoption = ref<{ peerId: string; name: string }>()
@@ -1184,21 +1196,45 @@ const adoptAdvertisedName = (): void => {
   pendingAdoption.value = undefined
 }
 
+const primaryIncomingFollow = (peer: PeerEntry): FollowSummary | undefined =>
+  peer.following.find(({ status }) => status === 'live') ??
+  peer.following.find(({ status }) => status === 'delayed') ??
+  peer.following.find(({ status }) => status === 'stale') ??
+  peer.following[0]
+const peerEndTime = (peer: PeerEntry): number | undefined =>
+  Math.max(
+    0,
+    ...peer.stopped.map(({ recordedAt }) => recordedAt),
+    ...peer.ended.map(({ endedAt }) => endedAt),
+  ) || undefined
+const peerRevokeTargets = (peer: PeerEntry) => ({
+  followingShareIds: peer.following.map(({ shareId }) => shareId),
+  // A recipient-bound grant belongs only to this peer; stop the grant itself.
+  dedicatedShareIds: peer.shares.flatMap(({ share }) =>
+    peer.peerId && share.recipientPeerId === peer.peerId ? [share.shareId] : [],
+  ),
+  // Multi-viewer links stay active for everyone else. Block this device only.
+  viewerConnections: peer.shares.flatMap(({ share, viewer }) =>
+    viewer && share.recipientPeerId !== peer.peerId
+      ? [{ shareId: share.shareId, fingerprint: viewer.fingerprint }]
+      : [],
+  ),
+})
+const hasPeerRevokeTargets = (peer: PeerEntry): boolean => {
+  const targets = peerRevokeTargets(peer)
+  return Boolean(
+    targets.followingShareIds.length ||
+      targets.dedicatedShareIds.length ||
+      targets.viewerConnections.length,
+  )
+}
 const peerStatus = (peer: PeerEntry): string => {
   if (peer.waiting) return 'Waiting'
-  if (peer.following.some(({ status }) => status === 'live')) return 'Live'
-  if (peer.following.some(({ status }) => status === 'delayed')) return 'Delayed'
-  if (peer.following.some(({ status }) => status === 'stale')) return 'Stale'
-  if (peer.shares.some(({ viewer }) => viewer)) return 'Connected'
-  return peer.stopped.some(({ dismissed }) => !dismissed)
-    ? 'Stopped following'
-    : (peer.following[0]?.status ?? 'Ended')
+  const follow = primaryIncomingFollow(peer)
+  if (follow) return follow.receiverStatusPending ? 'Checking receiver' : statusLabel(follow.status)
+  if (peer.shares.some(({ viewer }) => viewer)) return 'Connected (outgoing)'
+  return 'Ended'
 }
-const peerShareIds = (peer: PeerEntry): string[] => peer.shares.map(({ share }) => share.shareId)
-const peerFollowIds = (peer: PeerEntry): string[] =>
-  peer.following
-    .filter((follow) => props.viewableIds.includes(follow.shareId))
-    .map((follow) => follow.shareId)
 const hasOutgoingGrant = (peer: PeerEntry): boolean =>
   peer.peerId !== undefined && peer.shares.length > 0
 const outgoingAdvertisedNames = (peer: PeerEntry): string[] => {
@@ -1240,7 +1276,10 @@ const peerContext = (peer: PeerEntry): string => {
   const sharing = peer.shares.length > 0
   const viewing = peer.following.length > 0
   const names = summarizedNames(outgoingAdvertisedNames(peer))
-  if (!sharing && !viewing) return peer.stopped.length ? 'Stopped following' : 'Ended'
+  if (!sharing && !viewing)
+    return peer.stopped.length || peer.ended.some(({ kind }) => kind === 'sharing')
+      ? 'Previously shared'
+      : 'Previously viewed'
   if (sharing && viewing) return names ? `Sharing and viewing as ${names}` : 'Sharing and viewing'
   if (sharing) return names ? `Sharing as ${names}` : 'Sharing'
   return 'Viewing'
@@ -1264,12 +1303,11 @@ const outgoingSummary = (peer: PeerEntry): string => {
   return pieces.join(' · ')
 }
 const incomingSummary = (peer: PeerEntry): string => {
-  const follow = peer.following[0]
+  const follow = primaryIncomingFollow(peer)
   if (!follow) return ''
-  const age = follow.lastLocationAt
-    ? `Updated ${elapsed(follow.lastLocationAt)} ago`
-    : 'No location yet'
-  return `${statusLabel(follow.status)} · ${age}`
+  if (follow.receiverStatusPending) return 'Checking background receiver history'
+  const summary = followActivitySummary(follow.status, follow.lastLocationAt)
+  return peer.following.length > 1 ? `${summary} · ${peer.following.length} links` : summary
 }
 const expandedRelationshipIds = ref<ReadonlySet<string>>(new Set())
 const collapsedSelectedFollowIds = ref<ReadonlySet<string>>(new Set())
@@ -1358,7 +1396,7 @@ const statusLabel = (status: FollowSummary['status']): string =>
     stale: 'Stale',
     expired: 'Expired',
     revoked: 'Revoked',
-    unavailable: 'Unavailable',
+    unavailable: 'Not connected',
     'approval-pending': 'Waiting for sender approval',
     denied: 'Access not approved',
   })[status]
@@ -1718,6 +1756,32 @@ const remaining = (timestamp: number): string => {
   font-size: 0.8rem;
   color: var(--muted);
 }
+.peer-list__revoke-peer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 2.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--control-fill);
+  color: var(--text);
+  cursor: pointer;
+}
+.peer-list__revoke-peer svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.peer-list__revoke-peer:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+@media (max-width: 430px) {
+  .peer-list__revoke-peer span {
+    display: none;
+  }
+}
 .peer-list__map-action {
   display: grid;
   width: 2.5rem;
@@ -1761,14 +1825,22 @@ const remaining = (timestamp: number): string => {
 
 .peer-list__summary {
   display: grid;
-  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
-  grid-template-areas: 'avatar name map' 'avatar status map';
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto auto;
+  grid-template-areas: 'avatar name map revoke' 'avatar status map revoke';
   align-items: center;
   column-gap: 0.7rem;
   row-gap: 0.15rem;
   min-height: 2.7rem;
   cursor: pointer;
   list-style-position: outside;
+}
+.peer-list__summary:not(:has(.peer-list__map-action)) {
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  grid-template-areas: 'avatar name revoke' 'avatar status revoke';
+}
+.peer-list__summary:not(:has(.peer-list__revoke-peer)) {
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  grid-template-areas: 'avatar name map' 'avatar status map';
 }
 
 .peer-list__summary > .peer-avatar {
@@ -1779,6 +1851,9 @@ const remaining = (timestamp: number): string => {
 }
 .peer-list__summary > .peer-list__map-action {
   grid-area: map;
+}
+.peer-list__summary > .peer-list__revoke-peer {
+  grid-area: revoke;
 }
 .peer-list__summary-name {
   grid-area: name;

@@ -9,6 +9,7 @@ import { compileAndroidWebViewExpression } from './android-cdp-source.mjs'
 import { browserProcessEnvironment } from './browser-environment.mjs'
 import { redactAndroidTestError, summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
+import { parsePowerJournal, powerMatrixCases, runPowerMatrixCase } from './android-power-matrix.mjs'
 import {
   DebuggerTimeoutError,
   DebuggerTransportError,
@@ -538,23 +539,38 @@ const restartAndroidApp = async (cdp, expectedText = 'Sharing 1') => {
   cdp?.close()
   adb(['shell', 'am', 'force-stop', packageName])
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+  const observations = []
   for (let attempt = 0; attempt < 8; attempt += 1) {
     let candidate
     try {
       candidate = await connectCdp()
       await wait(500)
-      const responsive = await Promise.race([
-        androidTextIncludes(candidate, expectedText),
-        wait(5_000).then(() => false),
+      const state = await Promise.race([
+        candidate.evaluate(`(() => {
+          const dock = document.querySelector('button.dock-peers')
+          const counts = (dock?.textContent ?? '').split(/[^0-9]+/).filter(Boolean).map(Number)
+          return {
+            ready: document.readyState,
+            hasDock: Boolean(dock),
+            sharingCount: counts[0] ?? null,
+            seeingCount: counts[1] ?? null,
+            expectedVisible: document.body?.innerText?.includes(${JSON.stringify(expectedText)}) === true,
+          }
+        })()`),
+        wait(5_000).then(() => null),
       ])
-      if (responsive) return candidate
-    } catch {
-      // Process restart may expose a stale WebView debugger target before the new UI settles.
+      observations.push(state ?? { evaluationTimedOut: true })
+      if (state?.expectedVisible) return candidate
+    } catch (error) {
+      // Only record the failure class, never debugger payloads or private UI content.
+      observations.push({ failureClass: error instanceof Error ? error.name : 'UnknownError' })
     }
     candidate?.close()
     await wait(1_000)
   }
-  throw new Error('Android app did not stabilize after process restart.')
+  throw new Error(
+    `Android app did not stabilize after process restart: ${JSON.stringify(observations)}`,
+  )
 }
 
 const tapAndroidButton = async (cdp, label, attempts = 16) => {
@@ -624,13 +640,20 @@ const clickAriaButton = (cdp, label) =>
 const androidTextIncludes = (cdp, text) =>
   cdp.evaluate(`document.body?.innerText?.includes(${JSON.stringify(text)}) === true`)
 
+const parseReceivedUpdateCount = (text) => {
+  const value = text?.match(/Updates received this session:\s*(\d+)/)?.[1]
+  return value === undefined ? null : Number(value)
+}
 const receivedUpdateCount = async (viewer) => {
   const text = await viewer
     .locator('.peer-list article.peer-link-item')
     .filter({ hasText: 'Last location:' })
     .first()
     .textContent()
-  return Number(text.match(/Updates this session:\s*(\d+)/)?.[1] ?? 0)
+  const count = parseReceivedUpdateCount(text)
+  if (count === null)
+    throw new Error('Android test expected a numeric received-update counter in the peer details.')
+  return count
 }
 
 const fillAndroidInput = (cdp, label, value) =>
@@ -639,6 +662,16 @@ const fillAndroidInput = (cdp, label, value) =>
     if (!input) return false;
     input.value = ${JSON.stringify(value)};
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`)
+
+// Exercise the UI clipboard action in the WebView without depending on host clipboard state.
+const setAndroidTestClipboard = (cdp, text) =>
+  cdp.evaluate(`(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: async () => ${JSON.stringify(text)} },
+    });
     return true;
   })()`)
 
@@ -744,7 +777,8 @@ const configureAndroidReceiverOnly = async (cdp) => {
       () => cdp.evaluate('Boolean(document.querySelector(".settings-sheet"))'),
       'first-run receiver-only settings',
     )
-    assert.equal(await clickButton(cdp, 'Use while app is open'), true)
+    assert.equal(await clickButton(cdp, 'While app is open'), true)
+    assert.equal(await clickButton(cdp, 'Save settings'), true)
     await waitFor(
       () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
       'receiver-only foreground settings saved',
@@ -766,7 +800,7 @@ const createAndroidStarShare = async (cdp, name, { persistent = false } = {}) =>
   // The first-run settings save uses its own short-lived background runtime.
   adbFor(cdp.serial, ['logcat', '-c'])
   await clickNativePeerAction(cdp, 'All', 'Share location')
-  assert.equal(await fillAndroidInput(cdp, 'Share a name', name), true)
+  assert.equal(await fillAndroidInput(cdp, 'Name to share', name), true)
   assert.equal(await clickButton(cdp, '10'), true)
   if (persistent) {
     assert.equal(await clickButton(cdp, 'Until stopped'), true)
@@ -1075,6 +1109,58 @@ const runNotificationPauseSmoke = async () => {
   }
 }
 
+const runLocationOffSmoke = async () => {
+  let cdp
+  const setDeviceLocation = (enabled) =>
+    adb(['shell', 'cmd', 'location', 'set-location-enabled', String(enabled)])
+  try {
+    adb(['shell', 'pm', 'clear', packageName])
+    for (const permission of [
+      'android.permission.ACCESS_FINE_LOCATION',
+      'android.permission.ACCESS_COARSE_LOCATION',
+      'android.permission.ACCESS_BACKGROUND_LOCATION',
+      'android.permission.POST_NOTIFICATIONS',
+    ]) {
+      grantIfSupported(permission)
+    }
+    setDeviceLocation(false)
+    adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+    cdp = await connectCdp()
+    await waitForNativeApp(cdp, 'Android app with Location disabled')
+    await waitFor(
+      () => cdp.evaluate('Boolean(document.querySelector(".device-location-notice"))'),
+      'device Location disabled banner',
+    )
+    const setup = await cdp.evaluate(`window.__TAURI_INTERNALS__?.invoke('android_sharing_setup')`)
+    assert.equal(setup?.permissions?.servicesEnabled, false)
+    await waitFor(
+      () => cdp.evaluate('Boolean(document.querySelector(".settings-sheet"))'),
+      'first-run settings while Location is disabled',
+    )
+    // Device Location being off does not revoke the stored background-sharing policy.
+    const saved = await clickButton(cdp, 'Save settings')
+    if (!saved) throw new Error('Sharing settings were not editable while Location was off.')
+    await waitFor(
+      () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
+      'settings save with device Location disabled',
+    )
+    await clickNativePeerAction(cdp, 'All', 'Share location')
+    const disabled = await cdp.evaluate(`([...document.querySelectorAll('button')]
+      .find(button => button.textContent?.includes('Create location link'))?.disabled)`)
+    assert.equal(disabled, true, 'new outgoing shares must be disabled while Location is off')
+    setDeviceLocation(true)
+    await waitFor(
+      () => cdp.evaluate('!document.querySelector(".device-location-notice")'),
+      'automatic recovery when Android Location is switched back on',
+      30_000,
+    )
+  } finally {
+    setDeviceLocation(true)
+    cdp?.close()
+    adb(['shell', 'am', 'force-stop', packageName])
+  }
+}
+
 const runPermissionDenialSmoke = async () => {
   let cdp
   const permissions = [
@@ -1100,9 +1186,10 @@ const runPermissionDenialSmoke = async () => {
       await cdp.evaluate(
         `([...document.querySelectorAll('.settings-sheet button')].find(button => button.textContent?.includes('In background'))?.disabled)`,
       ),
-      true,
+      false,
     )
-    assert.equal(await clickButton(cdp, 'Use while app is open'), true)
+    assert.equal(await clickButton(cdp, 'While app is open'), true)
+    assert.equal(await clickButton(cdp, 'Save settings'), true)
     try {
       await waitFor(
         () => cdp.evaluate('!document.querySelector(".settings-sheet")'),
@@ -1351,6 +1438,20 @@ const readBackgroundTransportSummary = async (cdp) => {
         .flatMap((share) => share.viewers ?? [])
         .filter((viewer) => viewer.deliveryVerification === 'supported' &&
           typeof viewer.lastConfirmedAt === 'number').length,
+      deliveryStates: (status.shares ?? [])
+        .flatMap((share) => share.viewers ?? [])
+        .map((viewer) => ({
+          verification: viewer.deliveryVerification ?? 'missing',
+          pending: viewer.pendingObservations ?? 0,
+          pendingAgeMs: typeof viewer.pendingSince === 'number'
+            ? Date.now() - viewer.pendingSince : null,
+          lastSubmittedAgeMs: typeof viewer.lastSubmittedAt === 'number'
+            ? Date.now() - viewer.lastSubmittedAt : null,
+          lastConfirmedAgeMs: typeof viewer.lastConfirmedAt === 'number'
+            ? Date.now() - viewer.lastConfirmedAt : null,
+          heartbeatAgeMs: typeof viewer.lastSeenAt === 'number'
+            ? Date.now() - viewer.lastSeenAt : null,
+        })),
       latestConfirmedAt: Math.max(
         0,
         ...(status.shares ?? [])
@@ -1506,11 +1607,33 @@ const runRebootVerifySmoke = async () => {
   if (!expectedShareId || !Number.isFinite(expectedExpiresAt)) {
     throw new Error('Expected reboot share identity and expiry are required.')
   }
-  assert.equal(
-    adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes('LocationShareService'),
-    false,
-    'power-cycle must not silently resume location publication before the app returns',
-  )
+  // This fixture is an explicitly authorized, persisted background share with all
+  // required permissions granted. BOOT_COMPLETED must recover it before UI launch.
+  try {
+    await waitFor(
+      () =>
+        adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+          'LocationShareService',
+        ),
+      'authorized background sharing to restore automatically after device reboot',
+      30_000,
+    )
+  } catch (error) {
+    // The broadcast may have been suppressed or the service denied by OS policy.
+    // Report only the dedicated restore tag and stopped state, never raw logcat.
+    const stopped =
+      adb(['shell', 'dumpsys', 'package', packageName]).match(/\bstopped=(?:true|false)\b/)?.[0] ??
+      'stopped=unknown'
+    const restoreEvents = adb(['logcat', '-d', '-s', 'ConstellationRestore:I', '*:S'])
+      .split(/\r?\n/)
+      .filter((line) => line.includes('ConstellationRestore'))
+      .slice(-8)
+      .map((line) => line.replace(/^.*?ConstellationRestore\s*:\s*/, ''))
+    throw new Error(
+      `Android boot restoration failed (${stopped}; restore events: ${restoreEvents.join(' | ') || 'none'}).`,
+      { cause: error },
+    )
+  }
 
   let cdp
   try {
@@ -1919,6 +2042,173 @@ const firstSavedWifiNetworkId = () => {
   }
 }
 
+const runPowerStateMatrixSmoke = async () => {
+  let relay
+  let cdp
+  const shell = (...args) => adb(['shell', ...args])
+  const readPowerEvents = () => {
+    const journalDirectory = 'files/reliability-journal-v1'
+    const names = shell('run-as', packageName, 'ls', journalDirectory)
+      .split(/\s+/)
+      .filter((name) => /^\d{4}-\d{2}-\d{2}\.log$/.test(name))
+    return parsePowerJournal(
+      names
+        .map((name) => shell('run-as', packageName, 'cat', `${journalDirectory}/${name}`))
+        .join('\n'),
+    )
+  }
+  const refreshSnapshot = async () => {
+    shell('input', 'keyevent', 'KEYCODE_SLEEP')
+    await wait(350)
+    shell('input', 'keyevent', 'KEYCODE_WAKEUP')
+  }
+  const reopenActivity = async (label) => {
+    shell('am', 'start', '-n', `${packageName}/.MainActivity`)
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      let candidate
+      try {
+        candidate = await connectCdp()
+        await waitForNativeApp(candidate, label)
+        return candidate
+      } catch {
+        candidate?.close()
+        await wait(1000)
+      }
+    }
+    throw new Error(`Android Activity did not recover: ${label}`)
+  }
+  const expectOriginalShare = (active, shareId, label) =>
+    waitFor(
+      async () => {
+        const status = await active.evaluate(
+          `window.__TAURI_INTERNALS__?.invoke('android_background_share_status')`,
+        )
+        return status?.shares?.some((saved) => saved.shareId === shareId)
+      },
+      label,
+      45_000,
+    )
+  try {
+    relay = await startLocalRelay()
+    adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    try {
+      cdp = await setupNativeBackgroundSmoke()
+    } catch (error) {
+      const crashLog = adb(['logcat', '-d', '-b', 'crash', '-t', '200'])
+      const currentPid = adb(['shell', 'pidof', packageName]).trim()
+      console.error(
+        '[android-power] startup diagnosis: ' +
+          JSON.stringify({
+            appProcessPresent: Boolean(currentPid),
+            crash: summarizeAndroidNativeCrash(crashLog, packageName),
+          }),
+      )
+      throw error
+    }
+    const share = await startDirectBackgroundShare(cdp, null)
+    cdp.close()
+    cdp = undefined
+    shell('input', 'keyevent', 'KEYCODE_HOME')
+    await waitFor(
+      () => shell('dumpsys', 'activity', 'services', packageName).includes('LocationShareService'),
+      'native service before power matrix',
+      30_000,
+    )
+    assert.ok(
+      readPowerEvents().some(({ event }) => event === 'service.power.snapshot'),
+      'The installed APK has no 0.1.5 power telemetry; rebuild the local-relay APK instead of using --skip-build.',
+    )
+    const results = []
+    for (const scenario of powerMatrixCases) {
+      let result
+      try {
+        result = await runPowerMatrixCase(scenario, {
+          shell,
+          readPowerEvents,
+          refreshSnapshot,
+          waitFor,
+        })
+      } catch (error) {
+        // Power diagnostics are native, bounded, and contain no peer/location data.
+        const tail = readPowerEvents().slice(-6)
+        console.error(`[android-power] ${scenario.name} evidence: ${JSON.stringify(tail)}`)
+        throw error
+      }
+      results.push(result)
+      console.log(`[android-power] ${result.name}: ${result.status}`)
+    }
+    assert.ok(
+      results.some((result) => result.name === 'low-battery' && result.status === 'passed'),
+      'low battery must appear in the native journal',
+    )
+    cdp = await reopenActivity('the Android Activity after restored power')
+    await expectOriginalShare(
+      cdp,
+      share.shareId,
+      'original authorized share after restoring all power policies',
+    )
+    cdp.close()
+    cdp = undefined
+
+    // Force-stop is intentionally different from OS SIGKILL: it must not
+    // restart itself while the user has not explicitly relaunched the app.
+    shell('am', 'force-stop', packageName)
+    await waitFor(
+      () => !shell('dumpsys', 'activity', 'services', packageName).includes('LocationShareService'),
+      'force-stop suppresses automatic service restart',
+      15_000,
+    )
+    await wait(2000)
+    assert.equal(
+      shell('dumpsys', 'activity', 'services', packageName).includes('LocationShareService'),
+      false,
+      'force-stopped app must remain stopped until the user launches it',
+    )
+    cdp = await reopenActivity('the explicitly relaunched Android Activity')
+    await expectOriginalShare(
+      cdp,
+      share.shareId,
+      'the original authorized share after explicit relaunch',
+    )
+    await cdp.evaluate(
+      `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(share.shareId)} })`,
+    )
+    console.log(
+      '[android-power] force-stop suppressed automatic restart; explicit relaunch preserved the authorized share',
+    )
+  } finally {
+    // Restore emulator-owned overrides even if a policy assertion fails.
+    for (const command of [
+      ['dumpsys', 'deviceidle', 'unforce'],
+      ['cmd', 'power', 'set-mode', '0'],
+      ['dumpsys', 'battery', 'reset'],
+      ['cmd', 'netpolicy', 'set', 'restrict-background', 'false'],
+      ['cmd', 'notification', 'set_dnd', 'off'],
+      ['am', 'set-standby-bucket', packageName, 'active'],
+      ['cmd', 'appops', 'set', packageName, 'RUN_ANY_IN_BACKGROUND', 'allow'],
+      ['cmd', 'power', 'set-low-power-standby-active', 'false'],
+    ]) {
+      try {
+        shell(...command)
+      } catch {
+        /* Optional controls vary by API image. */
+      }
+    }
+    cdp?.close()
+    try {
+      shell('am', 'force-stop', packageName)
+    } catch {
+      /* Emulator may have exited. */
+    }
+    try {
+      adb(['reverse', '--remove', 'tcp:9111'])
+    } catch {
+      /* Emulator may have exited. */
+    }
+    if (relay) await stopChild(relay)
+  }
+}
+
 const runPowerNetworkSmoke = async () => {
   let cdp
   let share
@@ -2132,18 +2422,14 @@ const followOnAndroid = async (
   if (method === 'paste') {
     await waitForNativeApp(cdp, 'Android peer controls')
     await clickNativePeerAction(cdp, 'All', 'Add peer')
-    assert.equal(
-      await fillAndroidInput(cdp, 'Paste location link', url),
-      true,
-      'fill Android pasted link',
-    )
-    assert.equal(await clickButton(cdp, 'View location'), true, 'submit Android pasted link')
+    assert.equal(await setAndroidTestClipboard(cdp, url), true, 'prepare Android test clipboard')
+    assert.equal(await clickButton(cdp, 'Paste link'), true, 'paste Android location link')
   } else {
     startWithSharedText(url, serial)
   }
   try {
     await waitFor(
-      () => androidTextIncludes(cdp, 'Someone shared their location with you'),
+      () => androidTextIncludes(cdp, 'Someone shared a location with you'),
       'the Android invitation approval',
     )
   } catch (error) {
@@ -2153,11 +2439,11 @@ const followOnAndroid = async (
       followDialog: Boolean(document.querySelector('[aria-labelledby="follow-title"]')),
       nicknamePrompt: Boolean(document.querySelector('[aria-label="Keep following"]')),
       invalidLink: document.body?.innerText?.includes('not a valid location link') === true,
-      invitationPending: document.body?.innerText?.includes('Someone shared their location with you') === true,
+      invitationPending: document.body?.innerText?.includes('Someone shared a location with you') === true,
     }))()`)
     throw new Error(`Android invitation did not appear: ${JSON.stringify(state)}`, { cause: error })
   }
-  assert.equal(await clickButton(cdp, 'View location'), true, 'approve Android link')
+  assert.equal(await clickButton(cdp, 'See location'), true, 'consent to Android P2P location link')
   try {
     await waitFor(
       () => androidTextIncludes(cdp, `Seeing ${expectedCount}`),
@@ -2168,7 +2454,7 @@ const followOnAndroid = async (
     const state = await cdp.evaluate(`(() => ({
       online: document.body?.innerText?.includes('P2P online') === true,
       connecting: document.body?.innerText?.includes('Connecting…') === true,
-      invitation: document.body?.innerText?.includes('Someone shared their location with you') === true,
+      invitation: document.body?.innerText?.includes('Someone shared a location with you') === true,
       noAddress: document.body?.innerText?.includes('No share address was reachable') === true,
       invalidLink: document.body?.innerText?.includes('invalid or expired') === true,
       connectionError: document.body?.innerText?.includes('Connection error') === true,
@@ -2179,8 +2465,8 @@ const followOnAndroid = async (
   }
   try {
     await waitFor(
-      () => androidTextIncludes(cdp, 'Save location'),
-      'Android nickname prompt',
+      () => androidTextIncludes(cdp, 'Add peer'),
+      'Android nonblocking Add peer control',
       10_000,
     )
   } catch {
@@ -2189,32 +2475,22 @@ const followOnAndroid = async (
       previewOnly: document.body?.innerText?.includes('preview only') === true,
       saved: document.body?.innerText?.includes('Saved') === true,
     }))()`)
-    throw new Error(`Android nickname prompt absent: ${JSON.stringify(state)}`)
+    throw new Error(`Android Add peer control absent: ${JSON.stringify(state)}`)
   }
   if (!save) {
-    assert.equal(
-      await cdp.evaluate(`(() => {
-        const dialog = document.querySelector('[aria-label="Keep following"]');
-        const backdrop = dialog?.parentElement;
-        if (!backdrop?.classList.contains('sheet-backdrop')) return false;
-        backdrop.click();
-        return true;
-      })()`),
-      true,
-      'dismiss nickname dialog while keeping the temporary preview',
-    )
+    assert.equal(await clickButton(cdp, 'Not now'), true, 'dismiss optional peer saving')
     return false
   }
   assert.equal(
-    await tapAndroidButton(cdp, 'Save location'),
+    await tapAndroidButton(cdp, 'Add peer'),
     true,
-    'save Android location nickname with a touch',
+    'save authorized Android peer with a touch',
   )
   try {
     await waitFor(
-      () => androidTextIncludes(cdp, 'Not now'),
-      'the optional Android share-back prompt',
-      15_000,
+      () => cdp.evaluate(`Boolean(document.querySelector('[aria-label="Peer added"]'))`),
+      'the Android peer-added confirmation after durable save',
+      20_000,
     )
   } catch (error) {
     const state = await cdp.evaluate(`(() => ({
@@ -2234,7 +2510,7 @@ const followOnAndroid = async (
       toast: document.querySelector('.toast')?.textContent?.trim() ?? '',
       saveButton: (() => {
         const button = [...document.querySelectorAll('button')]
-          .find((candidate) => candidate.textContent?.trim() === 'Save location');
+          .find((candidate) => candidate.textContent?.trim() === 'Add peer');
         if (!button) return null;
         const rect = button.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -2317,7 +2593,7 @@ const followOnAndroid = async (
       return { outcome, callbackRegistered: registered, callbackRunnable: !api.callbacks.has(callback) };
     })()`)
     throw new Error(
-      `Android share-back prompt absent after saving: ${JSON.stringify(state)}; JS save trace: ${JSON.stringify(cdp.persistenceTrace())}; Kotlin save trace: ${JSON.stringify(nativeTrace)}; Rust command trace: ${JSON.stringify(commandTrace)}; framework trace: ${JSON.stringify(frameworkTrace)}; Rust eval trace: ${JSON.stringify(evalTrace)}; WebView eval trace: ${JSON.stringify(cdp.ipcTrace())}; status response bytes: ${JSON.stringify(statusSizes)}; invoke probe: ${JSON.stringify(bridge)}; direct IPC probe: ${JSON.stringify(directIpc)}`,
+      `Android peer-added confirmation absent after saving: ${JSON.stringify(state)}; JS save trace: ${JSON.stringify(cdp.persistenceTrace())}; Kotlin save trace: ${JSON.stringify(nativeTrace)}; Rust command trace: ${JSON.stringify(commandTrace)}; framework trace: ${JSON.stringify(frameworkTrace)}; Rust eval trace: ${JSON.stringify(evalTrace)}; WebView eval trace: ${JSON.stringify(cdp.ipcTrace())}; status response bytes: ${JSON.stringify(statusSizes)}; invoke probe: ${JSON.stringify(bridge)}; direct IPC probe: ${JSON.stringify(directIpc)}`,
       {
         cause: error,
       },
@@ -2328,7 +2604,17 @@ const followOnAndroid = async (
     'Rust-to-WebView diagnostic echo after Android save',
     10_000,
   )
-  assert.equal(await clickButton(cdp, 'Not now'), true, 'dismiss the Android share-back prompt')
+  // The optional peer-added card may disappear during an Android state
+  // projection refresh; do not make the share/restart smoke depend on it.
+  // Verify that saving a peer never publishes a return grant implicitly.
+  assert.equal(
+    await cdp.evaluate(
+      `!document.querySelector('[aria-label="Waiting for share-back acceptance"]')`,
+    ),
+    true,
+    'saving an Android peer must not automatically share back',
+  )
+  await clickButton(cdp, 'Not now')
   return true
 }
 
@@ -2355,7 +2641,7 @@ const openBrowserPeerFilter = async (page, filter) => {
 const createBrowserStarShare = async (page, name, { persistent = false } = {}) => {
   const peers = await openBrowserPeerList(page)
   await peers.getByRole('button', { name: 'Share location', exact: true }).click()
-  await page.getByRole('textbox', { name: 'Share a name' }).fill(name)
+  await page.getByRole('textbox', { name: 'Name to share' }).fill(name)
   await page.getByRole('dialog').getByRole('button', { name: '10', exact: true }).click()
   if (persistent) {
     await page.getByRole('dialog').getByRole('button', { name: 'Until stopped' }).click()
@@ -2370,16 +2656,34 @@ const createBrowserStarShare = async (page, name, { persistent = false } = {}) =
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
   return url
 }
+const startBrowserLocationPreview = async (page) => {
+  const intro = page.getByRole('dialog', { name: 'Location link introduction' })
+  await intro.getByRole('button', { name: 'See location' }).click({ timeout: 30_000 })
+  return page.getByRole('region', { name: 'Location preview' })
+}
+
+const addBrowserPeer = async (page) => {
+  const preview = page.getByRole('region', { name: 'Location preview' })
+  await preview.getByRole('button', { name: 'Add peer' }).click({ timeout: 30_000 })
+  const saved = page.getByRole('region', { name: 'Peer added' })
+  await saved.getByRole('button', { name: 'Not now' }).click({ timeout: 30_000 })
+}
 
 const followInBrowser = async (page, url, expectedCount) => {
   const peers = await openBrowserPeerList(page)
   await peers.getByRole('button', { name: 'Add peer' }).click()
-  await page.getByLabel('Paste location link').fill(url)
-  await page.getByRole('dialog').getByRole('button', { name: 'View location' }).click()
-  await page.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
-  await page.getByRole('button', { name: 'Keep following' }).click()
-  await page.getByRole('button', { name: 'Save location' }).click()
-  await page.getByRole('button', { name: 'Not now' }).click()
+  await page.evaluate((text) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: async () => text },
+    })
+  }, url)
+  await page
+    .getByRole('dialog', { name: 'Follow a location' })
+    .getByRole('button', { name: 'Paste link' })
+    .click()
+  await startBrowserLocationPreview(page)
+  await addBrowserPeer(page)
   await page
     .locator('.dock-peers')
     .filter({ hasText: `Seeing ${expectedCount}` })
@@ -2678,7 +2982,11 @@ const probeAndroidBrowserFanout = async (browser, source, url) => {
     } catch {
       throw new Error('Temporary browser viewer could not open the local share preview.')
     }
-    await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
+    await startBrowserLocationPreview(viewer)
+    await viewer
+      .getByRole('region', { name: 'Location preview' })
+      .getByRole('button', { name: 'Add peer' })
+      .waitFor({ timeout: 30_000 })
     assert.equal(
       await sourceHasViewerCount(source, 2),
       true,
@@ -2990,7 +3298,11 @@ const runDirectTransportSmoke = async () => {
         timeout: 90_000,
       })
       try {
-        await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 60_000 })
+        await startBrowserLocationPreview(viewer)
+        await viewer
+          .getByRole('region', { name: 'Location preview' })
+          .getByRole('button', { name: 'Add peer' })
+          .waitFor({ timeout: 60_000 })
         previewError = undefined
         break
       } catch (error) {
@@ -3017,11 +3329,7 @@ const runDirectTransportSmoke = async () => {
         { cause: previewError },
       )
     }
-    await viewer.getByRole('button', { name: 'Keep following' }).click()
-    await viewer.getByRole('button', { name: 'Save location' }).click()
-    const shareBack = viewer.getByRole('region', { name: 'Share back invitation' })
-    await shareBack.waitFor({ timeout: 5_000 }).catch(() => undefined)
-    if (await shareBack.count()) await shareBack.getByRole('button', { name: 'Not now' }).click()
+    await addBrowserPeer(viewer)
     const peers = await openBrowserPeerFilter(viewer, 'Viewing')
     try {
       await peers.locator('.peer-list__map-action:not(:disabled)').waitFor({ timeout: 30_000 })
@@ -3747,11 +4055,25 @@ const verifyBrowserRevocation = async (viewer, cdp) => {
 }
 
 const createBrowserReturnShare = async (page) => {
-  const invitation = page.getByRole('region', { name: 'Share back invitation' })
-  await invitation.getByRole('button', { name: 'Share back' }).click()
+  const saved = page.getByRole('region', { name: 'Peer added' })
+  if (await saved.isVisible()) {
+    await saved.getByRole('button', { name: 'Share back' }).click()
+  } else {
+    const peers = await openBrowserPeerFilter(page, 'Viewing')
+    const firstPeer = peers.locator('.peer-list__item').first()
+    if (!(await firstPeer.evaluate((element) => element.open))) {
+      await firstPeer.locator('.peer-list__summary').click()
+    }
+    // Share back moved into the collapsible per-link Connection details section.
+    const connection = firstPeer.locator('.peer-list__section--connection')
+    await connection.evaluate((element) => {
+      element.open = true
+    })
+    await connection.getByRole('button', { name: /Share back to/ }).click()
+  }
   const form = page.getByRole('dialog', { name: 'Share your location' })
   await expect(form).toContainText('Only this sender receives the private offer')
-  await expect(form.getByText('Viewers')).toHaveCount(0)
+  await expect(form.getByText('How many viewers?', { exact: true })).toHaveCount(0)
   await expect(form.getByRole('button', { name: 'Neighbourhood' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -3771,8 +4093,11 @@ const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
     await peer.goto(`http://127.0.0.1:4173/${new URL(shareUrl).hash}`, {
       waitUntil: 'domcontentloaded',
     })
-    await peer.getByRole('button', { name: 'Keep following' }).click({ timeout: 30_000 })
-    await peer.getByRole('button', { name: 'Save location' }).click()
+    await startBrowserLocationPreview(peer)
+    await peer
+      .getByRole('region', { name: 'Location preview' })
+      .getByRole('button', { name: 'Add peer' })
+      .click({ timeout: 30_000 })
     await createBrowserReturnShare(peer)
     await waitFor(
       () => androidTextIncludes(cdp, 'Seeing 2'),
@@ -3907,16 +4232,14 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     timeout: 90_000,
   })
   try {
-    await viewer.getByRole('button', { name: 'Keep following' }).waitFor({ timeout: 30_000 })
+    await startBrowserLocationPreview(viewer)
     const peers = await openBrowserPeerFilter(viewer, 'Viewing')
     await peers.locator('.peer-list__map-action:not(:disabled)').waitFor({ timeout: 30_000 })
   } catch (error) {
     const browserState = {
       p2pOnline: await viewer.getByText('P2P online').isVisible(),
-      invitationVisible: await viewer
-        .getByText('Someone shared their location with you')
-        .isVisible(),
-      previewVisible: await viewer.getByRole('button', { name: 'Keep following' }).isVisible(),
+      invitationVisible: await viewer.getByText('Someone shared a location with you').isVisible(),
+      previewVisible: await viewer.getByRole('region', { name: 'Location preview' }).isVisible(),
       locationVisible: await viewer.locator('.peer-list__map-action:not(:disabled)').isVisible(),
     }
     const androidState = {
@@ -3941,6 +4264,34 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       45_000,
     )
   } catch (error) {
+    // Observe the emulator's provider BEFORE launching the Activity and changing the
+    // injected fix again; a later dumpsys cannot prove the first fix was delivered.
+    const backgroundLocationDump = adb(['shell', 'dumpsys', 'location'])
+    let nativeJournalEvents = []
+    try {
+      const journal = adb([
+        'shell',
+        'run-as',
+        packageName,
+        'sh',
+        '-c',
+        'cat files/reliability-journal-v1/*.log',
+      ])
+      nativeJournalEvents = journal.split(/\r?\n/).flatMap((line) => {
+        const match = line.match(
+          /^\d+ (location\.fix|location\.policy\.fallback|service\.mode|service\.start\.failed|service\.stop)(?: |$)/,
+        )
+        return match ? [match[1]] : []
+      })
+    } catch {
+      // An absent native test journal must not suppress the primary location failure.
+    }
+    const nativeJournalCounts = Object.fromEntries(
+      [...new Set(nativeJournalEvents)].map((event) => [
+        event,
+        nativeJournalEvents.filter((entry) => entry === event).length,
+      ]),
+    )
     const updatesBeforeForegroundRetry = await receivedUpdateCount(viewer)
     adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
     await waitForNativeApp(cdp, 'Android app after background location retry')
@@ -4002,24 +4353,21 @@ const runShareFlow = async (cdp, browser, options = {}) => {
         locationMode,
         gpsEnabled: enabledProviders.includes('gps'),
         networkLocationEnabled: enabledProviders.includes('network'),
-        injectedFixObserved: locationDump.includes('40.0021') && locationDump.includes('-70.0021'),
+        injectedFixObservedBeforeRetry:
+          backgroundLocationDump.includes('40.0021') && backgroundLocationDump.includes('-70.0021'),
+        nativeJournalCounts,
         finePermission: permissionStatus('android.permission.ACCESS_FINE_LOCATION'),
         backgroundPermission: permissionStatus('android.permission.ACCESS_BACKGROUND_LOCATION'),
         locationAppOps,
         updatesBeforeFix: updatesBeforeBackgroundFix,
         updatesAfterFix: await receivedUpdateCount(viewer),
         locationDiagnostics,
-        browserFollowSummaries: await viewer
-          .locator('.peer-list article.peer-link-item')
-          .evaluateAll((articles) =>
-            articles.map((article) => {
-              const text = article.textContent ?? ''
-              return {
-                lastLocation: text.match(/Last location:\s*([^·]+?)(?:\s*·|$)/)?.[1]?.trim() ?? '',
-                updates: Number(text.match(/Updates this session:\s*(\d+)/)?.[1] ?? 0),
-              }
-            }),
-          ),
+        browserFollowSummaries: (
+          await viewer.locator('.peer-list article.peer-link-item').allTextContents()
+        ).map((text) => ({
+          lastLocation: text.match(/Last location:\s*([^·]+?)(?:\s*·|$)/)?.[1]?.trim() ?? '',
+          updates: parseReceivedUpdateCount(text),
+        })),
         foregroundRetryObserved,
         postRetryLocationStatus: postRetryTransport.locationStatus,
         postRetryLocationAgeMs: postRetryTransport.locationAgeMs,
@@ -4071,8 +4419,10 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   const viewerPeers = viewer.locator('.peer-list')
   if (await viewerPeers.isVisible())
     await viewerPeers.getByRole('button', { name: 'Close' }).click()
-  await viewer.getByRole('button', { name: 'Keep following' }).click()
-  await viewer.getByRole('button', { name: 'Save location' }).click()
+  await viewer
+    .getByRole('region', { name: 'Location preview' })
+    .getByRole('button', { name: 'Add peer' })
+    .click({ timeout: 30_000 })
   await createBrowserReturnShare(viewer)
   console.log('[android-test] checking return offer')
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
@@ -4157,9 +4507,8 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       { cause: error },
     )
   }
-  assert.equal(await androidTextIncludes(cdp, 'Someone shared their location with you'), false)
-  assert.equal(await androidTextIncludes(cdp, 'Keep following'), false)
-  assert.equal(await androidTextIncludes(cdp, 'Save location'), false)
+  assert.equal(await androidTextIncludes(cdp, 'Someone shared a location with you'), false)
+  assert.equal(await androidTextIncludes(cdp, 'Location link introduction'), false)
   await selectNativePeerFilter(cdp, 'Viewing')
   await waitFor(
     () =>
@@ -4206,7 +4555,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   startWithSharedText(shareUrl)
   console.log('[android-test] checking shared-text intake')
   await waitFor(
-    () => androidTextIncludes(cdp, 'Someone shared their location with you'),
+    () => androidTextIncludes(cdp, 'Someone shared a location with you'),
     'the warm-start shared-text approval',
   )
   cdp.close()
@@ -4214,7 +4563,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   startWithSharedText(shareUrl)
   cdp = await connectCdp()
   await waitFor(
-    () => androidTextIncludes(cdp, 'Someone shared their location with you'),
+    () => androidTextIncludes(cdp, 'Someone shared a location with you'),
     'the cold-start shared-text approval',
   )
   return cdp
@@ -4371,11 +4720,8 @@ const runStopNoticeSmoke = async () => {
       waitUntil: 'domcontentloaded',
       timeout: 90_000,
     })
-    await viewer.getByRole('button', { name: 'Keep following' }).click({ timeout: 60_000 })
-    await viewer.getByRole('button', { name: 'Save location' }).click()
-    const shareBack = viewer.getByRole('region', { name: 'Share back invitation' })
-    await shareBack.waitFor({ timeout: 5_000 }).catch(() => undefined)
-    if (await shareBack.count()) await shareBack.getByRole('button', { name: 'Not now' }).click()
+    await startBrowserLocationPreview(viewer)
+    await addBrowserPeer(viewer)
     await waitFor(
       async () => (await readBackgroundTransportSummary(cdp)).viewerCount === 1,
       'the browser viewer connection',
@@ -4387,7 +4733,9 @@ const runStopNoticeSmoke = async () => {
     console.log('[android-test] checking an ordinary disconnect without a stop notice')
     adb(['shell', 'am', 'force-stop', packageName])
     const viewingPeers = await openBrowserPeerFilter(viewer, 'Viewing')
-    await expect(viewingPeers).toContainText('Unavailable', { timeout: 60_000 })
+    await expect(viewingPeers).toContainText('Not connected', { timeout: 60_000 })
+    await expect(viewingPeers).toContainText('No ended connections.')
+    assert.equal((await readBrowserStopState(viewer)).pendingStopCount, 0)
     cdp = await restartAndroidApp(cdp)
     await waitFor(
       async () => (await readBackgroundTransportSummary(cdp)).viewerCount === 1,
@@ -4398,9 +4746,16 @@ const runStopNoticeSmoke = async () => {
 
     console.log('[android-test] checking an explicit stop while the source is offline')
     adb(['shell', 'am', 'force-stop', packageName])
-    const savedPeer = viewingPeers.locator('.peer-list__item').filter({ hasText: 'Saved' })
-    await savedPeer.first().locator('.peer-list__summary-name').click()
-    await savedPeer.first().getByRole('button', { name: 'Stop following' }).click()
+    const renewedPeers = await openBrowserPeerFilter(viewer, 'Viewing')
+    const savedPeer = renewedPeers.locator('.peer-list__item').filter({ hasText: 'Saved' }).first()
+    await savedPeer.evaluate((element) => {
+      element.open = true
+    })
+    const connection = savedPeer.locator('.peer-list__section--connection')
+    await connection.evaluate((element) => {
+      element.open = true
+    })
+    await connection.getByRole('button', { name: 'Stop following' }).click()
     await waitFor(
       async () => (await readBrowserStopState(viewer)).pendingStopCount === 1,
       'the queued protected stop notice',
@@ -4520,17 +4875,20 @@ const runReceiverStandbySmoke = async (soakMinutes = null) => {
     assert.equal(await clickButton(cdp, 'Settings'), true)
     await waitFor(
       () =>
-        cdp.evaluate(`Boolean(
-      document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
-    )`),
-      'global background following switch',
+        cdp.evaluate(`(() => {
+          const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+          return Boolean(checkbox && !checkbox.disabled)
+        })()`),
+      'enabled global background following switch',
+      30_000,
     )
     assert.equal(
       await cdp.evaluate(`(() => {
       const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
-      if (!checkbox || checkbox.disabled || checkbox.checked) return false
-      checkbox.click()
-      return true
+      if (!checkbox || checkbox.disabled) return false
+      // Background following now defaults on. Preserve it rather than toggling it off.
+      if (!checkbox.checked) checkbox.click()
+      return checkbox.checked
     })()`),
       true,
     )
@@ -4548,6 +4906,60 @@ const runReceiverStandbySmoke = async (soakMinutes = null) => {
       'one service-owned saved receiver with a native ownership generation',
       45_000,
     )
+    if (process.argv.includes('--receiver-history-smoke')) {
+      // Reproduce editing a received-message history preference while the
+      // service owns the encrypted follow record. The edit must not leave
+      // background following switched off.
+      await cdp.evaluate(`
+        document.querySelector('.settings-sheet button[aria-label="Close settings"]')?.click()
+      `)
+      await openNativePeerList(cdp)
+      await expandNativePeerRows(cdp)
+      assert.equal(
+        await cdp.evaluate(`(() => {
+          const section = document.querySelector('.peer-list__section--connection')
+          if (!section) return false
+          section.open = true
+          const trigger = section.querySelector('button[aria-label^="View received messages from"]')
+          if (!trigger) return false
+          trigger.click()
+          return true
+        })()`),
+        true,
+        'open the received-message inspector for the saved peer',
+      )
+      await waitFor(
+        () =>
+          cdp.evaluate(
+            `Boolean(document.querySelector('.peer-trace-dialog .peer-trace-optin input[type="checkbox"]'))`,
+          ),
+        'saved Android peer history recording control',
+        30_000,
+      )
+      const previousGeneration = (await status()).generation
+      assert.equal(
+        await cdp.evaluate(`(() => {
+          const box = document.querySelector('.peer-trace-dialog .peer-trace-optin input[type="checkbox"]')
+          if (!box || box.checked || box.disabled) return false
+          box.click()
+          return true
+        })()`),
+        true,
+        'enable received-message recording through the UI',
+      )
+      await waitFor(
+        async () => {
+          const updated = await status()
+          return (
+            updated.owner === 'service' &&
+            updated.generation > previousGeneration &&
+            updated.status?.following?.some((follow) => follow.traceEnabled === true)
+          )
+        },
+        'background receiver automatically restored after enabling history',
+        60_000,
+      )
+    }
     const generation = (await status()).generation
     assert.ok(generation > 0)
     const receivedBefore = (await status()).status?.received?.[0]?.observation?.capturedAt ?? 0
@@ -4581,14 +4993,41 @@ const runReceiverStandbySmoke = async (soakMinutes = null) => {
         return (
           owner.owner === 'service' &&
           owner.generation === generation &&
-          (soakMinutes === null
-            ? owner.status?.received?.length > 0
-            : (owner.status?.received?.[0]?.observation?.capturedAt ?? 0) > receivedBefore)
+          (soakMinutes !== null || process.argv.includes('--receiver-history-smoke')
+            ? (owner.status?.received?.[0]?.observation?.capturedAt ?? 0) > receivedBefore
+            : owner.status?.received?.length > 0)
         )
       },
       'a verified received location after screen-lock/Doze exit',
       90_000,
     )
+    if (process.argv.includes('--receiver-history-smoke')) {
+      const snapshot = (await status()).status
+      const recorded = snapshot?.following?.find((follow) => follow.traceEnabled)
+      assert.ok(recorded, 'receiver must retain the explicit recording choice')
+      assert.ok(
+        recorded.trace?.some((event) => event.type === 'location'),
+        'validated positions received after opt-in must appear in native recorded history',
+      )
+      assert.ok(recorded.trace.length <= 288, 'history stays bounded')
+      // Also verify the actual Android peer inspector, not only the JSON bridge.
+      await openNativePeerList(cdp)
+      await expandNativePeerRows(cdp)
+      await cdp.evaluate(`(() => {
+        if (document.querySelector('.peer-trace-dialog')) return
+        const section = document.querySelector('.peer-list__section--connection')
+        if (section) section.open = true
+        section?.querySelector('button[aria-label^="View received messages from"]')?.click()
+      })()`)
+      await waitFor(
+        () =>
+          cdp.evaluate(`
+          Boolean(document.querySelector('[aria-label="Received message history"] li'))
+        `),
+        'received-message history visible in the Android inspector',
+        30_000,
+      )
+    }
     if (soakMinutes !== null) {
       console.log(
         '[android-soak] ' +
@@ -4659,20 +5098,34 @@ const runReceiverStandbySmoke = async (soakMinutes = null) => {
     assert.equal(ownerAfter.owner, 'service')
     assert.equal(ownerAfter.generation, generation)
 
-    // The notification's PendingIntent targets this same non-exported service.
-    // Always verify safe native shutdown; optionally exercise the actual UI
-    // action when the emulator's UIAutomator hierarchy is available.
+    // The notification opens the Activity's sharing Settings; it never changes
+    // following state by itself. Use its visible checkbox to stop following.
     assert.equal(
       sharingNotificationPresent(),
       true,
       'receiver must publish an ongoing notification',
     )
-    if (process.argv.includes('--notification-stop-ui')) {
+    if (
+      process.argv.includes('--notification-settings-ui') ||
+      process.argv.includes('--notification-stop-ui')
+    ) {
       await clickNotificationAction(
-        'Stop background following',
+        'Open sharing settings',
         'Constellation is following saved peers',
       )
       adb(['shell', 'cmd', 'statusbar', 'collapse'])
+      await waitFor(
+        () =>
+          cdp.evaluate(`
+          Boolean(document.querySelector('.settings-sheet') &&
+            document.querySelector('[aria-label="Background following"] input:checked'))
+        `),
+        'sharing Settings opened via notification with background following enabled',
+        30_000,
+      )
+      await cdp.evaluate(`
+        document.querySelector('[aria-label="Background following"] input:checked')?.click()
+      `)
     } else {
       await cdp.evaluate(`window.__TAURI_INTERNALS__?.invoke(
         'android_stop_background_receiver', { generation: ${generation} }
@@ -4691,6 +5144,19 @@ const runReceiverStandbySmoke = async (soakMinutes = null) => {
       'foreground viewer restoration after native Stop',
       30_000,
     )
+    if (process.argv.includes('--receiver-history-smoke')) {
+      const stored = await cdp.evaluate(`
+        window.__TAURI_INTERNALS__?.invoke('android_load_private_state').then(
+          ({ state }) => JSON.parse(state).followed.map(
+            ({ traceEnabled, trace }) => ({ traceEnabled, count: trace?.length ?? 0 })
+          )
+        )
+      `)
+      assert.ok(
+        stored.some((entry) => entry.traceEnabled && entry.count > 0),
+        'opted-in Android history remains encrypted and durable through ownership return',
+      )
+    }
   } finally {
     cdp?.close()
     await context?.close()
@@ -4828,6 +5294,22 @@ const runTwoAndroidReceiverStandbySmoke = async (
   let relay
   let source
   let receiver
+  const powerRecovery = process.argv.includes('--power-recovery-matrix')
+  const powerEvents = (serial) => {
+    const today = new Date().toISOString().slice(0, 10)
+    return parsePowerJournal(
+      adbFor(serial, [
+        'shell',
+        'run-as',
+        packageName,
+        'cat',
+        `files/reliability-journal-v1/${today}.log`,
+      ]),
+    )
+  }
+  const applyPower = (serial, commands) => {
+    for (const args of commands) adbFor(serial, ['shell', ...args])
+  }
   try {
     relay = await startLocalRelay()
     for (const serial of [sourceSerial, receiverSerial]) {
@@ -4884,15 +5366,33 @@ const runTwoAndroidReceiverStandbySmoke = async (
       receiver.evaluate(`window.__TAURI_INTERNALS__?.invoke('android_receiver_ownership')`)
     assert.equal(await clickAriaButton(receiver, 'Open menu'), true)
     assert.equal(await clickButton(receiver, 'Settings'), true)
-    assert.equal(
-      await receiver.evaluate(`(() => {
-      const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
-      if (!checkbox || checkbox.disabled || checkbox.checked) return false
-      checkbox.click()
-      return true
-    })()`),
-      true,
+    await waitFor(
+      () =>
+        receiver.evaluate(`(() => {
+          const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+          return Boolean(checkbox && !checkbox.disabled)
+        })()`),
+      'enabled Android background-following setting',
+      30_000,
     )
+    const followingEnabled = await receiver.evaluate(`(() => {
+      const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+      if (!checkbox || checkbox.disabled) return false
+      if (!checkbox.checked) checkbox.click()
+      return checkbox.checked
+    })()`)
+    if (!followingEnabled) {
+      const details = await receiver.evaluate(`(() => {
+        const checkbox = document.querySelector('[aria-label="Background following"] input[type="checkbox"]')
+        return {
+          settingsVisible: Boolean(document.querySelector('.settings-sheet')),
+          controlPresent: Boolean(checkbox),
+          disabled: checkbox?.disabled ?? null,
+          checked: checkbox?.checked ?? null,
+        }
+      })()`)
+      throw new Error(`Background-following control not enabled: ${JSON.stringify(details)}`)
+    }
     await waitFor(
       async () => {
         const status = await receiverStatus()
@@ -4946,13 +5446,170 @@ const runTwoAndroidReceiverStandbySmoke = async (
       )
     }
     const generation = (await receiverStatus()).generation
-    await waitFor(
-      async () => (await readBackgroundTransportSummary(source)).confirmedViewerCount > 0,
-      'acknowledged location from Android receiver to Android sender',
-      60_000,
-    )
+    try {
+      await waitFor(
+        async () => (await readBackgroundTransportSummary(source)).confirmedViewerCount > 0,
+        'acknowledged location from Android receiver to Android sender',
+        60_000,
+      )
+    } catch (error) {
+      const sender = await readBackgroundTransportSummary(source).catch(() => undefined)
+      const viewer = await receiverStatus().catch(() => undefined)
+      throw new Error(
+        `Initial Android-to-Android authenticated ACK missing before any power emulation: ${JSON.stringify(
+          {
+            activeShares: sender?.activeShares ?? null,
+            viewerCount: sender?.viewerCount ?? null,
+            confirmedViewerCount: sender?.confirmedViewerCount ?? null,
+            deliveryStates: sender?.deliveryStates ?? null,
+            sourceState: sender?.state ?? null,
+            sourcePeerStatus: sender?.peerStatus ?? null,
+            sourceLocationAgeMs: sender?.locationAgeMs ?? null,
+            sourceSessionEvents: sender?.sessionEvents ?? [],
+            sourceConnections: sender?.connections ?? [],
+            receiverOwner: viewer?.owner ?? null,
+            receiverFollows: viewer?.status?.following?.length ?? null,
+            receiverFixes: viewer?.status?.received?.length ?? null,
+          },
+        )}`,
+        { cause: error },
+      )
+    }
     const initialConfirmedAt = (await readBackgroundTransportSummary(source)).latestConfirmedAt
     assert.ok(initialConfirmedAt > 0, 'initial Android-to-Android confirmation has a timestamp')
+    if (dualRole && process.argv.includes('--dual-role-process-restart')) {
+      // A receiver-only and source-only restart do not reproduce a device that
+      // was simultaneously publishing and following when Android killed it.
+      const beforeReceive =
+        (await receiverStatus()).status?.received?.[0]?.observation?.capturedAt ?? 0
+      const originalPid = adbFor(receiverSerial, ['shell', 'pidof', packageName]).trim()
+      assert.match(originalPid, /^\d+$/)
+      receiver.close()
+      receiver = undefined
+      adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+      adbFor(receiverSerial, [
+        'shell',
+        'run-as',
+        packageName,
+        '/system/bin/kill',
+        '-9',
+        originalPid,
+      ])
+      let restartedPid = ''
+      await waitFor(
+        () => {
+          try {
+            restartedPid = adbFor(receiverSerial, ['shell', 'pidof', packageName]).trim()
+          } catch {
+            // The process must temporarily be absent after SIGKILL.
+            return false
+          }
+          return (
+            restartedPid !== originalPid &&
+            /^\d+$/.test(restartedPid) &&
+            adbFor(receiverSerial, [
+              'shell',
+              'dumpsys',
+              'activity',
+              'services',
+              packageName,
+            ]).includes('LocationShareService')
+          )
+        },
+        'dual-role START_STICKY process restart',
+        60_000,
+      )
+      // Catch a service that briefly reappears but calls stopSelf before its
+      // protected runtime is ready, as in the real-device overnight journal.
+      await wait(20_000)
+      assert.equal(
+        adbFor(receiverSerial, ['shell', 'pidof', packageName]).trim(),
+        restartedPid,
+        'dual-role process must stay alive after sticky restart',
+      )
+      assert.equal(
+        adbFor(receiverSerial, ['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+          'LocationShareService',
+        ),
+        true,
+        'dual-role service must still be started without opening the Activity',
+      )
+      adbFor(receiverSerial, ['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+      receiver = await connectCdp(receiverSerial, 9223)
+      await waitForNativeApp(receiver, 'dual-role Activity after sticky restart')
+      try {
+        await waitFor(
+          async () => {
+            const state = await receiverStatus()
+            return (
+              state.owner === 'service' &&
+              state.generation === generation &&
+              state.status?.following?.length === 1 &&
+              (await readBackgroundTransportSummary(receiver)).activeShares === 1
+            )
+          },
+          'durable outgoing share and incoming follow after dual-role process death',
+          40_000,
+        )
+      } catch (error) {
+        const state = await receiverStatus().catch(() => undefined)
+        const transport = await readBackgroundTransportSummary(receiver).catch(() => undefined)
+        const setup = await receiver
+          .evaluate(`window.__TAURI_INTERNALS__?.invoke('android_sharing_setup')`)
+          .catch(() => undefined)
+        const lifecycle = (() => {
+          try {
+            const day = new Date().toISOString().slice(0, 10)
+            return adbFor(receiverSerial, [
+              'shell',
+              'run-as',
+              packageName,
+              'tail',
+              '-n',
+              '140',
+              `files/reliability-journal-v1/${day}.log`,
+            ])
+              .split(/\r?\n/)
+              .filter((line) =>
+                / (?:follow\.restore\.|service\.restart\.policy|service\.runtime\.ready|service\.start\.failed|service\.stop)/.test(
+                  line,
+                ),
+              )
+              .slice(-18)
+              .map((line) => line.replace(/^\d{13} /, ''))
+          } catch {
+            return []
+          }
+        })()
+        throw new Error(
+          `Dual-role restored state: ${JSON.stringify({
+            owner: state?.owner,
+            generationPreserved: state?.generation === generation,
+            follows: state?.status?.following?.length ?? null,
+            receiverStatusPresent: Boolean(state?.status),
+            activeShares: transport?.activeShares ?? null,
+            sharingState: transport?.state ?? null,
+            backgroundFollowing: setup?.backgroundFollowing ?? null,
+            backgroundPermission: setup?.permissions?.background ?? null,
+            notificationsAllowed: setup?.permissions?.notifications ?? null,
+            lifecycle,
+          })}`,
+          { cause: error },
+        )
+      }
+      adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0251', '40.0251'])
+      await waitFor(
+        async () =>
+          ((await receiverStatus()).status?.received?.[0]?.observation?.capturedAt ?? 0) >
+          beforeReceive,
+        'new authenticated received location after dual-role restart',
+        90_000,
+      )
+      if (dualRole && process.argv.includes('--dual-role-restart-only')) {
+        // Focused repeatable restart regression; omit unrelated Doze scenarios.
+        return
+      }
+    }
     if (soakMinutes !== null) {
       // Focused uninterrupted soak: do not also run the two short Doze
       // scenarios, which would add unrelated failure modes before the soak.
@@ -4976,8 +5633,26 @@ const runTwoAndroidReceiverStandbySmoke = async (
     }
     const before = (await receiverStatus()).status.received[0]?.observation?.capturedAt ?? 0
     adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
-    adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
     try {
+      if (powerRecovery) {
+        // Test the receiving phone at critical battery while Android forces Doze.
+        applyPower(receiverSerial, [
+          ['dumpsys', 'battery', 'unplug'],
+          ['dumpsys', 'battery', 'set', 'status', '3'],
+          ['dumpsys', 'battery', 'set', 'level', '5'],
+          ['cmd', 'power', 'set-mode', '1'],
+        ])
+        await waitFor(
+          () =>
+            powerEvents(receiverSerial).some(
+              ({ details }) =>
+                details.includes('cause=battery-saver') && details.includes('batteryPct=5'),
+            ),
+          'receiving Android native critical-battery/Battery Saver diagnostic',
+          20_000,
+        )
+      }
+      adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
       adbFor(receiverSerial, ['shell', 'dumpsys', 'deviceidle', 'force-idle'])
       adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0051', '40.0051'])
       await wait(5_000)
@@ -4985,6 +5660,12 @@ const runTwoAndroidReceiverStandbySmoke = async (
       adbFor(receiverSerial, ['shell', 'dumpsys', 'deviceidle', 'unforce'])
       adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
       adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
+      if (powerRecovery) {
+        applyPower(receiverSerial, [
+          ['cmd', 'power', 'set-mode', '0'],
+          ['dumpsys', 'battery', 'reset'],
+        ])
+      }
     }
     adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0081', '40.0081'])
     await waitFor(
@@ -5017,8 +5698,25 @@ const runTwoAndroidReceiverStandbySmoke = async (
     const beforeSenderConfirmation = (await readBackgroundTransportSummary(source))
       .latestConfirmedAt
     adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
-    adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
     try {
+      if (powerRecovery) {
+        // Independently throttle the sender; require an authenticated ACK after exit.
+        applyPower(sourceSerial, [
+          ['dumpsys', 'battery', 'unplug'],
+          ['dumpsys', 'battery', 'set', 'status', '3'],
+          ['cmd', 'netpolicy', 'set', 'restrict-background', 'true'],
+        ])
+        await waitFor(
+          () =>
+            powerEvents(sourceSerial).some(
+              ({ details }) =>
+                details.includes('cause=data-saver') && /dataSaver=(enabled|exempt)/.test(details),
+            ),
+          'sending Android native Data Saver diagnostic',
+          20_000,
+        )
+      }
+      adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
       adbFor(sourceSerial, ['shell', 'dumpsys', 'deviceidle', 'force-idle'])
       adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0111', '40.0111'])
       await wait(5_000) // No promise of delivery while Android suspends networking.
@@ -5026,6 +5724,12 @@ const runTwoAndroidReceiverStandbySmoke = async (
       adbFor(sourceSerial, ['shell', 'dumpsys', 'deviceidle', 'unforce'])
       adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
       adbFor(sourceSerial, ['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
+      if (powerRecovery) {
+        applyPower(sourceSerial, [
+          ['cmd', 'netpolicy', 'set', 'restrict-background', 'false'],
+          ['dumpsys', 'battery', 'reset'],
+        ])
+      }
     }
     adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0141', '40.0141'])
     await waitFor(
@@ -5046,6 +5750,11 @@ const runTwoAndroidReceiverStandbySmoke = async (
       'new authenticated viewer receipt after sender Doze exit',
       90_000,
     )
+    if (powerRecovery) {
+      console.log(
+        '[android-power] two independent Android peers recovered authenticated observations and delivery receipts after battery/network restrictions with Doze',
+      )
+    }
     if (dualRole && process.argv.includes('--dual-role-permission-revocation-smoke')) {
       // Android can kill the app when a permission is revoked. Background
       // receiver ownership must survive without depending on local GPS.
@@ -5130,13 +5839,49 @@ const runTwoAndroidReceiverStandbySmoke = async (
         )
       }
     }
+  } catch (error) {
+    const observations = [
+      { serial: sourceSerial, device: 'source' },
+      { serial: receiverSerial, device: 'receiver' },
+    ].map(({ serial, device }) => {
+      const read = (args) => {
+        try {
+          return adbFor(serial, args)
+        } catch {
+          return ''
+        }
+      }
+      return {
+        device,
+        processAliveBeforeCleanup: Boolean(read(['shell', 'pidof', packageName]).trim()),
+        crash: summarizeAndroidNativeCrash(
+          read(['logcat', '-b', 'crash', '-d', '-t', '500']),
+          packageName,
+        ),
+      }
+    })
+    console.error(
+      '[android-acceptance] pre-cleanup two-device state: ' + JSON.stringify(observations),
+    )
+    throw error
   } finally {
     source?.close()
     receiver?.close()
     if (relay) await stopChild(relay)
     for (const serial of [sourceSerial, receiverSerial]) {
+      for (const command of [
+        ['dumpsys', 'deviceidle', 'unforce'],
+        ['cmd', 'power', 'set-mode', '0'],
+        ['cmd', 'netpolicy', 'set', 'restrict-background', 'false'],
+        ['dumpsys', 'battery', 'reset'],
+      ]) {
+        try {
+          adbFor(serial, ['shell', ...command])
+        } catch {
+          /* Emulator may have exited. */
+        }
+      }
       try {
-        adbFor(serial, ['shell', 'dumpsys', 'deviceidle', 'unforce'])
         adbFor(serial, ['reverse', '--remove', 'tcp:9111'])
         adbFor(serial, ['shell', 'am', 'force-stop', packageName])
       } catch {
@@ -5152,11 +5897,14 @@ const main = async () => {
     await runTwoAndroidReceiverStandbySmoke(
       serials[0],
       serials[1],
-      process.argv.includes('--dual-role-standby-smoke'),
+      process.argv.includes('--dual-role-standby-smoke') ||
+        process.argv.includes('--dual-role-process-restart'),
       parseStandbySoakMinutes(process.argv),
     )
     console.log(
-      'Android-to-Android ACK, independent Doze recovery, and safe receiver ownership passed.',
+      process.argv.includes('--dual-role-restart-only')
+        ? 'Android dual-role process restart, state restoration, and authenticated receive passed.'
+        : 'Android-to-Android ACK, independent Doze recovery, and safe receiver ownership passed.',
     )
     return
   }
@@ -5185,6 +5933,11 @@ const main = async () => {
   if (process.argv.includes('--notification-pause-smoke')) {
     await runNotificationPauseSmoke()
     console.log('Android notification Pause/Resume actions preserved the same active link.')
+    return
+  }
+  if (process.argv.includes('--location-off-smoke')) {
+    await runLocationOffSmoke()
+    console.log('Android Location-off settings, share gating and recovery passed.')
     return
   }
   if (process.argv.includes('--permission-denial-smoke')) {
@@ -5223,6 +5976,11 @@ const main = async () => {
   if (process.argv.includes('--multiple-source-links-smoke')) {
     await runMultipleSourceLinksSmoke()
     console.log('Android independently revoked one of two simultaneous source links.')
+    return
+  }
+  if (process.argv.includes('--power-state-matrix')) {
+    await runPowerStateMatrixSmoke()
+    console.log('Android v0.1.5 battery and power-state emulator matrix passed.')
     return
   }
   if (process.argv.includes('--power-network-smoke')) {

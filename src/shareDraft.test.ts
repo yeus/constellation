@@ -11,6 +11,7 @@ import {
   setName,
   setNetworkPolicy,
   setPublication,
+  setRequireViewerApproval,
   setPrecision,
   setViewerCapacity,
 } from './shareDraft.ts'
@@ -66,6 +67,9 @@ test('name and publication mode remain independent per link', () => {
   const background = setPublication(named, 'background')
 
   assert.equal(initial.name, '')
+  assert.equal(canCreateShare(initial), false)
+  assert.equal(canCreateShare(setName(initial, '   ')), false)
+  assert.equal(canCreateShare(named), true)
   assert.equal(named.name, 'River')
   assert.equal(background.publication, 'background')
   assert.equal(canCreateShare(setName(initial, 'x'.repeat(33))), false)
@@ -84,7 +88,7 @@ test('share updates return new drafts without mutating the original', () => {
 })
 
 test('very coarse is an independent source choice and does not change the default', () => {
-  const initial = createShareDraft()
+  const initial = createShareDraft('River')
   const broad = setPrecision(initial, 'very-coarse')
 
   assert.equal(initial.precision, 'approximate')
@@ -94,8 +98,31 @@ test('very coarse is an independent source choice and does not change the defaul
   assert.equal(canCreateShare(broad), true)
 })
 
+test('multi-viewer access never requires approval, including until stopped links', () => {
+  for (const capacity of [10, 50, 'unlimited'] as const) {
+    for (const duration of ['1h', '8h', 'until-revoked'] as const) {
+      const share = setDuration(setViewerCapacity(createShareDraft('River'), capacity), duration)
+      assert.equal(share.requireViewerApproval, false)
+      assert.equal(
+        canCreateShare(duration === 'until-revoked' ? acknowledgeUntilRevoked(share, true) : share),
+        true,
+      )
+    }
+  }
+})
+
+test('single-viewer approval can be disabled regardless of expiry without losing the choice', () => {
+  const initial = setRequireViewerApproval(createShareDraft('River'), false)
+  assert.equal(setViewerCapacity(initial, 1).requireViewerApproval, false)
+  const indefinite = setDuration(initial, 'until-revoked')
+  assert.equal(indefinite.requireViewerApproval, false)
+  assert.equal(canCreateShare(indefinite), false)
+  assert.equal(canCreateShare(acknowledgeUntilRevoked(indefinite, true)), true)
+  assert.equal(setViewerCapacity(setViewerCapacity(indefinite, 10), 1).requireViewerApproval, true)
+})
+
 test('until-revoked sharing requires explicit acknowledgement every time', () => {
-  const indefinite = setDuration(createShareDraft(), 'until-revoked')
+  const indefinite = setDuration(createShareDraft('River'), 'until-revoked')
   assert.equal(canCreateShare(indefinite), false)
 
   const acknowledged = acknowledgeUntilRevoked(indefinite, true)
