@@ -161,6 +161,24 @@ async fn android_set_background_visibility(
 }
 
 #[tauri::command]
+async fn android_set_background_active_viewing(
+    app: tauri::AppHandle,
+    share_id: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return app
+        .constellation_android()
+        .set_active_viewing(&share_id)
+        .await
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, share_id);
+        Err("Android background sharing is unavailable.".into())
+    }
+}
+
+#[tauri::command]
 async fn android_import_source_state(
     app: tauri::AppHandle,
     state: String,
@@ -619,6 +637,7 @@ pub fn run() {
             android_background_share_status,
             android_stop_background_share,
             android_set_background_visibility,
+            android_set_background_active_viewing,
             android_import_source_state,
             android_replace_background_owner,
             android_approve_background_return_link,

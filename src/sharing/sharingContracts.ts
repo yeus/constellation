@@ -27,6 +27,8 @@ export interface ShareSummary {
   readonly expiresAt: number | null
   readonly recipientPeerId?: string
   readonly viewerCount: number
+  /** Expiring authenticated demand, used by Android for sensor policy only. */
+  readonly activeViewingUntil?: number
   readonly viewers?: readonly {
     peerId: string
     fingerprint: string
@@ -168,6 +170,7 @@ export interface SourceSession {
   readonly send: (message: ConstellationMessage) => void
   sessionId?: string
   subscriptionId?: string
+  activeViewingUntil?: number
   lastHeartbeatAt: number
   lastSubmittedAt?: number
   pendingSince?: number
@@ -311,6 +314,8 @@ export interface SharingRuntime {
   stopFollowing: (shareId: string) => Promise<void>
   setFollowName: (shareId: string, name: string) => void
   setFollowColor: (shareId: string, color: string) => void
+  /** Transient foreground UI focus; never persisted or sent as a capability. */
+  setActiveViewing: (shareId: string | null) => void
   setVisible: (visible: boolean, acquireLocation?: boolean) => void
   setPaused: (paused: boolean) => Promise<void>
   stopShare: (shareId: string) => Promise<void>

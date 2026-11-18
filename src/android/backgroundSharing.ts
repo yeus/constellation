@@ -196,6 +196,7 @@ interface AndroidBackgroundSharing {
   status: () => Promise<AndroidBackgroundStatus>
   stop: (shareId: string) => Promise<AndroidBackgroundStatus>
   setVisible: (visible: boolean) => Promise<void>
+  setActiveViewing: (shareId: string | null) => Promise<void>
   setPaused: (paused: boolean) => Promise<AndroidBackgroundStatus>
   approveReturnLink: (shareId: string) => Promise<void>
   deviceComparison: (
@@ -286,6 +287,9 @@ const createStartAction = (
 const createVisibilityActions = (dependencies: AndroidBackgroundSharingDependencies) => ({
   setVisible: async (visible: boolean) => {
     await dependencies.invoke('android_set_background_visibility', { visible })
+  },
+  setActiveViewing: async (shareId: string | null) => {
+    await dependencies.invoke('android_set_background_active_viewing', { shareId: shareId ?? '' })
   },
   setPaused: async (paused: boolean) =>
     invokeStatusAfter(dependencies, 'android_set_background_paused', { paused }),

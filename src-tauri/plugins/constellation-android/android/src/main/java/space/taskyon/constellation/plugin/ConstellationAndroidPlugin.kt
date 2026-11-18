@@ -76,6 +76,8 @@ class SharingBehaviorPayload {
   var publication: String = ""
   var battery: String = ""
   var network: String = ""
+  var locationProvider: String = "automatic"
+  var activeViewingBoost: Boolean = true
 }
 
 @InvokeArg
@@ -313,6 +315,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       check(behavior.publication in setOf("foreground", "background")) { "Invalid publication." }
       check(behavior.battery in setOf("balanced", "saver")) { "Invalid battery policy." }
       check(behavior.network in setOf("always", "pause-when-metered")) { "Invalid network policy." }
+      check(behavior.locationProvider in setOf("automatic", "network-only")) { "Invalid location provider policy." }
       // The user's choice is durable regardless of the Android permission state.
       // Effective execution is downgraded to foreground-only until the OS permits
       // background location. Never silently replace the desired preference.
@@ -320,6 +323,8 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         .put("publication", behavior.publication)
         .put("battery", behavior.battery)
         .put("network", behavior.network)
+        .put("locationProvider", behavior.locationProvider)
+        .put("activeViewingBoost", behavior.activeViewingBoost)
       store.saveBehaviorPreference(desired.toString())
       val permissions = sharingSetupResult().getJSONObject("permissions")
       val canBackground = listOf("location", "background", "notifications", "servicesEnabled")
@@ -821,6 +826,22 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
   }
 
   @Command
+  fun setBackgroundActiveViewing(invoke: Invoke) {
+    try {
+      val shareId = invoke.parseArgs(ShareIdArgs::class.java).shareId
+      check(shareId.isEmpty() || shareId.length in 16..64) { "Invalid viewed share." }
+      if (serviceRunning()) {
+        activity.startService(Intent(activity, LocationShareService::class.java)
+          .setAction(ShareServiceContract.ACTION_SET_ACTIVE_VIEWING)
+          .putExtra(ShareServiceContract.EXTRA_SHARE_ID, shareId))
+      }
+      invoke.resolve(JSObject())
+    } catch (error: Exception) {
+      invoke.reject(error.message ?: "Could not update active viewing.")
+    }
+  }
+
+  @Command
   fun importSourceState(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(PrivateStateArgs::class.java)
@@ -1050,6 +1071,14 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       completed = true
       locationHandler.removeCallbacks(timeout)
       context.unregisterReceiver(receiver)
+      if (action == ShareServiceContract.ACTION_SET_PAUSED) {
+        val outcome = when {
+          error == null -> "ok"
+          error == timeoutMessage -> "timeout"
+          else -> "error"
+        }
+        ReliabilityJournal(context).record("sharing.pause.ack", "result=" + outcome)
+      }
       if (error == null) invoke.resolve(JSObject()) else invoke.reject(error)
     }
     receiver = object : BroadcastReceiver() {

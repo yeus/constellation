@@ -146,6 +146,25 @@ test('v3 acknowledges only an identified observation while leaving v2 unchanged'
   )
 })
 
+test('v3 authenticated heartbeat admits only a boolean viewing hint; v2 rejects it', () => {
+  const heartbeat = {
+    type: 'share.heartbeatRequest',
+    requestId: 'viewer-demand',
+    sessionId: 'synthetic-session-id',
+    viewing: true,
+  }
+  assert.equal(constellationProtocolV3.message.safeParse(heartbeat).success, true)
+  assert.equal(constellationProtocolV2.message.safeParse(heartbeat).success, false)
+  assert.equal(
+    constellationProtocolV3.message.safeParse({ ...heartbeat, viewing: 60000 }).success,
+    false,
+  )
+  assert.equal(
+    constellationProtocolV3.message.safeParse({ ...heartbeat, viewing: false }).success,
+    true,
+  )
+})
+
 test('v3 delivery receipt travels through the typed heartbeat RPC', async () => {
   const { createDuplexChannel, createPortClient, createPortServer } = await import(
     '@taskyon/protocol'
@@ -155,7 +174,7 @@ test('v3 delivery receipt travels through the typed heartbeat RPC', async () => 
   const stop = createPortServer(channel.y, constellationProtocolV3, {
     share: {
       heartbeat: (request) => {
-        accepted.push(request.receipt)
+        accepted.push({ receipt: request.receipt, viewing: request.viewing })
         return { receivedAt: 12345 }
       },
     },
@@ -163,9 +182,13 @@ test('v3 delivery receipt travels through the typed heartbeat RPC', async () => 
   try {
     const client = createPortClient(channel.x, constellationProtocolV3)
     const receipt = { sourceId: 'synthetic-location-source', sequence: 4, capturedAt: 4000 }
-    const response = await client.share.heartbeat({ sessionId: 'synthetic-session-id', receipt })
+    const response = await client.share.heartbeat({
+      sessionId: 'synthetic-session-id',
+      receipt,
+      viewing: true,
+    })
     assert.deepEqual(response, { receivedAt: 12345 })
-    assert.deepEqual(accepted, [receipt])
+    assert.deepEqual(accepted, [{ receipt, viewing: true }])
   } finally {
     stop()
   }

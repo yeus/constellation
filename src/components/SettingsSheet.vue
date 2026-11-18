@@ -99,7 +99,8 @@
             :class="{ 'choice--selected': draft.battery === 'balanced' }"
             @click="changeDraft({ ...draft, battery: 'balanced' })"
           >
-            <BalancedIcon aria-hidden="true" /><strong>Balanced</strong><span>About every 5 s</span>
+            <BalancedIcon aria-hidden="true" /><strong>Balanced</strong
+            ><span>About every 15 s while visible</span>
           </button>
           <button
             class="choice"
@@ -126,6 +127,47 @@
             "
           />Pause updates on metered networks and Data Saver</label
         >
+      </fieldset>
+      <p v-if="isAndroid" class="field-help">
+        Background sharing always uses the lower-power rate (about every 30 s), even if Balanced is
+        selected.
+      </p>
+      <fieldset v-if="isAndroid" :disabled="busy">
+        <legend>Background location source</legend>
+        <label class="settings-network">
+          <input
+            type="checkbox"
+            :checked="draft.locationProvider === 'network-only'"
+            @change="
+              changeDraft({
+                ...draft,
+                locationProvider: ($event.target as HTMLInputElement).checked
+                  ? 'network-only'
+                  : 'automatic',
+              })
+            "
+          />Use network positioning only (never turn on GPS for background sharing)</label
+        >
+        <p class="field-help">
+          May use less battery, but location can become unavailable. This does not change your
+          per-link disclosed precision; network positioning can still be accurate.
+        </p>
+        <label v-if="isAndroid" class="settings-network">
+          <input
+            type="checkbox"
+            :checked="draft.activeViewingBoost !== false"
+            @change="
+              changeDraft({
+                ...draft,
+                activeViewingBoost: ($event.target as HTMLInputElement).checked,
+              })
+            "
+          />Allow brief faster tracking when an authorized recipient is actively viewing
+        </label>
+        <p v-if="isAndroid" class="field-help">
+          Authenticated viewing requests expire automatically. Faster tracking is capped at one
+          minute per ten minutes and never overrides network-only mode or the shared precision.
+        </p>
       </fieldset>
       <p class="field-help">
         Update frequency and network preferences remain saved even if background mode is unavailable

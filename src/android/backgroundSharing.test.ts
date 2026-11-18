@@ -117,6 +117,25 @@ test('Android pause and resume are acknowledged before the status is read back',
   ])
 })
 
+test('Android UI focus reaches native receiver service without coordinates', async () => {
+  const calls: { command: string; args?: Record<string, unknown> }[] = []
+  const controller = createAndroidBackgroundSharing({
+    isAndroid: true,
+    now: Date.now,
+    invoke: async (command, args) => {
+      calls.push({ command, args })
+      return {}
+    },
+  })
+  const viewed = 'synthetic-share-id-123456789'
+  await controller?.setActiveViewing(viewed)
+  await controller?.setActiveViewing(null)
+  assert.deepEqual(calls, [
+    { command: 'android_set_background_active_viewing', args: { shareId: viewed } },
+    { command: 'android_set_background_active_viewing', args: { shareId: '' } },
+  ])
+})
+
 test('return owner handoff sends only the proof, never the foreground private key', async () => {
   const calls: { command: string; args?: Record<string, unknown> }[] = []
   const controller = createAndroidBackgroundSharing({

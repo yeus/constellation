@@ -952,13 +952,27 @@ const handleHeartbeat = (
   ctx: SharingContext,
   session: SourceSession,
   state: StreamState,
-  request: { sessionId: string; receipt?: ObservationReceipt },
+  request: { sessionId: string; receipt?: ObservationReceipt; viewing?: boolean },
 ) => {
   const share = requireAuthorized(session, state.authorizedShare)
   if (session.sessionId !== request.sessionId || !share.sessions.has(session)) {
     throw new Error('Share access denied.')
   }
   session.lastHeartbeatAt = Date.now()
+  // Authenticated, subscribed v3 peers may request a short sensor-rate lease.
+  // A false or absent hint revokes it; disconnected streams are removed from the set.
+  const lease =
+    session.receiptCapable &&
+    session.subscriptionId &&
+    request.viewing === true &&
+    !ctx.paused &&
+    !sharePauseReason(share, ctx.networkRestriction) &&
+    ctx.sharingBehavior?.activeViewingBoost !== false
+  const until = lease ? session.lastHeartbeatAt + 25_000 : undefined
+  if (session.activeViewingUntil !== until) {
+    session.activeViewingUntil = until
+    ctx.publish()
+  }
   if (request.receipt) {
     const next = acknowledgeObservation(session.delivery, request.receipt, session.lastHeartbeatAt)
     if (next !== session.delivery) {
@@ -1191,8 +1205,11 @@ export const handleIncomingStream =
       share: {
         redeem: (request: Parameters<typeof handleRedeem>[4]) =>
           handleRedeem(ctx, session, state, expectedShareId, request),
-        heartbeat: (request: { sessionId: string; receipt?: ObservationReceipt }) =>
-          handleHeartbeat(ctx, session, state, request),
+        heartbeat: (request: {
+          sessionId: string
+          receipt?: ObservationReceipt
+          viewing?: boolean
+        }) => handleHeartbeat(ctx, session, state, request),
         leave: (request: Parameters<typeof handleLeave>[3]) =>
           handleLeave(ctx, session, state, request),
         stopFollowing: (request: Parameters<typeof handleStopFollowing>[3]) =>

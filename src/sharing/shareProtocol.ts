@@ -123,6 +123,8 @@ export const shareProtocolV3 = defineFrpServiceProtocol({
             })
             .strict()
             .optional(),
+          /** Hint only; never grants additional precision or sensor permissions. */
+          viewing: z.boolean().optional(),
         })
         .strict(),
     },

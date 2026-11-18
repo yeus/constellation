@@ -209,6 +209,7 @@ const emit = defineEmits<{
   areaOverflow: [shareIds: string[]]
   diagnostic: [entry: SessionLogInput]
   cameraChange: [camera: MapCamera]
+  userPan: []
 }>()
 
 const mapElement = ref<HTMLDivElement | null>(null)
@@ -356,6 +357,7 @@ const verifyMapArchive = (): void => {
 const configureMapEvents = (target: Map): void => {
   target.on('click', (event) => handleMapClick(target, event))
   target.on('style.load', () => handleStyleLoad(target))
+  target.on('dragstart', () => emit('userPan'))
   target.on('idle', () => handleMapIdle(target))
   target.on('move', schedulePresentation)
   target.on('zoom', refreshPresentation)

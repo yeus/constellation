@@ -24,6 +24,7 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.Looper
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -49,6 +50,7 @@ class LocationShareService : Service(), LocationListener {
   private var webView: WebView? = null
   private var runtimeStarting = false
   private val pendingCommandIds = mutableSetOf<String>()
+  private val pendingPauseCommandIds = mutableSetOf<String>()
   private val pendingCommands = mutableListOf<JSONObject>()
   private val pendingReceiverStops = mutableMapOf<String, Long>()
   private val pendingCreateIds = mutableSetOf<String>()
@@ -58,6 +60,28 @@ class LocationShareService : Service(), LocationListener {
   private var lastShares: JSONArray? = null
   private var lastViewerCount = 0
   private var lastPaused = false
+  private val viewingBudget = ViewingBoostBudget()
+  private var activeViewingBoostUntil = 0L
+  private val viewingBoostTimer = Runnable { updatePolicyState() }
+  private var networkOnlyPolicy = false
+  private var activeViewingBoostPolicy = true
+  private fun reloadLocationPolicies() {
+    val wasNetworkOnly = networkOnlyPolicy
+    val loaded = runCatching { store.loadBehaviorPreference()?.let(::JSONObject) }
+    if (loaded.isFailure) {
+      // Unreadable power preferences must not silently reactivate GPS.
+      networkOnlyPolicy = true
+      activeViewingBoostPolicy = false
+      journal.record("location.policy.fallback", "reason=unreadable-preferences")
+    } else {
+      val desired = loaded.getOrNull()
+      networkOnlyPolicy = desired?.optString("locationProvider") == "network-only"
+      activeViewingBoostPolicy = desired?.optBoolean("activeViewingBoost", true) != false
+    }
+    // Only a policy transition must cancel a pending automatic/GPS one-shot fix.
+    // Ordinary low-power sampler changes must preserve the first viewer's refresh.
+    if (!wasNetworkOnly && networkOnlyPolicy) clearRefresh()
+  }
   /** Android may kill the process without invoking onDestroy; inspect the previous exit. */
   private fun recordPreviousProcessExit() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
@@ -78,6 +102,9 @@ class LocationShareService : Service(), LocationListener {
   private var lastJournalSubmitted = -1L
   private var lastJournalConfirmed = -1L
   private var lastJournalSessionSequence = 0L
+  private var watchFixesSinceJournal = 0L
+  private var refreshFixesSinceJournal = 0L
+  private var lastFixJournalAt = -1L
   private val safeSessionKinds = setOf(
     "stream-open", "redeem-denied", "admitted", "left", "transport-closed",
     "heartbeat-timeout", "heartbeat-failed", "expired", "blocked", "stopped",
@@ -85,6 +112,7 @@ class LocationShareService : Service(), LocationListener {
   private val journalHeartbeat = object : Runnable {
     override fun run() {
       if (finishing) return
+      flushLocationFixJournal()
       val power = getSystemService(PowerManager::class.java)
       val activity = getSystemService(ActivityManager::class.java)
       // The journal caps each entry at 180 characters; a combined heartbeat + power
@@ -199,9 +227,11 @@ class LocationShareService : Service(), LocationListener {
         else -> "other"
       }
       journal.record("service.power.changed", "cause=$cause;${powerConditionsSnapshot(applicationContext)}")
+      mainHandler.post { updatePolicyState() }
     }
   }
   private var locationManager: LocationManager? = null
+  private var refreshManager: LocationManager? = null
   private var refreshCancellation: CancellationSignal? = null
   private var refreshListener: LocationListener? = null
   private var refreshTimeout: Runnable? = null
@@ -216,10 +246,14 @@ class LocationShareService : Service(), LocationListener {
     recordPreviousProcessExit()
     mainHandler.post(journalHeartbeat)
     store = EncryptedShareStore(applicationContext, discardUnreadable = false)
+    reloadLocationPolicies()
     receiverFence = ReceiverOwnershipFence(applicationContext)
     connectivityManager = getSystemService(ConnectivityManager::class.java)
     runCatching { connectivityManager?.registerDefaultNetworkCallback(networkCallback) }
-    runCatching { registerReceiver(deviceLocationReceiver, IntentFilter(LocationManager.MODE_CHANGED_ACTION)) }
+    runCatching { registerReceiver(deviceLocationReceiver, IntentFilter().apply {
+      addAction(LocationManager.MODE_CHANGED_ACTION)
+      addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
+    }) }
     runCatching {
       registerReceiver(
         restrictBackgroundReceiver,
@@ -281,20 +315,41 @@ class LocationShareService : Service(), LocationListener {
           START_STICKY
         }
         ShareServiceContract.ACTION_SET_PAUSED -> {
-          queueCommand(
-            JSONObject()
-              .put("type", "set-paused")
-              .put("paused", intent?.getBooleanExtra(ShareServiceContract.EXTRA_PAUSED, false) ?: false)
-              .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)),
-          )
+          // The UI sends EXTRA_REQUEST JSON; the notification uses EXTRA_PAUSED.
+          // Never default an absent UI field to false (which silently unpauses).
+          val request = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST)
+          val paused = when {
+            request != null -> JSONObject(request).getBoolean("paused")
+            intent?.hasExtra(ShareServiceContract.EXTRA_PAUSED) == true ->
+              intent.getBooleanExtra(ShareServiceContract.EXTRA_PAUSED, false)
+            else -> throw IllegalArgumentException("Missing sharing pause value.")
+          }
+          val requestId = intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)
+          if (requestId != null) pendingPauseCommandIds.add(requestId)
+          journal.record("sharing.pause.request",
+            "paused=" + paused + ";origin=" + (if (request != null) "ui" else "notification"))
+          queueCommand(JSONObject()
+            .put("type", "set-paused")
+            .put("paused", paused)
+            .put("requestId", requestId))
           startRuntime()
           START_STICKY
         }
         ShareServiceContract.ACTION_SET_VISIBLE -> {
           appVisible = intent?.getBooleanExtra(ShareServiceContract.EXTRA_VISIBLE, false) ?: false
+          if (!appVisible) queueCommand(JSONObject().put("type", "set-active-viewing")
+            .put("shareId", JSONObject.NULL))
           queueCommand(JSONObject().put("type", "set-visible").put("visible", appVisible))
           startRuntime()
           updatePolicyState()
+          START_STICKY
+        }
+        ShareServiceContract.ACTION_SET_ACTIVE_VIEWING -> {
+          val candidate = intent?.getStringExtra(ShareServiceContract.EXTRA_SHARE_ID)
+          val shareId = candidate?.takeIf { it.length in 16..64 }
+          queueCommand(JSONObject().put("type", "set-active-viewing")
+            .put("shareId", shareId ?: JSONObject.NULL))
+          startRuntime()
           START_STICKY
         }
         ShareServiceContract.ACTION_BLOCK_VIEWER -> {
@@ -383,7 +438,10 @@ class LocationShareService : Service(), LocationListener {
           queueCommand(request.put("type", commandType)
             .put("requestId", intent?.getStringExtra(ShareServiceContract.EXTRA_REQUEST_ID)))
           startRuntime()
-          if (commandType == "set-sharing-behavior") updatePolicyState(forceSend = true)
+          if (commandType == "set-sharing-behavior") {
+            reloadLocationPolicies()
+            updatePolicyState(forceSend = true)
+          }
           START_STICKY
         }
         ShareServiceContract.ACTION_SET_VIEWER_NAME -> {
@@ -472,8 +530,22 @@ class LocationShareService : Service(), LocationListener {
     sendPosition(location, "location")
   }
 
+  private fun flushLocationFixJournal() {
+    if (watchFixesSinceJournal == 0L && refreshFixesSinceJournal == 0L) return
+    journal.record("location.fix", "mode=service;watch=$watchFixesSinceJournal;refresh=$refreshFixesSinceJournal")
+    watchFixesSinceJournal = 0L
+    refreshFixesSinceJournal = 0L
+    lastFixJournalAt = SystemClock.elapsedRealtime()
+  }
+
+  private fun recordLocationFix(type: String) {
+    if (type == "location") watchFixesSinceJournal++ else refreshFixesSinceJournal++
+    if (lastFixJournalAt >= 0L && SystemClock.elapsedRealtime() - lastFixJournalAt < 300_000L) return
+    flushLocationFixJournal()
+  }
+
   private fun sendPosition(location: Location, type: String) {
-    journal.record("location.fix", "mode=service;kind=${if (type == "location") "watch" else "refresh"}")
+    recordLocationFix(type)
     send(JSONObject()
       .put("type", type)
       .put("position", locationPositionJson(location)))
@@ -484,14 +556,29 @@ class LocationShareService : Service(), LocationListener {
     if (availableLocationProviders(manager).isEmpty()) {
       send(JSONObject().put("type", "location-error")
         .put("code", if (manager.isLocationEnabled) 2 else 4))
+    } else {
+      restartLocationAfterProviderChange()
+    }
+  }
+
+  override fun onProviderEnabled(provider: String) = restartLocationAfterProviderChange()
+
+  private fun restartLocationAfterProviderChange() {
+    mainHandler.post {
+      if (locationManager != null && watchRequested) {
+        stopLocationUpdates(cancelRefresh = false)
+        startLocationUpdates()
+      }
     }
   }
 
   override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
 
   override fun onDestroy() {
+    flushLocationFixJournal()
     journal.record("service.destroyed", "finishing=$finishing;runtimeReady=$runtimeReady;watch=$watchRequested")
     mainHandler.removeCallbacks(journalHeartbeat)
+    mainHandler.removeCallbacks(viewingBoostTimer)
     stopLocationUpdates()
     runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
     runCatching { unregisterReceiver(restrictBackgroundReceiver) }
@@ -506,7 +593,7 @@ class LocationShareService : Service(), LocationListener {
     networkStateSent = null
     networkOnlineSent = null
     ShareServiceContract.networkRestriction = null
-    ShareServiceContract.sampling = "balanced"
+    ShareServiceContract.sampling = "saver"
     webView?.let { view -> mainHandler.post { view.stopLoading(); view.destroy() } }
     webView = null
     runtimeStarting = false
@@ -653,12 +740,18 @@ class LocationShareService : Service(), LocationListener {
               .onFailure { parsed.put("error", "Receiver ownership could not be released.") }
           }
         }
+        val wasPause = pendingPauseCommandIds.remove(completedId)
+        if (wasPause) {
+          journal.record("sharing.pause.complete",
+            "result=" + (if (parsed.has("error")) "error" else "ok"))
+        }
         pendingCommandIds.remove(parsed.optString("requestId"))
         val result = Intent(ShareServiceContract.ACTION_COMMAND_COMPLETE)
           .setPackage(packageName)
           .putExtra(ShareServiceContract.EXTRA_REQUEST_ID, parsed.optString("requestId"))
         if (parsed.has("error")) {
-          result.putExtra(ShareServiceContract.EXTRA_ERROR, "Could not save the return-sharing change.")
+          result.putExtra(ShareServiceContract.EXTRA_ERROR,
+            if (wasPause) "Sharing pause could not be saved." else "Could not save the return-sharing change.")
         }
         sendBroadcast(result)
         stopWhenIdle()
@@ -825,7 +918,9 @@ class LocationShareService : Service(), LocationListener {
 
   private fun startLocationUpdates() {
     watchRequested = true
-    if (allKnownSharesPaused()) return
+    // An open invitation is not a reason to keep GPS awake. The authenticated
+    // subscription path requests a fresh fix when the first viewer arrives.
+    if (lastViewerCount == 0 || allKnownSharesPaused()) return
     // Desired background policy is not a substitute for Android permission.
     // Run only in the foreground until all required OS grants are available.
     if (!appVisible && !canPublishRequestedInBackground()) {
@@ -841,31 +936,65 @@ class LocationShareService : Service(), LocationListener {
       return
     }
     val sampling = samplingFor(lastShares)
-    appliedSampling = sampling
+    val preferredProvider = preferredLocationProvider(lastShares)
     val manager = getSystemService(LocationManager::class.java)
-    locationManager = manager
-    if (!watchAndroidLocation(
+    if (watchAndroidLocation(
       manager,
       this,
       intervalFor(sampling),
       distanceFor(sampling),
+      preferredProvider = preferredProvider,
+      allowFallback = !networkOnlyLocationRequested(),
     )) {
+      locationManager = manager
+      appliedSampling = "$sampling:$preferredProvider:${networkOnlyLocationRequested()}"
+    } else {
       send(JSONObject().put("type", "location-error").put("code", 2))
     }
   }
 
-  private fun stopLocationUpdates() {
-    clearRefresh()
+  private fun stopLocationUpdates(cancelRefresh: Boolean = true) {
+    if (cancelRefresh) clearRefresh()
     locationManager?.let { manager -> runCatching { manager.removeUpdates(this) } }
     locationManager = null
     appliedSampling = null
   }
 
   private fun samplingFor(shares: JSONArray?): String {
+    val power = getSystemService(PowerManager::class.java)
+    val nowElapsed = SystemClock.elapsedRealtime()
+    val nowWall = System.currentTimeMillis()
+    val demandAt = shareObjects(shares)
+      .filter { it.isNull("paused") && it.optInt("viewerCount", 0) > 0 }
+      .maxOfOrNull { it.optLong("activeViewingUntil", 0L) } ?: 0L
+    val demandRemaining = (demandAt - nowWall).coerceIn(0L, 25_000L)
+    val boostEnabled = activeViewingBoostPolicy
+    val allowed = boostEnabled && demandRemaining > 0L &&
+      power?.isPowerSaveMode != true && power?.isDeviceIdleMode != true &&
+      !lastPaused && canPublishRequestedInBackground()
+    activeViewingBoostUntil = viewingBudget.permittedUntil(
+      nowElapsed, nowElapsed + demandRemaining, allowed,
+    )
+    mainHandler.removeCallbacks(viewingBoostTimer)
+    if (activeViewingBoostUntil > nowElapsed) {
+      mainHandler.postDelayed(viewingBoostTimer, activeViewingBoostUntil - nowElapsed)
+      return "balanced"
+    }
+    if (!appVisible || power?.isPowerSaveMode == true || power?.isInteractive == false) return "saver"
     val publishing = shareObjects(shares).filter { it.isNull("paused") }
     val relevant = publishing.ifEmpty { shareObjects(shares) }
     return if (relevant.any { it.optString("battery") == "balanced" }) "balanced" else "saver"
   }
+
+  private fun networkOnlyLocationRequested(): Boolean = networkOnlyPolicy
+
+  private fun preferredLocationProvider(shares: JSONArray?): String =
+    if (!networkOnlyLocationRequested() && locationGrant(this) == "fine" && shareObjects(shares).any {
+        it.isNull("paused") && it.optInt("viewerCount", 0) > 0 &&
+        it.optString("precision") == "exact" &&
+        (appVisible || (activeViewingBoostUntil > SystemClock.elapsedRealtime() &&
+          it.optLong("activeViewingUntil", 0L) > System.currentTimeMillis()))
+      }) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
 
   private fun shareObjects(shares: JSONArray?): List<JSONObject> =
     (0 until (shares?.length() ?: 0)).mapNotNull { shares?.optJSONObject(it) }
@@ -918,10 +1047,11 @@ class LocationShareService : Service(), LocationListener {
     ShareServiceContract.networkRestriction = restriction
     ShareServiceContract.sampling = sampling
     val permitted = appVisible || canPublishRequestedInBackground()
-    if (publishingShareCount(shares) == 0 || !permitted) {
-      if (locationManager != null) stopLocationUpdates()
-    } else if (watchRequested && (locationManager == null || appliedSampling != sampling)) {
-      stopLocationUpdates()
+    if (publishingShareCount(shares) == 0 || lastViewerCount == 0 || !permitted) {
+      if (locationManager != null || refreshManager != null) stopLocationUpdates()
+    } else if (watchRequested &&
+      (locationManager == null || appliedSampling != "$sampling:${preferredLocationProvider(shares)}:${networkOnlyLocationRequested()}")) {
+      stopLocationUpdates(cancelRefresh = false)
       startLocationUpdates()
     }
     ShareNotification.update(
@@ -938,8 +1068,9 @@ class LocationShareService : Service(), LocationListener {
     refreshTimeout = null
     refreshCancellation?.cancel()
     refreshCancellation = null
-    refreshListener?.let { listener -> locationManager?.removeUpdates(listener) }
+    refreshListener?.let { listener -> refreshManager?.removeUpdates(listener) }
     refreshListener = null
+    refreshManager = null
   }
 
   private fun requestFreshLocation() {
@@ -950,10 +1081,12 @@ class LocationShareService : Service(), LocationListener {
     if (allKnownSharesPaused()) return
     if (locationGrant(this) == "none") return
     val manager = locationManager ?: getSystemService(LocationManager::class.java)
-    val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-      .firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) } ?: return
+    val candidates = if (networkOnlyLocationRequested()) listOf(LocationManager.NETWORK_PROVIDER)
+      else listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+    val provider = candidates.firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+      ?: return
     clearRefresh()
-    locationManager = manager
+    refreshManager = manager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       val cancellation = CancellationSignal()
       refreshCancellation = cancellation
@@ -1127,8 +1260,8 @@ class LocationShareService : Service(), LocationListener {
     const val PAGE_URL = "https://constellation.invalid/runtime.html"
     const val ERROR_SCRIPT_URL = "https://constellation.invalid/runtime-errors.js"
     const val SCRIPT_URL = "https://constellation.invalid/constellation-background.js"
-    const val BALANCED_UPDATE_INTERVAL_MS = 5_000L
-    const val BALANCED_UPDATE_MINIMUM_DISTANCE_METRES = 5f
+    const val BALANCED_UPDATE_INTERVAL_MS = 15_000L
+    const val BALANCED_UPDATE_MINIMUM_DISTANCE_METRES = 15f
     const val SAVER_UPDATE_INTERVAL_MS = 30_000L
     const val SAVER_UPDATE_MINIMUM_DISTANCE_METRES = 25f
     val ERROR_SCRIPT = """

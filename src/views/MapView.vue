@@ -20,6 +20,7 @@
         @own-area-hidden="ownAreaHidden = $event"
         @diagnostic="sessionLog.record"
         @camera-change="runtime.setMapCamera"
+        @user-pan="selectedFollowId = undefined"
       />
     </div>
 
@@ -1720,6 +1721,19 @@ const activeFollowing = computed(() =>
     receiverSnapshot.value,
   ).filter((entry) => entry.status !== 'expired' && entry.status !== 'revoked'),
 )
+const activelyViewedShareId = computed<string | null>(() => {
+  const shareId = selectedFollowId.value
+  return activeFollowing.value.some((entry) => entry.shareId === shareId && entry.connected)
+    ? (shareId ?? null)
+    : null
+})
+const synchronizeActiveViewing = (): void => {
+  const shareId = document.visibilityState === 'visible' ? activelyViewedShareId.value : null
+  runtime.setActiveViewing(shareId)
+  void backgroundSharing?.setActiveViewing(shareId).catch(() => undefined)
+}
+watch(activelyViewedShareId, synchronizeActiveViewing)
+
 const previewFollow = computed(
   () =>
     activeFollowing.value.find(
@@ -2235,6 +2249,7 @@ watch(
   { immediate: true, flush: 'post' },
 )
 const centerOnOwnLocation = (): void => {
+  selectedFollowId.value = undefined
   setIncomingSensorDeferral(false)
   if (!ownObservation.value) {
     locationSource.start()
@@ -2256,6 +2271,7 @@ const focusFollowing = (shareId: string): void => {
   const location = locations.value.find(({ id }) => id === shareId)
   if (!location) return
   locationMap.value?.centerOn(location)
+  selectedFollowId.value = shareId
   peerListOpen.value = false
 }
 const focusPeer = (shareIds: readonly string[]): void => {
@@ -2264,12 +2280,18 @@ const focusPeer = (shareIds: readonly string[]): void => {
     ({ id }) => id && ids.has(id) && viewableIds.value.includes(id),
   )
   if (peerLocations.length === 0) return
+  selectedFollowId.value =
+    peerLocations.length === 1 &&
+    activeFollowing.value.some((entry) => entry.shareId === peerLocations[0]?.id)
+      ? peerLocations[0]?.id
+      : undefined
   locationMap.value?.focusLocations(peerLocations)
   peerListOpen.value = false
 }
 const focusAllFollowing = (): void => {
   const peerLocations = locations.value.filter(({ id }) => viewableIds.value.includes(id))
   if (peerLocations.length === 0) return
+  selectedFollowId.value = undefined
   locationMap.value?.focusLocations(peerLocations)
   peerListOpen.value = false
 }
@@ -3019,7 +3041,11 @@ const updateVisibility = (): void => {
   }
   if (visible) void reconcileReceiverOwnership().catch(() => undefined)
   updateLocationOwnership()
-  void backgroundSharing?.setVisible(visible).catch(() => undefined)
+  void backgroundSharing
+    ?.setVisible(visible)
+    .then(synchronizeActiveViewing)
+    .catch(() => undefined)
+  if (!backgroundSharing) synchronizeActiveViewing()
 }
 onMounted(() => {
   // Link consent must appear immediately, even if protected-store or native startup is slow.
@@ -3057,6 +3083,7 @@ onMounted(() => {
     await runtime.initialize()
     await loadSharingSettings()
     await restorePreferredBackgroundFollowing()
+    synchronizeActiveViewing()
     if (backgroundSharing) {
       await refreshBackgroundStatus().catch(() => undefined)
       updateVisibility()
@@ -3076,6 +3103,8 @@ onMounted(() => {
   })
 })
 onBeforeUnmount(() => {
+  runtime.setActiveViewing(null)
+  void backgroundSharing?.setActiveViewing(null).catch(() => undefined)
   document.removeEventListener('visibilitychange', updateVisibility)
   window.removeEventListener('online', recordConnectivity)
   window.removeEventListener('offline', recordConnectivity)

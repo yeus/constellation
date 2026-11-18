@@ -42,9 +42,15 @@ internal fun watchAndroidLocation(
   listener: LocationListener,
   intervalMs: Long,
   minimumDistanceMetres: Float,
+  preferredProvider: String? = null,
+  allowFallback: Boolean = true,
 ): Boolean {
+  val providers = availableLocationProviders(manager)
+  val selected = if (preferredProvider == null) providers else
+    listOfNotNull(preferredProvider.takeIf { it in providers }) +
+      (if (allowFallback) providers.filter { it != preferredProvider } else emptyList())
   var registered = false
-  for (provider in availableLocationProviders(manager)) {
+  for (provider in selected) {
     val success = runCatching {
       manager.requestLocationUpdates(
         provider,
@@ -54,6 +60,7 @@ internal fun watchAndroidLocation(
         Looper.getMainLooper(),
       )
     }.isSuccess
+    if (preferredProvider != null && success) return true
     registered = registered || success
   }
   return registered

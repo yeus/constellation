@@ -30,6 +30,7 @@ internal object ShareServiceContract {
   const val ACTION_SET_PAUSED = "space.taskyon.constellation.SET_LOCATION_SHARING_PAUSED"
   const val EXTRA_PAUSED = "space.taskyon.constellation.PAUSED"
   const val ACTION_SET_VISIBLE = "space.taskyon.constellation.SET_LOCATION_SHARING_VISIBILITY"
+  const val ACTION_SET_ACTIVE_VIEWING = "space.taskyon.constellation.SET_ACTIVE_VIEWING"
   const val ACTION_SET_VIEWER_NAME = "space.taskyon.constellation.SET_LOCATION_VIEWER_NAME"
   const val ACTION_STOP = "space.taskyon.constellation.STOP_LOCATION_SHARE"
   const val ACTION_BLOCK_VIEWER = "space.taskyon.constellation.BLOCK_LOCATION_VIEWER"

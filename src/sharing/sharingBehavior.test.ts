@@ -5,13 +5,17 @@ import { defaultSharingBehavior, SharingBehavior } from './sharingBehavior.ts'
 test('Android defaults to background; other platforms default to foreground', () => {
   assert.deepEqual(defaultSharingBehavior(true), {
     publication: 'background',
-    battery: 'balanced',
+    battery: 'saver',
     network: 'always',
+    locationProvider: 'automatic',
+    activeViewingBoost: true,
   })
   assert.deepEqual(defaultSharingBehavior(false), {
     publication: 'foreground',
     battery: 'balanced',
     network: 'always',
+    locationProvider: 'automatic',
+    activeViewingBoost: true,
   })
 })
 test('global settings validate the existing policies without introducing link options', () => {
@@ -26,6 +30,18 @@ test('global settings validate the existing policies without introducing link op
   assert.equal(
     SharingBehavior.safeParse({ publication: 'scheduled', battery: 'balanced', network: 'always' })
       .success,
+    false,
+  )
+})
+test('network-only native acquisition is optional and legacy preferences still parse', () => {
+  const legacy = { publication: 'background', battery: 'saver', network: 'always' }
+  assert.equal(SharingBehavior.safeParse(legacy).success, true)
+  assert.equal(
+    SharingBehavior.safeParse({ ...legacy, locationProvider: 'network-only' }).success,
+    true,
+  )
+  assert.equal(
+    SharingBehavior.safeParse({ ...legacy, locationProvider: 'gps-only' }).success,
     false,
   )
 })

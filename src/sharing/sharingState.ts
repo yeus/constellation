@@ -47,6 +47,7 @@ const createRelationStores = () => {
     string,
     (explicit?: boolean, eventId?: string) => Promise<boolean>
   >()
+  const activeViewingSenders = new Map<string, () => void>()
   const returnSenders = new Map<string, (url: string) => Promise<void>>()
   const returnOffers = new Map<string, ReturnOffer>()
   const approvedReturnLinks = new Set<string>()
@@ -67,6 +68,7 @@ const createRelationStores = () => {
     peerNamePreferences,
     nameListeners,
     nameSenders,
+    activeViewingSenders,
     viewerClosers,
     returnSenders,
     returnOffers,
@@ -92,6 +94,7 @@ const createRuntimeFlags = () => {
   let peer: Promise<{ node: BrowserLibp2pNode; addresses: string[] }> | undefined
   let handlerNode: BrowserLibp2pNode | undefined
   const visible = true
+  const activeViewingShareId: string | null = null
   const paused = false
   const followersSuspended = false
   let privateKey: PrivateKey | undefined
@@ -116,6 +119,7 @@ const createRuntimeFlags = () => {
     handlerNode,
     visible,
     paused,
+    activeViewingShareId: activeViewingShareId as string | null,
     followersSuspended,
     privateKey,
     preparation,

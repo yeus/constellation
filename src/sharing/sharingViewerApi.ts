@@ -874,11 +874,12 @@ const startFollowHeartbeat = (
   ctx: SharingContext,
   state: FollowState,
   session: ActiveFollowSession,
-) =>
-  window.setInterval(() => {
+) => {
+  const sendHeartbeat = () => {
     void state.client.share
       .heartbeat({
         sessionId: session.sessionId,
+        ...(state.isV3 ? { viewing: ctx.activeViewingShareId === state.capability.shareId } : {}),
         ...(state.isV3 && state.lastAccepted ? { receipt: state.lastAccepted } : {}),
       })
       .catch(() => {
@@ -888,7 +889,11 @@ const startFollowHeartbeat = (
         ctx.publish({ message: 'The location connection was lost.' })
         void state.messagePort.close()
       })
-  }, session.heartbeatIntervalMs)
+  }
+  ctx.activeViewingSenders.set(state.capability.shareId, sendHeartbeat)
+  if (ctx.activeViewingShareId === state.capability.shareId) sendHeartbeat()
+  return window.setInterval(sendHeartbeat, session.heartbeatIntervalMs)
+}
 
 const createFollowCloser =
   (
@@ -1018,6 +1023,7 @@ const onFollowClosed =
     unsubscribe()
     if (ctx.viewerClosers.get(state.capability.shareId) !== close) return
     ctx.viewerClosers.delete(state.capability.shareId)
+    ctx.activeViewingSenders.delete(state.capability.shareId)
     ctx.returnSenders.delete(state.capability.shareId)
     const entry = ctx.followed.get(state.capability.shareId)
     if (entry) {

@@ -95,6 +95,13 @@ impl<R: Runtime> ConstellationAndroid<R> {
             .map_err(Into::into)
     }
 
+    pub async fn set_active_viewing(&self, share_id: &str) -> crate::Result<Value> {
+        self.0
+            .run_mobile_plugin_async("setBackgroundActiveViewing", json!({ "shareId": share_id }))
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn import_source_state(&self, state: &str) -> crate::Result<Value> {
         self.0
             .run_mobile_plugin_async("importSourceState", json!({ "state": state }))

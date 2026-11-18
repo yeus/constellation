@@ -147,6 +147,14 @@ const projectShareViewers = (
 
 const projectShare = (share: SourceShare, input: RuntimeProjectionInput): ShareSummary => {
   const paused = sharePauseState(share, input.networkRestriction, input.paused)
+  const activeViewingUntil = paused
+    ? 0
+    : Math.max(
+        0,
+        ...[...share.sessions]
+          .map((session) => session.activeViewingUntil ?? 0)
+          .filter((until) => until > input.now),
+      )
   return {
     shareId: share.capability.shareId,
     url: share.url,
@@ -154,6 +162,7 @@ const projectShare = (share: SourceShare, input: RuntimeProjectionInput): ShareS
     expiresAt: share.capability.expiresAt,
     recipientPeerId: share.approvedPeerId,
     viewerCount: share.sessions.size,
+    ...(activeViewingUntil > input.now ? { activeViewingUntil } : {}),
     viewers: projectShareViewers(share, input.peerNamePreferences, input.viewerLabels),
     ...(share.name ? { name: share.name } : {}),
     publication: share.publication,

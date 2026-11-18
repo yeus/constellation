@@ -20,6 +20,7 @@ export const createLifecycleApi = (
   | 'recoverBackgroundSources'
   | 'subscribe'
   | 'setVisible'
+  | 'setActiveViewing'
   | 'setMapCamera'
   | 'setPaused'
   | 'stop'
@@ -31,6 +32,13 @@ export const createLifecycleApi = (
   setFollowingSuspended: createSetFollowingSuspended(ctx),
   subscribe: createSubscribe(ctx),
   setVisible: createSetVisible(ctx),
+  setActiveViewing: (shareId) => {
+    const previous = ctx.activeViewingShareId
+    if (previous === shareId) return
+    ctx.activeViewingShareId = shareId
+    if (previous) ctx.activeViewingSenders.get(previous)?.()
+    if (shareId) ctx.activeViewingSenders.get(shareId)?.()
+  },
   setMapCamera: createSetMapCamera(ctx),
   setPaused: createSetPaused(ctx),
   stop: createStop(ctx),

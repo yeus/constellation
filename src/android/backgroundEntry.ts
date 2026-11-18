@@ -116,6 +116,7 @@ type BackgroundCommand =
       readonly force?: boolean
     }
   | { readonly type: 'set-visible'; readonly visible: boolean }
+  | { readonly type: 'set-active-viewing'; readonly shareId: string | null }
   | { readonly type: 'block-viewer'; readonly shareId: string; readonly fingerprint: string }
   | {
       readonly type: 'approve-viewer'
@@ -179,6 +180,7 @@ interface BackgroundEntryState extends StoreState {
   viewer?: ReturnType<typeof createBackgroundViewer>
   viewerGeneration?: number
   latestViewer?: BackgroundViewerSnapshot
+  activeViewingShareId: string | null
   latestState?: SharingRuntimeState
   previousShareCount: number
   lastRecoveryAt: number | null
@@ -254,6 +256,7 @@ const createBackgroundEntryState = (): BackgroundEntryState => {
     location,
     runtime,
     previousShareCount: 0,
+    activeViewingShareId: null,
     lastRecoveryAt: null,
     lastReceiverRecoveryAt: null,
     networkOnline: false,
@@ -636,6 +639,7 @@ const runReceiverCommand = async (
       try {
         await viewer.start()
         state.viewer = viewer
+        viewer.runtime.setActiveViewing(state.activeViewingShareId)
         state.viewerGeneration = command.generation
         post({ type: 'diagnostic', event: 'follow.restore.finished', state: 'connected' })
       } catch (error) {
@@ -685,6 +689,11 @@ const runCommand = async (
   command: BackgroundCommand,
 ): Promise<void> => {
   if (handleTransientCommand(state, command)) return
+  if (command.type === 'set-active-viewing') {
+    state.activeViewingShareId = command.shareId
+    state.viewer?.runtime.setActiveViewing(command.shareId)
+    return
+  }
   if (command.type === 'receiver-start' || command.type === 'receiver-stop') {
     return runReceiverCommand(state, command)
   }

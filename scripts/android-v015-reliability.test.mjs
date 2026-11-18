@@ -53,7 +53,7 @@ test('foreground-only preference stops native location watches and refreshes des
     service,
     /loadBehaviorPreference\(\)\?\.let\(::JSONObject\)\?\.optString\("publication"\) != "foreground"/,
   )
-  assert.match(service, /if \(commandType == "set-sharing-behavior"\) updatePolicyState/)
+  assert.match(service, /if \(commandType == "set-sharing-behavior"\) \{\s+reloadLocationPolicies\(\)\s+updatePolicyState/)
   assert.match(service, /if \(!appVisible && !canPublishRequestedInBackground\(\)\)/)
   assert.match(service, /val permitted = appVisible \|\| canPublishRequestedInBackground\(\)/)
 })
@@ -120,6 +120,18 @@ test('v0.1.5 power acceptance exercises Android policies and journal-backed asse
   assert.match(native, /processAliveBeforeCleanup/)
   assert.match(managed, /summarizeAndroidNativeCrash/)
   assert.match(managed, /two-device failed diagnostics/)
+})
+
+test('Android pause command preserves the requested boolean for UI and notification actions', () => {
+  const notification = read(pluginPath + 'ShareNotification.kt')
+  assert.match(plugin, /request = request\.toString\(\)/)
+  assert.match(notification, /putExtra\(ShareServiceContract\.EXTRA_PAUSED, !paused\)/)
+  assert.match(service, /getStringExtra\(ShareServiceContract\.EXTRA_REQUEST\)/)
+  assert.match(service, /getBoolean\("paused"\)/)
+  assert.match(service, /hasExtra\(ShareServiceContract\.EXTRA_PAUSED\)/)
+  assert.match(service, /journal\.record\("sharing\.pause\.request"/)
+  assert.match(service, /journal\.record\("sharing\.pause\.complete"/)
+  assert.match(plugin, /ReliabilityJournal\(context\)\.record\("sharing\.pause\.ack"/)
 })
 
 test('receiver and sender reconnect independently with a rate limit', () => {
