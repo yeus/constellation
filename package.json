@@ -74,7 +74,7 @@
     "qrcode": "1.5.4",
     "vue": "3.5.22",
     "vue-router": "4.0.12",
-    "zod": "4.1.8",
+    "zod": "4.6.6",
     "zxing-wasm": "3.1.5"
   },
   "devDependencies": {
