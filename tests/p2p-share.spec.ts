@@ -622,12 +622,16 @@ test('return consent applies to every viewer of the same original link', async (
         }),
       )
       .toBe(1)
+    // Each verified offer crosses an independent P2P session. Await both with
+    // a bounded delivery window instead of the default five-second UI poll.
     await expect
-      .poll(() =>
-        source.evaluate(async () => {
-          const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
-          return (await createBrowserPrivateStore().load())?.returnOffers?.length
-        }),
+      .poll(
+        () =>
+          source.evaluate(async () => {
+            const { createBrowserPrivateStore } = await import('../src/sharing/privateStore.ts')
+            return (await createBrowserPrivateStore().load())?.returnOffers?.length ?? 0
+          }),
+        { timeout: 30_000 },
       )
       .toBe(2)
     await offer.getByRole('button', { name: 'Accept share-backs' }).click()

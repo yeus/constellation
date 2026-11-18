@@ -2,6 +2,12 @@ import type { Page, Locator } from '@playwright/test'
 
 export const openPeerList = async (page: Page) => {
   const peerList = page.locator('.peer-list')
+  await page.locator('.dock-peers').waitFor({ state: 'visible' })
+  // Returning to a source page can show the general privacy introduction again.
+  // This is NOT the per-invitation link consent dialog, which tests must still affirm.
+  const privacyIntro = page.getByRole('region', { name: 'Privacy introduction' })
+  if (await privacyIntro.isVisible())
+    await privacyIntro.getByRole('button', { name: 'Got it' }).click()
   if (!(await peerList.isVisible())) await page.locator('.dock-peers').click()
   return peerList
 }
