@@ -9,6 +9,7 @@ import {
   androidTool,
   create,
   emulatorArguments,
+  emulatorExecutable,
   profile,
 } from './android-emulator.mjs'
 
@@ -30,6 +31,24 @@ test('finds versioned Android command-line tools without a latest symlink', () =
     assert.equal(androidTool('avdmanager', { ANDROID_HOME: sdk }), executable)
   } finally {
     fs.rmSync(sdk, { recursive: true, force: true })
+  }
+})
+
+test('uses the host emulator binary for an AOSP SDK that contains only a system image', () => {
+  const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-isolated-sdk-'))
+  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-host-sdk-'))
+  try {
+    const executable = path.join(host, 'emulator', 'emulator')
+    fs.mkdirSync(path.dirname(executable), { recursive: true })
+    fs.writeFileSync(executable, '')
+    assert.equal(emulatorExecutable({ ANDROID_HOME: sdk }, { ANDROID_HOME: host }), executable)
+    const local = path.join(sdk, 'emulator', 'emulator')
+    fs.mkdirSync(path.dirname(local), { recursive: true })
+    fs.writeFileSync(local, '')
+    assert.equal(emulatorExecutable({ ANDROID_HOME: sdk }, { ANDROID_HOME: host }), local)
+  } finally {
+    fs.rmSync(sdk, { recursive: true, force: true })
+    fs.rmSync(host, { recursive: true, force: true })
   }
 })
 
@@ -97,5 +116,14 @@ test('starts deterministic software-rendered emulators', () => {
     '-no-snapshot-load',
     '-no-snapshot-save',
     '-no-window',
+  ])
+})
+
+test('AOSP emulator uses its separate system-image directory with the host binary', () => {
+  assert.deepEqual(emulatorArguments(profile('aosp')).slice(0, 4), [
+    '-avd',
+    'constellation-api29-aosp',
+    '-sysdir',
+    '/android-state/aosp-sdk/system-images/android-29/default/x86_64',
   ])
 })

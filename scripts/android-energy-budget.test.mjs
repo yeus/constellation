@@ -65,7 +65,7 @@ test('network-only option never falls back to GPS for background watches or fres
   assert.match(service, /allowFallback = !networkOnlyLocationRequested\(\)/)
   assert.match(
     service,
-    /if \(networkOnlyLocationRequested\(\)\) listOf\(LocationManager.NETWORK_PROVIDER\)/,
+    /networkOnlyLocationRequested\(\),\s*locationGrant\(this\) == "fine",\s*shareObjects\(lastShares\)/,
   )
 })
 

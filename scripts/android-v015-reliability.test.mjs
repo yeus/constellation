@@ -93,6 +93,7 @@ test('native heartbeat samples accessible power states without logging locations
     'getCurrentInterruptionFilter',
     'getAppStandbyBucket',
     'isInteractive',
+    'isPowerSaveMode',
     'isLowPowerStandbyEnabled',
   ]) {
     assert.ok(power.includes(field), `Missing power diagnostic ${field}`)
@@ -122,7 +123,31 @@ test('v0.1.5 power acceptance exercises Android policies and journal-backed asse
   assert.match(native, /deliveryStates/)
   assert.match(native, /processAliveBeforeCleanup/)
   assert.match(managed, /summarizeAndroidNativeCrash/)
+  assert.match(native, /\[android-acceptance\] failed-phase=/)
+  assert.match(native, /markPhase\('initial-authenticated-ack'\)/)
   assert.match(managed, /two-device failed diagnostics/)
+})
+
+test('API 29 synthetic locations arrive after viewer admission enables the native watch', () => {
+  const acceptance = read('scripts/test-android.mjs')
+  const viewer = acceptance.indexOf('await startBrowserLocationPreview(viewer)')
+  const admitted = acceptance.indexOf(
+    "'the first authenticated viewer before injecting a synthetic location fix'",
+  )
+  const fix = acceptance.indexOf("adb(['emu', 'geo', 'fix', '-70.0011', '40.0011'])")
+  assert.ok(viewer >= 0 && admitted > viewer && fix > admitted)
+})
+
+test('API 29 Play Store fixture explicitly selects Exact rather than claiming network-provider support', () => {
+  const native = read('scripts/test-android.mjs')
+  const managed = read('scripts/test-android-managed.mjs')
+  assert.match(managed, /runProfile\('compat', undefined, \['--exact-location-fixture'\]\)/)
+  assert.match(native, /if \(options.exactLocationFixture\)/)
+  assert.match(native, /clickButton\(cdp, 'Exact'\)/)
+  assert.match(
+    native,
+    /exactLocationFixture: process\.argv\.includes\('--exact-location-fixture'\)/,
+  )
 })
 
 test('Android pause command preserves the requested boolean for UI and notification actions', () => {

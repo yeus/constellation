@@ -2059,8 +2059,9 @@ const runPowerStateMatrixSmoke = async () => {
   }
   const refreshSnapshot = async () => {
     shell('input', 'keyevent', 'KEYCODE_SLEEP')
-    await wait(350)
+    await wait(1_500)
     shell('input', 'keyevent', 'KEYCODE_WAKEUP')
+    await wait(1_000)
   }
   const reopenActivity = async (label) => {
     shell('am', 'start', '-n', `${packageName}/.MainActivity`)
@@ -4142,6 +4143,18 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   await configureAndroidBackgroundSharing(cdp)
   await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await clickButton(cdp, '10'), true)
+  if (options.exactLocationFixture) {
+    // API 29 Play Store emulators inject GPS fixes, not network-provider fixes.
+    // Exercise the explicitly authorized Exact mode; the default Neighbourhood
+    // mode is independently covered by API 29 AOSP and Android 36.
+    assert.equal(await clickButton(cdp, 'Exact'), true)
+    assert.equal(
+      await cdp.evaluate(
+        `Boolean([...document.querySelectorAll('.choice')].find((button) => button.textContent?.includes('Exact'))?.getAttribute('aria-pressed') === 'true')`,
+      ),
+      true,
+    )
+  }
   await waitFor(
     () =>
       cdp.evaluate(`([...document.querySelectorAll('button')].some(button =>
@@ -4234,6 +4247,16 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   try {
     await startBrowserLocationPreview(viewer)
     const peers = await openBrowserPeerFilter(viewer, 'Viewing')
+    // v0.1.5 waits for an authenticated viewer before starting the periodic
+    // watch. API 29 requestSingleUpdate does not replay a pre-watch emulator
+    // fix, so inject a new synthetic GPS fix only after admission.
+    await waitFor(
+      async () => (await readBackgroundTransportSummary(cdp)).viewerCount > 0,
+      'the first authenticated viewer before injecting a synthetic location fix',
+      30_000,
+    )
+    await wait(1_000)
+    adb(['emu', 'geo', 'fix', '-70.0011', '40.0011'])
     await peers.locator('.peer-list__map-action:not(:disabled)').waitFor({ timeout: 30_000 })
   } catch (error) {
     const browserState = {
@@ -5294,6 +5317,11 @@ const runTwoAndroidReceiverStandbySmoke = async (
   let relay
   let source
   let receiver
+  let phase = 'initialization'
+  const markPhase = (value) => {
+    phase = value
+    console.log(`[android-acceptance] phase=${value}`)
+  }
   const powerRecovery = process.argv.includes('--power-recovery-matrix')
   const powerEvents = (serial) => {
     const today = new Date().toISOString().slice(0, 10)
@@ -5311,6 +5339,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
     for (const args of commands) adbFor(serial, ['shell', ...args])
   }
   try {
+    markPhase('relay-and-permissions')
     relay = await startLocalRelay()
     for (const serial of [sourceSerial, receiverSerial]) {
       adbFor(serial, ['shell', 'pm', 'clear', packageName])
@@ -5339,12 +5368,19 @@ const runTwoAndroidReceiverStandbySmoke = async (
     adbFor(sourceSerial, ['emu', 'geo', 'fix', '-70.0001', '40.0001'])
     if (dualRole) adbFor(receiverSerial, ['emu', 'geo', 'fix', '-70.1001', '40.1001'])
     for (const serial of [sourceSerial, receiverSerial]) {
+      adbFor(serial, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
+      adbFor(serial, ['shell', 'input', 'keyevent', 'KEYCODE_MENU'])
       adbFor(serial, ['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
     }
+    markPhase('source-debugger')
     source = await connectCdp(sourceSerial, 9222)
+    markPhase('receiver-debugger')
     receiver = await connectCdp(receiverSerial, 9223)
+    markPhase('source-ui-ready')
     await waitForNativeApp(source, 'Android source')
+    markPhase('receiver-ui-ready')
     await waitForNativeApp(receiver, 'Android receiver')
+    markPhase('source-share-creation')
     const sourceLink = await createAndroidStarShare(source, 'Sender A', {
       persistent: soakMinutes !== null,
     })
@@ -5360,10 +5396,12 @@ const runTwoAndroidReceiverStandbySmoke = async (
     } else {
       await configureAndroidReceiverOnly(receiver)
     }
+    markPhase('receiver-follow')
     assert.equal(await followOnAndroid(receiver, receiverSerial, sourceLink, 1), true)
 
     const receiverStatus = () =>
       receiver.evaluate(`window.__TAURI_INTERNALS__?.invoke('android_receiver_ownership')`)
+    markPhase('receiver-background-settings')
     assert.equal(await clickAriaButton(receiver, 'Open menu'), true)
     assert.equal(await clickButton(receiver, 'Settings'), true)
     await waitFor(
@@ -5446,6 +5484,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
       )
     }
     const generation = (await receiverStatus()).generation
+    markPhase('initial-authenticated-ack')
     try {
       await waitFor(
         async () => (await readBackgroundTransportSummary(source)).confirmedViewerCount > 0,
@@ -5631,6 +5670,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
       )
       return
     }
+    markPhase('receiver-power-and-doze')
     const before = (await receiverStatus()).status.received[0]?.observation?.capturedAt ?? 0
     adbFor(receiverSerial, ['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
     try {
@@ -5645,8 +5685,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
         await waitFor(
           () =>
             powerEvents(receiverSerial).some(
-              ({ details }) =>
-                details.includes('cause=battery-saver') && details.includes('batteryPct=5'),
+              ({ details }) => details.includes('cause=battery-saver') && details.includes('pct=5'),
             ),
           'receiving Android native critical-battery/Battery Saver diagnostic',
           20_000,
@@ -5691,6 +5730,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
       1,
       'exactly one authenticated viewer after Android receiver recovery',
     )
+    markPhase('sender-power-and-doze')
     // The sender is an independently backgrounded Android runtime. A fresh
     // observation and receipt must arrive after its own Doze exit.
     const beforeSenderSleep =
@@ -5710,7 +5750,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
           () =>
             powerEvents(sourceSerial).some(
               ({ details }) =>
-                details.includes('cause=data-saver') && /dataSaver=(enabled|exempt)/.test(details),
+                details.includes('cause=data-saver') && /data=(enabled|exempt)/.test(details),
             ),
           'sending Android native Data Saver diagnostic',
           20_000,
@@ -5840,6 +5880,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
       }
     }
   } catch (error) {
+    console.error(`[android-acceptance] failed-phase=${phase}`)
     const observations = [
       { serial: sourceSerial, device: 'source' },
       { serial: receiverSerial, device: 'receiver' },
@@ -6298,6 +6339,7 @@ const main = async () => {
     })
     cdp = await runShareFlow(cdp, browser, {
       skipProcessRestart: process.argv.includes('--no-gms-flow'),
+      exactLocationFixture: process.argv.includes('--exact-location-fixture'),
     })
     console.log('Android P2P sharing, process recovery, and shared-text intake passed.')
   } finally {

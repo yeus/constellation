@@ -213,8 +213,17 @@ class LocationShareService : Service(), LocationListener {
       }
     }
   }
+  private var lastLoggedBatteryState: String? = null
   private val powerModeReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
+        val snapshot = powerConditionsSnapshot(applicationContext)
+        if (snapshot != lastLoggedBatteryState) {
+          lastLoggedBatteryState = snapshot
+          journal.record("service.power.changed", "cause=battery-state;$snapshot")
+        }
+        return
+      }
       val cause = when (intent?.action) {
         Intent.ACTION_BATTERY_LOW -> "battery-low"
         Intent.ACTION_BATTERY_OKAY -> "battery-okay"
@@ -264,7 +273,8 @@ class LocationShareService : Service(), LocationListener {
       registerReceiver(idleReceiver, IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED))
     }
     runCatching {
-      registerReceiver(powerModeReceiver, IntentFilter().apply {
+      ContextCompat.registerReceiver(this, powerModeReceiver, IntentFilter().apply {
+        addAction(Intent.ACTION_BATTERY_CHANGED)
         addAction(Intent.ACTION_BATTERY_LOW)
         addAction(Intent.ACTION_BATTERY_OKAY)
         addAction(Intent.ACTION_POWER_CONNECTED)
@@ -273,8 +283,9 @@ class LocationShareService : Service(), LocationListener {
         addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
         addAction(Intent.ACTION_SCREEN_OFF)
         addAction(Intent.ACTION_SCREEN_ON)
-      })
-    }
+      }, ContextCompat.RECEIVER_NOT_EXPORTED)
+      journal.record("service.power.monitor", "status=registered")
+    }.onFailure { journal.record("service.power.monitor", "status=failed;type=${it.javaClass.simpleName.take(40)}") }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1081,10 +1092,13 @@ class LocationShareService : Service(), LocationListener {
     if (allKnownSharesPaused()) return
     if (locationGrant(this) == "none") return
     val manager = locationManager ?: getSystemService(LocationManager::class.java)
-    val candidates = if (networkOnlyLocationRequested()) listOf(LocationManager.NETWORK_PROVIDER)
-      else listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-    val provider = candidates.firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
-      ?: return
+    val provider = preferredOneShotLocationProvider(
+      availableLocationProviders(manager),
+      networkOnlyLocationRequested(),
+      locationGrant(this) == "fine",
+      shareObjects(lastShares).any { it.isNull("paused") && it.optString("precision") == "exact" },
+    ) ?: return
+    journal.record("location.refresh", "provider=${if (provider == LocationManager.GPS_PROVIDER) "gps" else "network"}")
     clearRefresh()
     refreshManager = manager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

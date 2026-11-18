@@ -7,6 +7,7 @@ import {
   androidTool,
   create,
   emulatorArguments,
+  emulatorExecutable,
   profile,
 } from './android-emulator.mjs'
 import { androidApkCandidates } from './copy-android-apk.mjs'
@@ -115,7 +116,7 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
     : adbEnvironment
   create(selected, profileEnvironment)
   const previousSerials = new Set(onlineSerials())
-  const selectedEmulatorPath = androidTool('emulator', profileEnvironment)
+  const selectedEmulatorPath = emulatorExecutable(profileEnvironment, adbEnvironment)
   const child = spawn(
     selectedEmulatorPath,
     emulatorArguments(selected, ['-no-window', '-no-boot-anim']),
@@ -587,12 +588,12 @@ const main = async () => {
     return
   }
   if (process.argv.includes('--compat-only')) {
-    await runProfile('compat')
+    await runProfile('compat', undefined, ['--exact-location-fixture'])
     console.log('Android API 29 compatibility location-sharing tests passed.')
     return
   }
   await runProfile('modern')
-  await runProfile('compat')
+  await runProfile('compat', undefined, ['--exact-location-fixture'])
   await runProfile('aosp', undefined, ['--no-gms-flow'])
   await runProfile('modern', undefined, ['--notification-pause-smoke'])
   await runProfile('modern', undefined, ['--permission-denial-smoke'])

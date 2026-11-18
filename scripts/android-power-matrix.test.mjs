@@ -6,12 +6,14 @@ import { parsePowerJournal, powerMatrixCases, runPowerMatrixCase } from './andro
 test('power snapshots are parsed without exporting unrelated private journal events', () => {
   const journal = [
     '1794500000000 location.fix source=android',
-    '1794500001000 service.power.snapshot batteryPct=80;charging=false;plugged=false',
-    '1794500002000 service.power.changed cause=screen-off;batteryPct=5;charging=false',
+    '1794500001000 service.power.snapshot pct=80;charge=false;plug=false',
+    '1794500002000 service.power.changed cause=screen-off;pct=5;charge=false',
+    '1794500003000 service.power.monitor status=registered',
   ].join('\n')
   assert.deepEqual(parsePowerJournal(journal), [
-    { event: 'service.power.snapshot', details: 'batteryPct=80;charging=false;plugged=false' },
-    { event: 'service.power.changed', details: 'cause=screen-off;batteryPct=5;charging=false' },
+    { event: 'service.power.snapshot', details: 'pct=80;charge=false;plug=false' },
+    { event: 'service.power.changed', details: 'cause=screen-off;pct=5;charge=false' },
+    { event: 'service.power.monitor', details: 'status=registered' },
   ])
 })
 
@@ -44,6 +46,45 @@ test('every simulated system state restores its own overrides', () => {
     'background-restriction',
   ])
     assert.ok(names.includes(name), name)
+})
+
+test('power matrix accepts observed battery saver state, never merely an ADB command', () => {
+  const saver = powerMatrixCases.find(({ name }) => name === 'battery-saver')
+  const combined = powerMatrixCases.find(({ name }) => name === 'saver-and-doze')
+  const events = (details) => [{ event: 'service.power.changed', details }]
+  assert.equal(saver.check({ events: events('cause=screen-on;saver=false') }), false)
+  assert.equal(saver.check({ events: events('cause=screen-on;saver=true') }), true)
+  assert.equal(combined.check({ events: events('cause=doze;saver=false') }), false)
+  assert.equal(combined.check({ events: events('cause=doze;saver=true') }), true)
+})
+
+test('Battery Saver activation waits until unplugged state is visible to Android', async () => {
+  const scenario = powerMatrixCases.find(({ name }) => name === 'battery-saver')
+  const commands = []
+  let battery = 'AC powered: true\n  status: 2'
+  await runPowerMatrixCase(scenario, {
+    shell: (...args) => {
+      commands.push(args.join(' '))
+      if (args.join(' ') === 'dumpsys battery') return battery
+      return ''
+    },
+    readPowerEvents: () => [
+      { event: 'service.power.snapshot', details: 'saver=false' },
+      ...(commands.includes('cmd power set-mode 1')
+        ? [{ event: 'service.power.changed', details: 'saver=true' }]
+        : []),
+    ],
+    refreshSnapshot: () => {},
+    waitFor: async (predicate, _label, timeout) => {
+      assert.equal(timeout >= 15_000, true)
+      if (!predicate()) battery = 'AC powered: false\n  status: 3'
+      assert.equal(predicate(), true)
+    },
+  })
+  const afterBatteryQuery = commands.findIndex((command) => command === 'dumpsys battery')
+  const saverCommand = commands.findIndex((command) => command === 'cmd power set-mode 1')
+  assert.ok(saverCommand > afterBatteryQuery)
+  assert.ok(commands.includes('cmd power set-mode 0'))
 })
 
 test('a failed assertion still restores a simulated power condition', async () => {

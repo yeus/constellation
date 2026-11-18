@@ -59,10 +59,20 @@ internal fun powerConditionsSnapshot(context: Context): String {
   val lowStandby = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
     runCatching { power?.isLowPowerStandbyEnabled?.toString() ?: "unknown" }.getOrDefault("unknown")
   } else "unsupported"
-  return listOf(
-    "batteryPct=$percent", "batteryLow=$low", "charging=$charging", "plugged=$plugged",
-    "dataSaver=$dataSaver", "dnd=$dnd", "standbyBucket=$standby",
-    "screenInteractive=${power?.isInteractive?.toString() ?: "unknown"}",
-    "lowPowerStandby=$lowStandby"
-  ).joinToString(";")
+  return formatPowerConditionsSnapshot(
+    percent, low, charging, plugged, dataSaver, dnd, standby,
+    power?.isPowerSaveMode?.toString() ?: "unknown",
+    power?.isInteractive?.toString() ?: "unknown", lowStandby,
+  )
 }
+
+// Compact field names keep even the longest change event below the journal's
+// 180-character limit. This must be checked in a native regression test.
+internal fun formatPowerConditionsSnapshot(
+  percent: String, low: String, charging: String, plugged: String, dataSaver: String,
+  dnd: String, standby: String, saver: String, screen: String, lowStandby: String,
+): String = listOf(
+  "pct=$percent", "low=$low", "charge=$charging", "plug=$plugged",
+  "data=$dataSaver", "dnd=$dnd", "bucket=$standby",
+  "saver=$saver", "screen=$screen", "lowStandby=$lowStandby",
+).joinToString(";")

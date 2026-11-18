@@ -12,10 +12,24 @@ const state =
 export const parsePowerJournal = (journal) =>
   journal.split(/\r?\n/).flatMap((line) => {
     const match = line.match(
-      /^\d+ (service\.power\.(?:snapshot|changed)|service\.heartbeat)(?: (.*))?$/,
+      /^\d+ (service\.power\.(?:snapshot|changed|monitor)|service\.heartbeat)(?: (.*))?$/,
     )
     return match ? [{ event: match[1], details: match[2] ?? '' }] : []
   })
+
+// Android may still consider a freshly unplugged emulator to be charging.
+// Wait for the battery service to observe discharging before enabling Saver.
+const activateBatterySaver = async ({ shell, waitFor }) => {
+  await waitFor(
+    () => {
+      const battery = shell('dumpsys', 'battery')
+      return /AC powered:\s*false/.test(battery) && /status:\s*3/.test(battery)
+    },
+    'discharging before enabling Battery Saver',
+    15_000,
+  )
+  shell('cmd', 'power', 'set-mode', '1')
+}
 
 export const powerMatrixCases = [
   {
@@ -25,7 +39,7 @@ export const powerMatrixCases = [
       ['dumpsys', 'battery', 'set', 'level', '80'],
     ],
     restore: [['dumpsys', 'battery', 'reset']],
-    check: state('batteryPct=80', 'plugged=false'),
+    check: state('pct=80', 'plug=false'),
   },
   {
     name: 'low-battery',
@@ -34,7 +48,7 @@ export const powerMatrixCases = [
       ['dumpsys', 'battery', 'set', 'level', '5'],
     ],
     restore: [['dumpsys', 'battery', 'reset']],
-    check: state('batteryPct=5', 'plugged=false'),
+    check: state('pct=5', 'plug=false'),
   },
   {
     name: 'charging',
@@ -44,7 +58,7 @@ export const powerMatrixCases = [
       ['dumpsys', 'battery', 'set', 'status', '2'],
     ],
     restore: [['dumpsys', 'battery', 'reset']],
-    check: state('charging=true', 'plugged=true'),
+    check: state('charge=true', 'plug=true'),
   },
   {
     name: 'battery-saver',
@@ -52,13 +66,15 @@ export const powerMatrixCases = [
       ['dumpsys', 'battery', 'unplug'],
       ['dumpsys', 'battery', 'set', 'status', '3'],
       ['dumpsys', 'battery', 'set', 'level', '30'],
-      ['cmd', 'power', 'set-mode', '1'],
     ],
     restore: [
       ['cmd', 'power', 'set-mode', '0'],
       ['dumpsys', 'battery', 'reset'],
     ],
-    check: state('cause=battery-saver'),
+    activate: activateBatterySaver,
+    timeoutMs: 45_000,
+    // Verify the actual OS state, not only delivery of a best-effort broadcast.
+    check: state('saver=true'),
   },
   {
     name: 'doze',
@@ -82,9 +98,6 @@ export const powerMatrixCases = [
       ['dumpsys', 'battery', 'unplug'],
       ['dumpsys', 'battery', 'set', 'status', '3'],
       ['dumpsys', 'battery', 'set', 'level', '30'],
-      ['cmd', 'power', 'set-mode', '1'],
-      ['input', 'keyevent', 'KEYCODE_SLEEP'],
-      ['dumpsys', 'deviceidle', 'force-idle'],
     ],
     restore: [
       ['dumpsys', 'deviceidle', 'unforce'],
@@ -92,8 +105,14 @@ export const powerMatrixCases = [
       ['cmd', 'power', 'set-mode', '0'],
       ['dumpsys', 'battery', 'reset'],
     ],
+    activate: async (context) => {
+      await activateBatterySaver(context)
+      context.shell('input', 'keyevent', 'KEYCODE_SLEEP')
+      context.shell('dumpsys', 'deviceidle', 'force-idle')
+    },
+    timeoutMs: 45_000,
     check: ({ events }) =>
-      hasPowerState(events, ['cause=battery-saver']) && hasPowerState(events, ['cause=doze']),
+      hasPowerState(events, ['saver=true']) && hasPowerState(events, ['cause=doze']),
     refresh: false,
   },
   {
@@ -102,9 +121,8 @@ export const powerMatrixCases = [
     restore: [['cmd', 'netpolicy', 'set', 'restrict-background', 'false']],
     // Foreground services may be exempt from the device-wide restriction.
     check: ({ events }) =>
-      (hasPowerState(events, ['cause=data-saver']) &&
-        hasPowerState(events, ['dataSaver=enabled'])) ||
-      hasPowerState(events, ['cause=data-saver', 'dataSaver=exempt']),
+      (hasPowerState(events, ['cause=data-saver']) && hasPowerState(events, ['data=enabled'])) ||
+      hasPowerState(events, ['cause=data-saver', 'data=exempt']),
   },
   {
     name: 'data-saver-and-doze',
@@ -153,7 +171,7 @@ export const powerMatrixCases = [
     name: 'low-power-standby',
     apply: [['cmd', 'power', 'set-low-power-standby-active', 'true']],
     restore: [['cmd', 'power', 'set-low-power-standby-active', 'false']],
-    check: state('lowPowerStandby=true'),
+    check: state('lowStandby=true'),
     optional: true,
   },
 ]
@@ -172,6 +190,7 @@ export const runPowerMatrixCase = async (
   try {
     try {
       for (const command of scenario.apply) shell(...command)
+      await scenario.activate?.({ shell, waitFor })
       applied = true
     } catch (error) {
       if (!scenario.optional) throw error
@@ -183,7 +202,7 @@ export const runPowerMatrixCase = async (
         await waitFor(
           () => scenario.check({ shell, events: readPowerEvents().slice(startCount) }),
           `power-state evidence: ${scenario.name}`,
-          15_000,
+          scenario.timeoutMs ?? 15_000,
         )
       } catch (error) {
         if (!scenario.optional) throw error

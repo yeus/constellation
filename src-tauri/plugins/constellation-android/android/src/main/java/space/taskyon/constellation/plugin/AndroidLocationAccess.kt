@@ -23,6 +23,25 @@ internal fun availableLocationProviders(manager: LocationManager): List<String> 
   listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
     .filter { provider -> runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false) }
 
+/**
+ * Initial refresh is issued only by an authorized sensor subscription.
+ * Exact sharing can request one GPS fix while the ongoing background watch
+ * remains network-first; explicit network-only policy always excludes GPS.
+ */
+internal fun preferredOneShotLocationProvider(
+  available: List<String>,
+  networkOnly: Boolean,
+  fineGranted: Boolean,
+  exactShare: Boolean,
+): String? {
+  val priority = when {
+    networkOnly -> listOf(LocationManager.NETWORK_PROVIDER)
+    fineGranted && exactShare -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+    else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+  }
+  return priority.firstOrNull { it in available }
+}
+
 internal fun androidLocationListener(
   onLocationChanged: (Location) -> Unit,
   onProviderDisabled: (String) -> Unit = {},

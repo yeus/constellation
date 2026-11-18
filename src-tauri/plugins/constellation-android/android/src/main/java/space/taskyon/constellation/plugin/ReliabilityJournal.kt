@@ -8,6 +8,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+internal const val MAX_JOURNAL_DETAILS_LENGTH = 180
+
 /** Device-private, date-partitioned operational events. Never pass coordinates, URLs or identities. */
 internal class ReliabilityJournal(context: Context) {
   private var lastPrunedDay: String? = null
@@ -20,7 +22,7 @@ internal class ReliabilityJournal(context: Context) {
   fun record(event: String, details: String = "") {
     // Logging must never terminate an otherwise healthy background service.
     if (!event.matches(Regex("[a-z][a-z0-9.-]{1,63}")) ||
-      details.length > 180 || !details.matches(Regex("[a-zA-Z0-9 ;=,._:-]*"))) return
+      details.length > MAX_JOURNAL_DETAILS_LENGTH || !details.matches(Regex("[a-zA-Z0-9 ;=,._:-]*"))) return
     runCatching {
       if (!directory.isDirectory && !directory.mkdirs()) return
       val now = System.currentTimeMillis()

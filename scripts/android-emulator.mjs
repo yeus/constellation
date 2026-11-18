@@ -28,6 +28,20 @@ export const androidTool = (name, environment = process.env) => {
   return sdk ? path.join(sdk, ...segments) : name
 }
 
+// AOSP images can live in a minimal SDK root without their own emulator binary.
+// Keep the profile SDK for system-image resolution, but use the host toolchain
+// when that isolated SDK does not provide its own executable.
+export const emulatorExecutable = (
+  profileEnvironment = process.env,
+  hostEnvironment = process.env,
+) => {
+  const local = androidTool('emulator', profileEnvironment)
+  if (fs.existsSync(local)) return local
+  const host = androidTool('emulator', hostEnvironment)
+  if (fs.existsSync(host)) return host
+  throw new Error(`Android emulator binary unavailable in profile or host SDK: ${local}`)
+}
+
 export const androidAdbEnvironment = (environment = process.env) => {
   const localEnvironment = { ...environment }
   delete localEnvironment.ADB_SERVER_SOCKET
@@ -103,6 +117,9 @@ export const profile = (name) => {
 export const emulatorArguments = (selected, extraArguments = []) => [
   '-avd',
   selected.avdName,
+  ...(selected.sdkRoot
+    ? ['-sysdir', path.join(selected.sdkRoot, ...selected.systemImage.split(';'))]
+    : []),
   '-gpu',
   'swiftshader_indirect',
   '-no-audio',
