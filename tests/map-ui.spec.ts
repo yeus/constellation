@@ -381,6 +381,22 @@ test('keeps status notes near the screen edge and hides them after six seconds',
   await expect(notice).toBeHidden({ timeout: 8_000 })
 })
 
+test('hides the menu button border only while the app menu is open', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const menuButton = page.getByRole('button', { name: 'Open menu' })
+  await expect(menuButton).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)')
+
+  await menuButton.click()
+  await expect(page.getByRole('region', { name: 'App menu' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Close menu' })).toHaveCSS(
+    'border-top-color',
+    'rgba(0, 0, 0, 0)',
+  )
+
+  await page.getByRole('button', { name: 'Close menu' }).click()
+  await expect(menuButton).not.toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)')
+})
+
 test('keeps map credit visible and persists the selected basemap family', async ({ page }) => {
   await page.route('**/*.pmtiles*', (route) => route.abort())
   await page.goto('/')

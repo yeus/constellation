@@ -184,6 +184,7 @@ button {
 }
 .map-screen--menu-open .brand-button {
   background: var(--surface-strong);
+  border-color: transparent;
   border-radius: 0.9rem;
 }
 .brand-button svg {
