@@ -53,7 +53,10 @@ test('foreground-only preference stops native location watches and refreshes des
     service,
     /loadBehaviorPreference\(\)\?\.let\(::JSONObject\)\?\.optString\("publication"\) != "foreground"/,
   )
-  assert.match(service, /if \(commandType == "set-sharing-behavior"\) \{\s+reloadLocationPolicies\(\)\s+updatePolicyState/)
+  assert.match(
+    service,
+    /if \(commandType == "set-sharing-behavior"\) \{\s+reloadLocationPolicies\(\)\s+updatePolicyState/,
+  )
   assert.match(service, /if \(!appVisible && !canPublishRequestedInBackground\(\)\)/)
   assert.match(service, /val permitted = appVisible \|\| canPublishRequestedInBackground\(\)/)
 })
