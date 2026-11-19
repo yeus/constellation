@@ -535,11 +535,52 @@ const clickNativePeerAction = async (cdp, filter, label) => {
 const waitForNativeApp = async (cdp, label) =>
   waitFor(() => cdp.evaluate(`Boolean(document.querySelector('button.dock-peers'))`), label)
 
-const restartAndroidApp = async (cdp, expectedText = 'Sharing 1') => {
+const readAndroidRestartState = async (cdp) => {
+  const [native, protectedCounts] = await Promise.all([
+    readBackgroundTransportSummary(cdp)
+      .then(({ state, peerStatus, activeShares, endedReasons, sessionEvents }) => ({
+        state,
+        peerStatus,
+        activeShares,
+        endedReasons,
+        sessionEvents,
+      }))
+      .catch((error) => ({ failureClass: error instanceof Error ? error.name : 'UnknownError' })),
+    cdp
+      .evaluate(
+        `(async () => {
+      const invoke = window.__TAURI_INTERNALS__?.invoke
+      if (!invoke) return { bridgeAvailable: false }
+      try {
+        const saved = JSON.parse((await invoke('android_load_private_state')).state)
+        return {
+          bridgeAvailable: true,
+          uiShares: saved.shares?.length ?? 0,
+          uiFollows: saved.followed?.length ?? 0,
+          uiEndedShares: saved.endedShares?.length ?? 0,
+        }
+      } catch {
+        return { bridgeAvailable: true, privateStoreReadable: false }
+      }
+    })()`,
+      )
+      .catch((error) => ({ failureClass: error instanceof Error ? error.name : 'UnknownError' })),
+  ])
+  return {
+    native,
+    protectedCounts,
+    serviceRunning: adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
+      'LocationShareService',
+    ),
+  }
+}
+
+const restartAndroidApp = async (cdp, expectedText = 'Sharing 1', beforeRestart) => {
   cdp?.close()
   adb(['shell', 'am', 'force-stop', packageName])
   adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
   const observations = []
+  let finalDiagnostic
   for (let attempt = 0; attempt < 8; attempt += 1) {
     let candidate
     try {
@@ -561,6 +602,12 @@ const restartAndroidApp = async (cdp, expectedText = 'Sharing 1') => {
       ])
       observations.push(state ?? { evaluationTimedOut: true })
       if (state?.expectedVisible) return candidate
+      if (attempt === 7) {
+        finalDiagnostic = await Promise.race([
+          readAndroidRestartState(candidate),
+          wait(6_000).then(() => ({ timedOut: true })),
+        ])
+      }
     } catch (error) {
       // Only record the failure class, never debugger payloads or private UI content.
       observations.push({ failureClass: error instanceof Error ? error.name : 'UnknownError' })
@@ -569,7 +616,7 @@ const restartAndroidApp = async (cdp, expectedText = 'Sharing 1') => {
     await wait(1_000)
   }
   throw new Error(
-    `Android app did not stabilize after process restart: ${JSON.stringify(observations)}`,
+    `Android app did not stabilize after process restart: ${JSON.stringify({ observations, beforeRestart, afterRestart: finalDiagnostic })}`,
   )
 }
 
@@ -4549,9 +4596,15 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     await viewerContext.close()
     return cdp
   }
+  const beforeRestart = await readAndroidRestartState(cdp)
+  assert.equal(
+    beforeRestart.native.activeShares,
+    1,
+    'native outgoing share must exist before restart',
+  )
   cdp.close()
   console.log('[android-test] checking process restart')
-  cdp = await restartAndroidApp(cdp)
+  cdp = await restartAndroidApp(cdp, 'Sharing 1', beforeRestart)
   await selectNativePeerFilter(cdp, 'Sharing')
   try {
     await waitFor(
