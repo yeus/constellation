@@ -76,14 +76,17 @@ const withExclusiveCheckout = (root, run) => {
     }
   }
   if (!acquired) throw new Error('Could not acquire the Constellation CI checkout lock.')
-  try {
-    return run()
-  } finally {
+  const releaseLock = () => {
     try {
       if (readFileSync(lockPath, 'utf8').trim() === owner) unlinkSync(lockPath)
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }
+  }
+  try {
+    return run()
+  } finally {
+    releaseLock()
   }
 }
 
