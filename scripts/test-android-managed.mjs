@@ -456,6 +456,30 @@ const main = async () => {
     console.log('Android service-only process recovery retained the same source identity.')
     return
   }
+  if (process.argv.includes('--activity-restart-stress-smoke')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile(
+      'modern',
+      undefined,
+      ['--activity-restart-stress-smoke', '--local-relay'],
+      threeWayApk,
+    )
+    console.log('Android Activity restart stress test passed.')
+    return
+  }
+  if (process.argv.includes('--dual-role-restart-stress')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile(
+      'modern',
+      undefined,
+      ['--local-share-flow', '--dual-role-restart-stress'],
+      threeWayApk,
+    )
+    console.log('Android eight-cycle dual-role Activity restart stress test passed.')
+    return
+  }
   if (process.argv.includes('--power-state-matrix')) {
     if (!process.argv.includes('--skip-build')) buildThreeWayApk()
     if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')

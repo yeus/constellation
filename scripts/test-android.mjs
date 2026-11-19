@@ -1908,6 +1908,56 @@ const runServiceRestartSmoke = async () => {
   }
 }
 
+const runActivityRestartStressSmoke = async () => {
+  let cdp
+  let relay
+  try {
+    if (process.argv.includes('--local-relay')) {
+      relay = await startLocalRelay()
+      adb(['reverse', 'tcp:9111', 'tcp:9111'])
+    }
+    cdp = await setupNativeBackgroundSmoke()
+    const expiresAt = Date.now() + 10 * 60_000
+    const share = await startDirectBackgroundShare(cdp, expiresAt)
+    assert.equal(share.expiresAt, expiresAt)
+
+    for (let iteration = 1; iteration <= 8; iteration += 1) {
+      const before = await readAndroidRestartState(cdp)
+      assert.equal(before.native.activeShares, 1, 'share must survive until the next restart')
+      cdp = await restartAndroidApp(cdp, 'Sharing 1', before)
+      const restored = await readBackgroundStatus(cdp)
+      assert.equal(restored.shares.length, 1, 'native share count after Activity restart')
+      assert.equal(
+        restored.shares[0].shareId === share.shareId,
+        true,
+        'source identity after Activity restart',
+      )
+      assert.equal(restored.shares[0].expiresAt, expiresAt, 'source expiry after Activity restart')
+      assert.equal(restored.state, 'sharing', 'background service state after Activity restart')
+      console.log(`[android-test] Activity restart ${iteration}/8 preserved the share and UI`)
+    }
+
+    await cdp.evaluate(
+      `window.__TAURI_INTERNALS__.invoke('android_stop_background_share', { shareId: ${JSON.stringify(share.shareId)} })`,
+    )
+  } finally {
+    cdp?.close()
+    try {
+      adb(['shell', 'am', 'force-stop', packageName])
+    } catch {
+      // Test cleanup may run after emulator shutdown.
+    }
+    if (relay) {
+      try {
+        adb(['reverse', '--remove', 'tcp:9111'])
+      } catch {
+        // A failed emulator may disconnect before cleanup.
+      }
+      await stopChild(relay)
+    }
+  }
+}
+
 const runForegroundOnlySmoke = async () => {
   let cdp
   try {
@@ -4596,15 +4646,31 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     await viewerContext.close()
     return cdp
   }
-  const beforeRestart = await readAndroidRestartState(cdp)
-  assert.equal(
-    beforeRestart.native.activeShares,
-    1,
-    'native outgoing share must exist before restart',
-  )
-  cdp.close()
-  console.log('[android-test] checking process restart')
-  cdp = await restartAndroidApp(cdp, 'Sharing 1', beforeRestart)
+  const restartCount = options.repeatedDualRoleRestarts ? 8 : 1
+  for (let iteration = 1; iteration <= restartCount; iteration += 1) {
+    const beforeRestart = await readAndroidRestartState(cdp)
+    assert.equal(
+      beforeRestart.native.activeShares,
+      1,
+      'native outgoing share must exist before restart',
+    )
+    if (options.repeatedDualRoleRestarts) {
+      assert.equal(
+        beforeRestart.protectedCounts.uiFollows,
+        2,
+        'both approved return locations must survive each restart',
+      )
+    }
+    console.log(`[android-test] checking dual-role process restart ${iteration}/${restartCount}`)
+    cdp = await restartAndroidApp(cdp, 'Sharing 1', beforeRestart)
+    if (options.repeatedDualRoleRestarts) {
+      await waitFor(
+        () => androidTextIncludes(cdp, 'Seeing 2'),
+        'both return locations to reappear after Android restart',
+        30_000,
+      )
+    }
+  }
   await selectNativePeerFilter(cdp, 'Sharing')
   try {
     await waitFor(
@@ -6060,6 +6126,11 @@ const main = async () => {
     console.log('Android START_STICKY service recovered protected sharing after process death.')
     return
   }
+  if (process.argv.includes('--activity-restart-stress-smoke')) {
+    await runActivityRestartStressSmoke()
+    console.log('Eight Android Activity restarts retained native source identity and UI count.')
+    return
+  }
   if (process.argv.includes('--foreground-only-smoke')) {
     await runForegroundOnlySmoke()
     console.log(
@@ -6393,6 +6464,7 @@ const main = async () => {
     cdp = await runShareFlow(cdp, browser, {
       skipProcessRestart: process.argv.includes('--no-gms-flow'),
       exactLocationFixture: process.argv.includes('--exact-location-fixture'),
+      repeatedDualRoleRestarts: process.argv.includes('--dual-role-restart-stress'),
     })
     console.log('Android P2P sharing, process recovery, and shared-text intake passed.')
   } finally {
