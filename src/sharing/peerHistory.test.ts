@@ -37,6 +37,17 @@ test('cleanup preserves active peers and links but clears inactive records regar
   assert.equal(Object.hasOwn(old.get('inactive')!, 'cleared'), false)
 })
 
+test('disconnected viewer history can be cleared while an active anonymous share stays protected', () => {
+  const protection = protectActivePeerHistory([{ shareId: 'current-link', viewers: [] }], [])
+  const old = new Map([
+    ['prior-viewer', { shareId: 'old-link', peerId: 'temporarily-offline-peer' }],
+    ['current-link', { shareId: 'current-link' }],
+  ])
+  const cleared = clearPeerHistory(old, protection)
+  assert.equal(cleared.get('prior-viewer')?.cleared, true)
+  assert.equal(cleared.get('current-link')?.cleared, undefined)
+})
+
 test('cleanup rollback restores old records without discarding notices received during persistence', () => {
   const before = new Map([['old', { shareId: 'old-share', peerId: 'old-peer', eventId: 'first' }]])
   const attempted = clearPeerHistory(before, { peerIds: [], shareIds: [] })

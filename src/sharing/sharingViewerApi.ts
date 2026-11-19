@@ -317,6 +317,7 @@ const prepareViewerComparison = async (ctx: SharingContext, shareId: string) => 
 }
 
 const COMPARISON_DIAL_TIMEOUT_MS = 20_000
+const COMPARISON_ATTEMPT_TIMEOUT_MS = 6_000
 
 const openComparisonPort = async (
   node: BrowserLibp2pNode,
@@ -335,6 +336,7 @@ const openComparisonPort = async (
           connection.remotePeer.toString() === capability.sourcePeerId,
       ),
     signal,
+    COMPARISON_ATTEMPT_TIMEOUT_MS,
   )
   try {
     requireComparisonStreamPeer(stream, node.getConnections(), capability.sourcePeerId)

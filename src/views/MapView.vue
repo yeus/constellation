@@ -268,6 +268,7 @@
             If approval is needed, both devices will show four letters to compare through a separate
             trusted channel before the sender approves.
           </p>
+          <p v-if="localError" role="alert" class="field-help">{{ localError }}</p>
         </div>
         <div class="incoming-invitation__actions">
           <button
@@ -778,7 +779,7 @@ import PeerListSheet from '../components/PeerListSheet.vue'
 import DeviceComparisonSheet from '../components/DeviceComparisonSheet.vue'
 import ShareReadySheet from '../components/ShareReadySheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
-import { createSessionLog } from '../diagnostics/sessionLog.ts'
+import { createSessionLog, describeDiagnosticError } from '../diagnostics/sessionLog.ts'
 import { createAndroidBackgroundReceiver } from '../android/backgroundReceiver.ts'
 import {
   readBackgroundFollowingPreference,
@@ -1472,6 +1473,7 @@ const offerInvitation = (url: string): void => {
   try {
     const { shareId } = parseShareInvitation(url)
     invitationOpeningId += 1
+    localError.value = ''
     introOpen.value = false
     invitationUrl.value = url
     incomingShareId.value = shareId
@@ -2600,8 +2602,14 @@ const acceptInvitation = async (): Promise<void> => {
   } catch (error) {
     if (invitationOpeningId === openingId) {
       invitationPending.value = true
-      sessionLog.record({ level: 'error', event: 'sharing.follow.accept.failed' })
-      localError.value = error instanceof Error ? error.message : 'Could not open the share.'
+      const failure = describeDiagnosticError(error)
+      sessionLog.record({
+        level: 'error',
+        event: 'sharing.follow.accept.failed',
+        category: failure.category,
+        message: failure.message,
+      })
+      localError.value = failure.message
     }
   } finally {
     connectingInvitation.value = false

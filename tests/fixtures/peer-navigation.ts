@@ -1,4 +1,4 @@
-import type { Page, Locator } from '@playwright/test'
+import { expect, type Page, type Locator } from '@playwright/test'
 
 export const openPeerList = async (page: Page) => {
   const peerList = page.locator('.peer-list')
@@ -53,6 +53,32 @@ export const openIncomingLink = async (page: Page, url: string): Promise<void> =
   await page.goto(url)
   await continueInBrowserIfOffered(page)
 }
+// Preserve the actual, redacted connection error when an explicitly consented link fails.
+// Never retry the invitation or bypass its separate approval/comparison requirements.
+export const expectLocationPreviewReady = async (page: Page): Promise<void> => {
+  const addPeer = page
+    .getByRole('region', { name: 'Location preview' })
+    .getByRole('button', { name: 'Add peer' })
+  try {
+    await expect(addPeer).toBeVisible({ timeout: 30_000 })
+  } catch (error) {
+    const retryDialog = page.getByRole('dialog', { name: 'Location link introduction' })
+    const failed = await retryDialog.isVisible()
+    const diagnostic = failed
+      ? (
+          await retryDialog
+            .getByRole('alert')
+            .textContent()
+            .catch(() => null)
+        )?.trim()
+      : undefined
+    throw new Error(
+      `Consented location preview unavailable: ${failed ? `invitation failed (${diagnostic ?? 'no reason reported'})` : 'no preview or retry dialog'}`,
+      { cause: error },
+    )
+  }
+}
+
 export const saveLocationPreview = async (page: Page): Promise<void> => {
   const preview = page.getByRole('region', { name: 'Location preview' })
   await preview.getByRole('button', { name: 'Add peer' }).click({ timeout: 30_000 })

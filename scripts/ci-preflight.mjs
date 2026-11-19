@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const quickCommands = [
@@ -32,6 +32,61 @@ const assertCleanCheckout = (root) => {
   return git(root, 'rev-parse', 'HEAD')
 }
 
+// Both modes rebuild vendor dist/. Another preflight in the same checkout can
+// delete modules while Vite and Playwright are using them. Store the lock in
+// Git metadata so it does not dirty the source revision being validated.
+const withExclusiveCheckout = (root, run) => {
+  const lockPath = path.join(git(root, 'rev-parse', '--absolute-git-dir'), 'constellation-ci.lock')
+  const owner = String(process.pid)
+  let acquired = false
+  for (let attempt = 0; attempt < 3 && !acquired; attempt += 1) {
+    try {
+      writeFileSync(lockPath, `${owner}\n`, { flag: 'wx', mode: 0o600 })
+      acquired = true
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      let previous
+      try {
+        previous = readFileSync(lockPath, 'utf8').trim()
+      } catch (readError) {
+        if (readError.code === 'ENOENT') continue
+        throw readError
+      }
+      const pid = Number(previous)
+      if (!Number.isSafeInteger(pid) || pid <= 0) {
+        throw new Error(
+          'Invalid Constellation CI lock owner; inspect Git metadata before retrying.',
+        )
+      }
+      try {
+        process.kill(pid, 0)
+      } catch (probeError) {
+        if (probeError.code === 'ESRCH') {
+          // Recover a lock left by a killed runner; do not remove a changed lock.
+          try {
+            if (readFileSync(lockPath, 'utf8').trim() === previous) unlinkSync(lockPath)
+          } catch (cleanupError) {
+            if (cleanupError.code !== 'ENOENT') throw cleanupError
+          }
+          continue
+        }
+        if (probeError.code !== 'EPERM') throw probeError
+      }
+      throw new Error(`Another Constellation CI run is active in this checkout (PID ${pid}).`)
+    }
+  }
+  if (!acquired) throw new Error('Could not acquire the Constellation CI checkout lock.')
+  try {
+    return run()
+  } finally {
+    try {
+      if (readFileSync(lockPath, 'utf8').trim() === owner) unlinkSync(lockPath)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+}
+
 const yarn = (root, args) => {
   console.log(`> corepack yarn ${args.join(' ')}`)
   const result = spawnSync('corepack', ['yarn', ...args], { cwd: root, stdio: 'inherit' })
@@ -61,24 +116,26 @@ const main = () => {
     throw new Error('Usage: node scripts/ci-preflight.mjs quick|preflight')
   }
   const root = process.cwd()
-  const revision = mode === 'preflight' ? assertCleanCheckout(root) : null
-  console.log(
-    mode === 'preflight'
-      ? `Validating committed revision ${revision}`
-      : 'Running Quality checks on the working tree.',
-  )
-  for (const command of quickCommands) yarn(root, command)
-  if (mode === 'quick') return
+  return withExclusiveCheckout(root, () => {
+    const revision = mode === 'preflight' ? assertCleanCheckout(root) : null
+    console.log(
+      mode === 'preflight'
+        ? `Validating committed revision ${revision}`
+        : 'Running Quality checks on the working tree.',
+    )
+    for (const command of quickCommands) yarn(root, command)
+    if (mode === 'quick') return
 
-  for (const command of browserCommands) yarn(root, command)
-  const screenshotStart = Date.now()
-  yarn(root, ['screenshots'])
-  assertScreenshots(root, screenshotStart)
+    for (const command of browserCommands) yarn(root, command)
+    const screenshotStart = Date.now()
+    yarn(root, ['screenshots'])
+    assertScreenshots(root, screenshotStart)
 
-  if (assertCleanCheckout(root) !== revision) {
-    throw new Error('HEAD changed during preflight; re-run on the commit you intend to push.')
-  }
-  console.log(`Committed revision validated: ${revision}`)
+    if (assertCleanCheckout(root) !== revision) {
+      throw new Error('HEAD changed during preflight; re-run on the commit you intend to push.')
+    }
+    console.log(`Committed revision validated: ${revision}`)
+  })
 }
 
 try {

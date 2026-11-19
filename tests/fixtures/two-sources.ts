@@ -99,10 +99,9 @@ export const withTwoSources = async (
     const first = await firstContext.newPage()
     const second = await secondContext.newPage()
     const viewer = await viewerContext.newPage()
-    const [firstLink, secondLink] = await Promise.all([
-      createNamedShare(first, 'River'),
-      createNamedShare(second, 'Forest'),
-    ])
+    // Avoid overlapping map/WebGL startup; the test still runs both live sources together.
+    const firstLink = await createNamedShare(first, 'River')
+    const secondLink = await createNamedShare(second, 'Forest')
     await followTwoSources(viewer, first, firstLink, second, secondLink, options.afterFirstFollow)
     await run({ first, second, viewer })
   } finally {

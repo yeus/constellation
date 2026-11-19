@@ -84,6 +84,46 @@ const recorded = (fixture) =>
     ? fs.readFileSync(fixture.log, 'utf8').trim().split('\n').filter(Boolean)
     : []
 
+const lockPath = (f) =>
+  path.join(
+    execFileSync('git', ['-C', f.root, 'rev-parse', '--absolute-git-dir'], {
+      encoding: 'utf8',
+    }).trim(),
+    'constellation-ci.lock',
+  )
+
+test('quick and preflight reject a concurrent live runner without rebuilding files', () => {
+  for (const mode of ['quick', 'preflight']) {
+    const f = fixture()
+    try {
+      fs.writeFileSync(lockPath(f), `${process.pid}\n`)
+      const result = run(f, mode)
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /Another Constellation CI run is active/)
+      assert.deepEqual(recorded(f), [])
+      assert.equal(fs.readFileSync(lockPath(f), 'utf8'), `${process.pid}\n`)
+    } finally {
+      f.cleanup()
+    }
+  }
+})
+
+test('a killed runner lock is recovered and a completed run releases it', () => {
+  const f = fixture()
+  try {
+    fs.writeFileSync(lockPath(f), '999999999\n')
+    const result = run(f, 'quick')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(fs.existsSync(lockPath(f)), false)
+    assert.deepEqual(
+      recorded(f),
+      quality.map((command) => `yarn ${command}`),
+    )
+  } finally {
+    f.cleanup()
+  }
+})
+
 test('quick runs the Quality commands in order without requiring a clean checkout', () => {
   const f = fixture()
   try {

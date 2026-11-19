@@ -95,6 +95,82 @@ test('a stalled comparison stream dial can be cancelled on both connected and re
   assert.deepEqual(observed, [controller.signal, controller.signal])
 })
 
+test('comparison dial leaves a stalled connection to try an advertised address before its total deadline', async () => {
+  const controller = new AbortController()
+  const stream = {} as Stream
+  const attempts: string[] = []
+  const stalled = {
+    direct: true,
+    newStream: async (_protocol: unknown, options: { signal?: AbortSignal }) =>
+      new Promise<Stream>((_resolve, reject) => {
+        attempts.push('stalled-connection')
+        options.signal?.addEventListener(
+          'abort',
+          () => reject(new Error('stalled dial cancelled')),
+          {
+            once: true,
+          },
+        )
+      }),
+  } as unknown as Connection
+  const node = {
+    dialProtocol: async (_peer: unknown, _protocol: unknown, options: { signal?: AbortSignal }) => {
+      attempts.push('advertised-address')
+      if (options.signal?.aborted) throw new Error('overall deadline exhausted')
+      return stream
+    },
+  } as Pick<BrowserLibp2pNode, 'dialProtocol'>
+  const overallTimer = setTimeout(() => controller.abort(), 300)
+  try {
+    assert.equal(
+      await dialShareStream(
+        node,
+        ['/ip4/127.0.0.1/tcp/1'],
+        '/constellation/device-comparison/1.0.0',
+        [stalled],
+        controller.signal,
+        25,
+      ),
+      stream,
+    )
+    assert.deepEqual(attempts, ['stalled-connection', 'advertised-address'])
+    assert.equal(controller.signal.aborted, false)
+  } finally {
+    clearTimeout(overallTimer)
+  }
+})
+
+test('cancelling a comparison dial prevents any fallback address from opening', async () => {
+  const controller = new AbortController()
+  const attempted: string[] = []
+  const connection = {
+    direct: true,
+    newStream: async () => {
+      attempted.push('connected-path')
+      controller.abort()
+      throw new Error('viewer cancelled comparison')
+    },
+  } as unknown as Connection
+  const node = {
+    dialProtocol: async () => {
+      attempted.push('advertised-path')
+      return {} as Stream
+    },
+  } as Pick<BrowserLibp2pNode, 'dialProtocol'>
+  await assert.rejects(
+    dialShareStream(
+      node,
+      ['/ip4/127.0.0.1/tcp/1'],
+      '/constellation/device-comparison/1.0.0',
+      [connection],
+      controller.signal,
+      25,
+    ),
+    /viewer cancelled comparison/,
+  )
+  assert.deepEqual(attempted, ['connected-path'])
+})
+
 test('prefers an existing authenticated peer connection before advertised relay addresses', async () => {
   const stream = {} as Stream
   const targets: unknown[] = []

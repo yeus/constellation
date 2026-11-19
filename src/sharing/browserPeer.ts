@@ -131,12 +131,38 @@ export const orderShareAddresses = (addresses: readonly string[]): string[] =>
     return rank(left) - rank(right)
   })
 
+// An overall deadline must not be consumed by one stalled connection before
+// the remaining advertised paths are tried. Only callers requesting a per-attempt
+// budget get a derived signal; other dials preserve their original signal.
+const runDialAttempt = async (
+  open: (signal?: AbortSignal) => Promise<Stream>,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<Stream> => {
+  if (timeoutMs === undefined) return open(signal)
+  const controller = new AbortController()
+  const abort = () => controller.abort(signal?.reason)
+  if (signal?.aborted) abort()
+  else signal?.addEventListener('abort', abort, { once: true })
+  const timer = setTimeout(
+    () => controller.abort(new Error('Stream dial attempt timed out.')),
+    timeoutMs,
+  )
+  try {
+    return await open(controller.signal)
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
 export const dialShareStream = async (
   node: Pick<BrowserLibp2pNode, 'dialProtocol'>,
   addresses: readonly string[],
   protocol: string | string[],
   connections: readonly Connection[] = [],
   signal?: AbortSignal,
+  attemptTimeoutMs?: number,
 ): Promise<Stream> => {
   const ordered = orderShareAddresses(addresses)
   let lastError: unknown
@@ -144,21 +170,33 @@ export const dialShareStream = async (
     (left, right) => Number(right.direct) - Number(left.direct),
   )) {
     try {
-      return await connection.newStream(protocol, {
-        runOnLimitedConnection: true,
-        ...(signal ? { signal } : {}),
-      })
+      return await runDialAttempt(
+        (attemptSignal) =>
+          connection.newStream(protocol, {
+            runOnLimitedConnection: true,
+            ...(attemptSignal ? { signal: attemptSignal } : {}),
+          }),
+        signal,
+        attemptTimeoutMs,
+      )
     } catch (error) {
+      if (signal?.aborted) throw error
       lastError = error
     }
   }
   for (const address of ordered) {
     try {
-      return await node.dialProtocol(multiaddr(address), protocol, {
-        runOnLimitedConnection: true,
-        ...(signal ? { signal } : {}),
-      })
+      return await runDialAttempt(
+        (attemptSignal) =>
+          node.dialProtocol(multiaddr(address), protocol, {
+            runOnLimitedConnection: true,
+            ...(attemptSignal ? { signal: attemptSignal } : {}),
+          }),
+        signal,
+        attemptTimeoutMs,
+      )
     } catch (error) {
+      if (signal?.aborted) throw error
       lastError = error
     }
   }
