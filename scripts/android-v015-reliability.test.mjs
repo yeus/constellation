@@ -153,6 +153,29 @@ test('API 29 Play Store fixture mocks network locations without modifying the ap
   assert.match(native, /clickButton\(cdp, 'Exact'\)/)
 })
 
+test('Android diagnostics share a native file rather than requesting clipboard access', () => {
+  const acceptance = read('scripts/test-android.mjs')
+  const view = read('src/views/MapView.vue')
+  const plugin = read(pluginPath + 'ConstellationAndroidPlugin.kt')
+  assert.match(acceptance, /tapAndroidButton\(cdp, 'Share logs as file'\)/)
+  assert.match(acceptance, /run-as', packageName, 'ls', 'cache\/shared-logs'/)
+  assert.match(view, /v-if="!isAndroid" type="button" @click="copyLogs"/)
+  assert.match(plugin, /Intent\.ACTION_SEND/)
+  assert.match(plugin, /FileProvider\.getUriForFile/)
+})
+
+test('Android startup diagnostics avoid raw URLs and expose bounded failure state', () => {
+  const acceptance = read('scripts/test-android.mjs')
+  const managed = read('scripts/test-android-managed.mjs')
+  assert.match(acceptance, /const describeWebViewStartup = async/)
+  assert.match(acceptance, /serviceRuntime:/)
+  assert.match(acceptance, /application:/)
+  assert.match(acceptance, /summarizeAndroidNativeCrash/)
+  assert.match(acceptance, /75_000/)
+  assert.match(acceptance, /90_000/)
+  assert.match(managed, /child\.signalCode !== null/)
+})
+
 test('Android pause command preserves the requested boolean for UI and notification actions', () => {
   const notification = read(pluginPath + 'ShareNotification.kt')
   assert.match(plugin, /request = request\.toString\(\)/)

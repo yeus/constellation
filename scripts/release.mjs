@@ -361,9 +361,14 @@ const parseArguments = (args) => {
   return options
 }
 
-const releasePushCommand = (repositoryRoot, tag) => {
+const releasePushCommands = (repositoryRoot, tag) => {
   const branch = gitOutput(repositoryRoot, ['branch', '--show-current'])
-  return branch ? `git push origin ${branch} ${tag}` : `git push origin ${tag}`
+  const refs = [branch, tag].filter(Boolean).join(' ')
+  const remotes = gitOutput(repositoryRoot, ['remote']).split('\n')
+  const destinations = remotes.includes('github')
+    ? [...(remotes.includes('origin') ? ['origin'] : []), 'github']
+    : ['origin']
+  return destinations.map((remote) => `git push ${remote} ${refs}`)
 }
 
 const validateReleaseVersion = (version, currentVersion) => {
@@ -395,7 +400,9 @@ const previewRelease = (version, currentVersion, isCurrentVersion) => {
 
 const printReleasePushCommand = (repositoryRoot, tag, action) => {
   console.log(`Push the ${action} when ready:`)
-  console.log(`  ${releasePushCommand(repositoryRoot, tag)}`)
+  for (const command of releasePushCommands(repositoryRoot, tag)) {
+    console.log(`  ${command}`)
+  }
 }
 
 const tagCurrentVersion = (repositoryRoot, version) => {

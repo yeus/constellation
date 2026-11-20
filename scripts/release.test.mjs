@@ -116,6 +116,17 @@ test('dry run previews a release without changing files or creating a tag', (con
   assert.equal(git(root, 'tag', '--list', `v${targetVersion}`), '')
 })
 
+test('release prints both mirror and GitHub publishing commands when configured', (context) => {
+  const root = makeReleaseRepository(context)
+  git(root, 'remote', 'add', 'origin', 'https://gitlab.invalid/constellation.git')
+  git(root, 'remote', 'add', 'github', 'https://github.invalid/constellation.git')
+  const targetVersion = nextPatchVersion(root)
+  const result = runRelease(root, targetVersion, '--yes')
+  assert.equal(result.status, 0, result.stderr)
+  assert.ok(result.stdout.includes(`git push origin main v${targetVersion}`))
+  assert.ok(result.stdout.includes(`git push github main v${targetVersion}`))
+})
+
 test('release updates metadata, preserves AppStream history, and creates a local commit and tag', (context) => {
   const root = makeReleaseRepository(context)
   const currentVersion = applicationVersion(root)

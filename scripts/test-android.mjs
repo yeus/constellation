@@ -185,47 +185,111 @@ const startCaptivePortalResponder = async (port) => {
   return { server, requests }
 }
 
-const waitForCdpPage = async (port) => {
-  let selected
-  await waitFor(
-    async () => {
-      try {
-        const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-        const candidate = pages.find(
-          (page) =>
-            page.type === 'page' &&
-            /^https?:/.test(page.url) &&
-            page.url !== 'https://constellation.invalid/runtime.html',
-        )
-        if (!candidate?.webSocketDebuggerUrl) return false
-        await wait(500)
-        const nextPages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-        selected = nextPages.find((page) => page.id === candidate.id && page.url === candidate.url)
-        return Boolean(selected?.webSocketDebuggerUrl)
-      } catch {
-        return false
-      }
+const describeWebViewStartup = async (serial, port) => {
+  const read = (args) => {
+    try {
+      return adbFor(serial, args)
+    } catch {
+      return ''
+    }
+  }
+  const targets = await fetch('http://127.0.0.1:' + port + '/json/list', {
+    signal: AbortSignal.timeout(3_000),
+  })
+    .then((response) => response.json())
+    .catch(() => [])
+  const pages = Array.isArray(targets) ? targets : []
+  return {
+    processAlive: Boolean(read(['shell', 'pidof', packageName]).trim()),
+    activityListed: read(['shell', 'dumpsys', 'activity', 'activities']).includes(
+      packageName + '/.MainActivity',
+    ),
+    targets: {
+      total: pages.length,
+      serviceRuntime: pages.filter(
+        (page) => page.url === 'https://constellation.invalid/runtime.html',
+      ).length,
+      application: pages.filter(
+        (page) =>
+          page.type === 'page' &&
+          /^https?:/.test(page.url ?? '') &&
+          page.url !== 'https://constellation.invalid/runtime.html',
+      ).length,
     },
-    'the Android WebView debug page',
-    30_000,
-  )
+    crash: summarizeAndroidNativeCrash(
+      read(['logcat', '-b', 'crash', '-d', '-t', '200']),
+      packageName,
+    ),
+  }
+}
+
+const waitForCdpPage = async (port, serial) => {
+  let selected
+  const startedAt = Date.now()
+  try {
+    await waitFor(
+      async () => {
+        try {
+          const pages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json()
+          const candidate = pages.find(
+            (page) =>
+              page.type === 'page' &&
+              /^https?:/.test(page.url) &&
+              page.url !== 'https://constellation.invalid/runtime.html',
+          )
+          if (!candidate?.webSocketDebuggerUrl) return false
+          await wait(500)
+          const nextPages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json()
+          selected = nextPages.find(
+            (page) => page.id === candidate.id && page.url === candidate.url,
+          )
+          return Boolean(selected?.webSocketDebuggerUrl)
+        } catch {
+          return false
+        }
+      },
+      'the Android WebView debug page',
+      75_000,
+    )
+  } catch (error) {
+    throw new Error(
+      'Android WebView did not expose the application page: ' +
+        JSON.stringify(await describeWebViewStartup(serial, port)),
+      { cause: error },
+    )
+  }
+  if (Date.now() - startedAt > 30_000) {
+    console.warn('[android-test] slow Android WebView debugger startup')
+  }
   return selected
 }
 
 const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222) => {
   let pid
-  await waitFor(
-    () => {
-      try {
-        pid = adbFor(serial, ['shell', 'pidof', packageName]).trim().split(/\s+/)[0]
-        return Boolean(pid)
-      } catch {
-        return false
-      }
-    },
-    'the Android app process',
-    30_000,
-  )
+  const startedAt = Date.now()
+  try {
+    await waitFor(
+      () => {
+        try {
+          pid = adbFor(serial, ['shell', 'pidof', packageName]).trim().split(/\s+/)[0]
+          return Boolean(pid)
+        } catch {
+          return false
+        }
+      },
+      'the Android app process',
+      45_000,
+    )
+  } catch (error) {
+    throw new Error(
+      'Android app process did not start: ' +
+        JSON.stringify(await describeWebViewStartup(serial, port)),
+      { cause: error },
+    )
+  }
+  if (Date.now() - startedAt > 30_000) {
+    console.warn('[android-test] slow Android app process startup')
+  }
   adbFor(serial, ['forward', `tcp:${port}`, `localabstract:webview_devtools_remote_${pid}`])
   const pending = new Map()
   const persistenceTrace = []
@@ -279,7 +343,7 @@ const connectCdp = async (serial = process.env.ANDROID_SERIAL, port = 9222) => {
     pending.clear()
   }
   const openSocket = async (openAttempt = 0) => {
-    const page = await waitForCdpPage(port)
+    const page = await waitForCdpPage(port, serial)
     const candidate = new WebSocket(page.webSocketDebuggerUrl)
     candidate.addEventListener('message', onMessage)
     candidate.addEventListener('close', onClose)
@@ -1706,9 +1770,14 @@ const runRebootVerifySmoke = async () => {
           'LocationShareService',
         ),
       'authorized background sharing to restore automatically after device reboot',
-      30_000,
+      90_000,
     )
   } catch (error) {
+    const bootCompleted = adb(['shell', 'getprop', 'sys.boot_completed']).trim() === '1'
+    const userUnlocked = adb(['shell', 'dumpsys', 'user']).includes('RUNNING_UNLOCKED')
+    const receiverDeclared = adb(['shell', 'dumpsys', 'package', packageName]).includes(
+      'RestoreReceiver',
+    )
     // The broadcast may have been suppressed or the service denied by OS policy.
     // Report only the dedicated restore tag and stopped state, never raw logcat.
     const stopped =
@@ -1720,7 +1789,7 @@ const runRebootVerifySmoke = async () => {
       .slice(-8)
       .map((line) => line.replace(/^.*?ConstellationRestore\s*:\s*/, ''))
     throw new Error(
-      `Android boot restoration failed (${stopped}; restore events: ${restoreEvents.join(' | ') || 'none'}).`,
+      `Android boot restoration failed (${stopped}; bootCompleted=${bootCompleted}; userUnlocked=${userUnlocked}; receiverDeclared=${receiverDeclared}; restore events: ${restoreEvents.join(' | ') || 'none'}).`,
       { cause: error },
     )
   }
@@ -6408,17 +6477,27 @@ const main = async () => {
       assert.equal(await clickButton(cdp, 'Got it'), true)
       await dismissAndroidSettingsSheet(cdp)
       assert.equal(await clickAriaButton(cdp, 'Open menu'), true)
-      assert.equal(await tapAndroidButton(cdp, 'Copy logs'), true)
-      await waitFor(
-        () => androidTextIncludes(cdp, 'Copied logs to clipboard.'),
-        'Android diagnostics clipboard notice',
+      assert.equal(
+        await cdp.evaluate(
+          `![...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Copy logs')`,
+        ),
+        true,
+        'Android must not offer clipboard log export',
       )
-      assert.equal(await androidTextIncludes(cdp, 'Could not copy logs to the clipboard.'), false)
+      assert.equal(await tapAndroidButton(cdp, 'Share logs as file'), true)
+      await waitFor(
+        () => {
+          const filenames = adb(['shell', 'run-as', packageName, 'ls', 'cache/shared-logs'])
+          return /^constellation-logs-\d+\.txt$/m.test(filenames)
+        },
+        'a native Android session log export file',
+        15_000,
+      )
     } finally {
       cdp?.close()
       adb(['shell', 'am', 'force-stop', packageName])
     }
-    console.log('Android privacy/About presentation and diagnostics clipboard behavior passed.')
+    console.log('Android privacy/About presentation and native session-log file sharing passed.')
     return
   }
   if (process.argv.includes('--native-location-smoke')) {

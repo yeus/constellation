@@ -63,7 +63,11 @@ const waitForBoot = async (child, avdName, previousSerials) => {
   let onlineDevices = 0
   let newDevices = 0
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`${avdName} exited before booting.`)
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `${avdName} exited before booting (exitCode=${child.exitCode ?? 'none'}; signal=${child.signalCode ?? 'none'}).`,
+      )
+    }
     try {
       const available = onlineSerials()
       onlineDevices = available.length
