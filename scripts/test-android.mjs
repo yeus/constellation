@@ -15,6 +15,10 @@ import {
   DebuggerTransportError,
   evaluateReadOnlyWithRecovery,
 } from './android-debugger-recovery.mjs'
+import {
+  networkFixtureAction,
+  networkFixtureReceiver,
+} from './android-network-location-fixture.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const sdk = process.env.ANDROID_HOME
@@ -30,6 +34,45 @@ const adbFor = (serial, args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 const adb = (args) => adbFor(process.env.ANDROID_SERIAL, args)
+const injectShareFlowLocation = (longitude, latitude) => {
+  if (!process.argv.includes('--network-location-fixture')) {
+    adb(['emu', 'geo', 'fix', longitude, latitude])
+    return
+  }
+  const result = adb([
+    'shell',
+    'am',
+    'broadcast',
+    '-n',
+    networkFixtureReceiver,
+    '-a',
+    networkFixtureAction,
+    '--es',
+    'operation',
+    'fix',
+    '--es',
+    'longitude',
+    longitude,
+    '--es',
+    'latitude',
+    latitude,
+  ])
+  assert.match(
+    result,
+    /Broadcast completed: result=0\b/,
+    'mock network provider must accept the fix',
+  )
+}
+
+const retryMockLocationFix = (longitude, latitude) => {
+  let nextFixAt = Date.now() + 8_000
+  return () => {
+    if (!process.argv.includes('--network-location-fixture') || Date.now() < nextFixAt) return
+    injectShareFlowLocation(longitude, latitude)
+    nextFixAt = Date.now() + 8_000
+  }
+}
+
 const backgroundRuntimeCreations = (serial) =>
   adbFor(serial, ['logcat', '-d', '-s', 'ConstellationRuntime:I', '*:S'])
     .split('\n')
@@ -4241,9 +4284,8 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await clickButton(cdp, '10'), true)
   if (options.exactLocationFixture) {
-    // API 29 Play Store emulators inject GPS fixes, not network-provider fixes.
-    // Exercise the explicitly authorized Exact mode; the default Neighbourhood
-    // mode is independently covered by API 29 AOSP and Android 36.
+    // Optional exact-precision scenario. The managed API 29 gate instead
+    // exercises default Neighbourhood with a real mock network provider.
     assert.equal(await clickButton(cdp, 'Exact'), true)
     assert.equal(
       await cdp.evaluate(
@@ -4315,7 +4357,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       { cause: error },
     )
   }
-  adb(['emu', 'geo', 'fix', '-70.0001', '40.0001'])
+  injectShareFlowLocation('-70.0001', '40.0001')
   await wait(1_000)
   adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
   console.log('[android-test] waiting for browser viewer')
@@ -4353,7 +4395,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
       30_000,
     )
     await wait(1_000)
-    adb(['emu', 'geo', 'fix', '-70.0011', '40.0011'])
+    injectShareFlowLocation('-70.0011', '40.0011')
     await peers.locator('.peer-list__map-action:not(:disabled)').waitFor({ timeout: 30_000 })
   } catch (error) {
     const browserState = {
@@ -4376,10 +4418,15 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   await openBrowserPeerFilter(viewer, 'Viewing')
   const updatesBeforeBackgroundFix = await receivedUpdateCount(viewer)
   console.log('[android-test] checking screen-on background update')
-  adb(['emu', 'geo', 'fix', '-70.0021', '40.0021'])
+  injectShareFlowLocation('-70.0021', '40.0021')
+  const retryBackgroundFix = retryMockLocationFix('-70.0021', '40.0021')
   try {
     await waitFor(
-      async () => (await receivedUpdateCount(viewer)) > updatesBeforeBackgroundFix,
+      async () => {
+        if ((await receivedUpdateCount(viewer)) > updatesBeforeBackgroundFix) return true
+        retryBackgroundFix()
+        return false
+      },
       'a fresh location update while Android sharing is in the background',
       45_000,
     )
@@ -4418,7 +4465,7 @@ const runShareFlow = async (cdp, browser, options = {}) => {
     const transport = await readBackgroundTransportSummary(cdp)
     const policy = await readPolicyStatus(cdp)
     await wait(1_000)
-    adb(['emu', 'geo', 'fix', '-70.0031', '40.0031'])
+    injectShareFlowLocation('-70.0031', '40.0031')
     await waitFor(
       async () => (await receivedUpdateCount(viewer)) > updatesBeforeForegroundRetry,
       'a fresh location update after reopening the Android app',
@@ -4505,9 +4552,14 @@ const runShareFlow = async (cdp, browser, options = {}) => {
   adb(['shell', 'input', 'keyevent', 'KEYCODE_SLEEP'])
   let lockedUpdateError
   try {
-    adb(['emu', 'geo', 'fix', '-70.0201', '40.0201'])
+    injectShareFlowLocation('-70.0201', '40.0201')
+    const retryLockedFix = retryMockLocationFix('-70.0201', '40.0201')
     await waitFor(
-      async () => (await receivedUpdateCount(viewer)) > updatesBeforeLock,
+      async () => {
+        if ((await receivedUpdateCount(viewer)) > updatesBeforeLock) return true
+        retryLockedFix()
+        return false
+      },
       'a location update while the Android screen is locked',
       45_000,
     )
@@ -6450,7 +6502,7 @@ const main = async () => {
       relay = await startLocalRelay()
       adb(['reverse', 'tcp:9111', 'tcp:9111'])
     }
-    adb(['emu', 'geo', 'fix', '-70.0000', '40.0000'])
+    injectShareFlowLocation('-70.0000', '40.0000')
     grantIfSupported('android.permission.ACCESS_FINE_LOCATION')
     grantIfSupported('android.permission.ACCESS_BACKGROUND_LOCATION')
     grantIfSupported('android.permission.POST_NOTIFICATIONS')

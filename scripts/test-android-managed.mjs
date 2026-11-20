@@ -10,6 +10,12 @@ import {
   emulatorExecutable,
   profile,
 } from './android-emulator.mjs'
+import {
+  buildNetworkLocationFixture,
+  networkFixtureAction,
+  networkFixturePackage,
+  networkFixtureReceiver,
+} from './android-network-location-fixture.mjs'
 import { androidApkCandidates } from './copy-android-apk.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
 import { summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
@@ -138,11 +144,75 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
   }
 }
 
+const enableMockNetworkLocation = (serial) => {
+  const fixtureApk = buildNetworkLocationFixture()
+  run(adbPath, ['-s', serial, 'install', '-r', fixtureApk], { env: adbEnvironment })
+  adb(
+    ['shell', 'pm', 'grant', networkFixturePackage, 'android.permission.ACCESS_FINE_LOCATION'],
+    {},
+    serial,
+  )
+  adb(
+    ['shell', 'appops', 'set', networkFixturePackage, 'android:mock_location', 'allow'],
+    {},
+    serial,
+  )
+  const result = adb(
+    [
+      'shell',
+      'am',
+      'broadcast',
+      '-n',
+      networkFixtureReceiver,
+      '-a',
+      networkFixtureAction,
+      '--es',
+      'operation',
+      'prepare',
+    ],
+    {},
+    serial,
+  )
+  if (!/Broadcast completed: result=0\b/.test(result)) {
+    throw new Error('Android API 29 network mock provider was not enabled.')
+  }
+}
+
+const resetMockNetworkLocation = (serial) => {
+  try {
+    adb(
+      [
+        'shell',
+        'am',
+        'broadcast',
+        '-n',
+        networkFixtureReceiver,
+        '-a',
+        networkFixtureAction,
+        '--es',
+        'operation',
+        'reset',
+      ],
+      {},
+      serial,
+    )
+  } catch {
+    // The temporary emulator may already have stopped.
+  }
+  try {
+    adb(['uninstall', networkFixturePackage], {}, serial)
+  } catch {
+    // Emulator destruction still clears the isolated fixture app.
+  }
+}
+
 const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
+  const mockNetwork = name === 'compat' && testArgs.includes('--network-location-fixture')
   const device = await startProfile(profile(name), prepare)
   try {
     run(adbPath, ['start-server'], { env: adbEnvironment })
     run(adbPath, ['-s', device.serial, 'install', '-r', selectedApk], { env: adbEnvironment })
+    if (mockNetwork) enableMockNetworkLocation(device.serial)
     try {
       run(process.execPath, ['scripts/test-android.mjs', ...testArgs], {
         env: {
@@ -170,6 +240,7 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
       )
     }
   } finally {
+    if (mockNetwork) resetMockNetworkLocation(device.serial)
     await stopEmulator(device.child, device.serial)
   }
 }
@@ -612,12 +683,25 @@ const main = async () => {
     return
   }
   if (process.argv.includes('--compat-only')) {
-    await runProfile('compat', undefined, ['--exact-location-fixture'])
-    console.log('Android API 29 compatibility location-sharing tests passed.')
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile(
+      'compat',
+      undefined,
+      ['--local-share-flow', '--network-location-fixture'],
+      threeWayApk,
+    )
+    console.log('Android API 29 compatibility sharing and locked-screen delivery passed.')
     return
   }
   await runProfile('modern')
-  await runProfile('compat', undefined, ['--exact-location-fixture'])
+  if (!fs.existsSync(threeWayApk)) buildThreeWayApk()
+  await runProfile(
+    'compat',
+    undefined,
+    ['--local-share-flow', '--network-location-fixture'],
+    threeWayApk,
+  )
   await runProfile('aosp', undefined, ['--no-gms-flow'])
   await runProfile('modern', undefined, ['--notification-pause-smoke'])
   await runProfile('modern', undefined, ['--permission-denial-smoke'])

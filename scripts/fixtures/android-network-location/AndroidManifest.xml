@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="space.taskyon.constellation.locationfixture"
+    android:versionCode="1"
+    android:versionName="1">
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="29" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <application android:label="Constellation Emulator Location Fixture"
+        android:allowBackup="false">
+        <!-- DUMP is held by ADB shell, not third-party apps. Never ship this APK. -->
+        <receiver android:name=".NetworkLocationFixture"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="space.taskyon.constellation.locationfixture.COMMAND" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -134,20 +134,23 @@ test('API 29 synthetic locations arrive after viewer admission enables the nativ
   const admitted = acceptance.indexOf(
     "'the first authenticated viewer before injecting a synthetic location fix'",
   )
-  const fix = acceptance.indexOf("adb(['emu', 'geo', 'fix', '-70.0011', '40.0011'])")
+  const fix = acceptance.indexOf("injectShareFlowLocation('-70.0011', '40.0011')")
   assert.ok(viewer >= 0 && admitted > viewer && fix > admitted)
 })
 
-test('API 29 Play Store fixture explicitly selects Exact rather than claiming network-provider support', () => {
+test('API 29 Play Store fixture mocks network locations without modifying the app', () => {
   const native = read('scripts/test-android.mjs')
   const managed = read('scripts/test-android-managed.mjs')
-  assert.match(managed, /runProfile\('compat', undefined, \['--exact-location-fixture'\]\)/)
+  const fixture = read('scripts/fixtures/android-network-location/NetworkLocationFixture.java')
+  const manifest = read('scripts/fixtures/android-network-location/AndroidManifest.xml')
+  assert.match(managed, /testArgs.includes\('--network-location-fixture'\)/)
+  assert.match(managed, /'--local-share-flow', '--network-location-fixture'/)
+  assert.match(native, /retryMockLocationFix\('-70\.0201', '40\.0201'\)/)
+  assert.match(fixture, /LocationManager\.NETWORK_PROVIDER/)
+  assert.match(fixture, /setTestProviderLocation\(PROVIDER, location\)/)
+  assert.match(manifest, /android:permission="android\.permission\.DUMP"/)
   assert.match(native, /if \(options.exactLocationFixture\)/)
   assert.match(native, /clickButton\(cdp, 'Exact'\)/)
-  assert.match(
-    native,
-    /exactLocationFixture: process\.argv\.includes\('--exact-location-fixture'\)/,
-  )
 })
 
 test('Android pause command preserves the requested boolean for UI and notification actions', () => {
