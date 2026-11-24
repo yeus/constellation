@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import type * as Vue from 'vue'
 import type { MapLocation } from '../src/location/mapModel.ts'
 import { withTwoSources } from './fixtures/two-sources.ts'
+import { serveSyntheticPmtiles } from './fixtures/pmtiles-archive.ts'
 import { openPeerList, openShareCreator, saveLocationPreview } from './fixtures/peer-navigation.ts'
 
 test('uses local browser fonts for labeled map layers', async ({ page }) => {
@@ -852,7 +853,10 @@ test('offers multi-gigabyte map cache limits without downloading them upfront', 
 test('caches public basemap tiles, reports usage and clears the offline cache', async ({
   page,
 }) => {
+  test.setTimeout(90_000)
+  const tileRequests = await serveSyntheticPmtiles(page)
   await page.goto('/')
+  await expect.poll(tileRequests).toBeGreaterThan(0)
   await expect(page.locator('.maplibregl-canvas')).toBeVisible({ timeout: 30_000 })
   const cacheEntries = () =>
     page.evaluate(async () => {

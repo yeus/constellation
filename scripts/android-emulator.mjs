@@ -53,6 +53,18 @@ export const androidAdbEnvironment = (environment = process.env) => {
     : localEnvironment
 }
 
+// A shared ADB server may discover another project's device during our boot.
+// Never install, uninstall, or send emulator controls until the AVD is identified.
+export const findManagedEmulatorSerial = (serials, previousSerials, avdName, readAvdName) =>
+  serials.find((serial) => {
+    if (!/^emulator-\d+$/.test(serial) || previousSerials.has(serial)) return false
+    try {
+      return readAvdName(serial).split(/\r?\n/)[0]?.trim() === avdName
+    } catch {
+      return false
+    }
+  })
+
 const run = (executable, args, options = {}) =>
   execFileSync(executable, args, {
     encoding: 'utf8',
@@ -94,7 +106,7 @@ export const create = (selected, environment = process.env) => {
   )
 }
 
-export const profile = (name) => {
+export const profile = (name, environment = process.env) => {
   if (name === 'compat')
     return {
       avdName: 'constellation-api29',
@@ -104,7 +116,7 @@ export const profile = (name) => {
     return {
       avdName: 'constellation-api29-aosp',
       systemImage: 'system-images;android-29;default;x86_64',
-      sdkRoot: '/android-state/aosp-sdk',
+      ...(environment.ANDROID_AOSP_SDK_ROOT ? { sdkRoot: environment.ANDROID_AOSP_SDK_ROOT } : {}),
     }
   if (name === 'modern')
     return {

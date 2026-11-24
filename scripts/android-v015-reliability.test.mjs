@@ -128,6 +128,19 @@ test('v0.1.5 power acceptance exercises Android policies and journal-backed asse
   assert.match(managed, /two-device failed diagnostics/)
 })
 
+test('native single-recipient comparison remains a maintained two-emulator gate', () => {
+  const native = read('scripts/test-android.mjs')
+  const managed = read('scripts/test-android-managed.mjs')
+  const workflow = read('.github/workflows/android-standby.yml')
+  assert.match(native, /no source request before viewer consent/)
+  assert.match(native, /matching authenticated four-letter codes/)
+  assert.match(native, /no admitted native viewer before explicit approval/)
+  assert.match(native, /no authenticated location receipt before approval/)
+  assert.match(native, /initial Android-to-Android confirmation has a timestamp/)
+  assert.match(managed, /--single-viewer-comparison-smoke/)
+  assert.match(workflow, /--single-viewer-comparison-smoke --skip-build/)
+})
+
 test('API 29 synthetic locations arrive after viewer admission enables the native watch', () => {
   const acceptance = read('scripts/test-android.mjs')
   const viewer = acceptance.indexOf('await startBrowserLocationPreview(viewer)')
