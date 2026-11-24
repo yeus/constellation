@@ -8,6 +8,7 @@ import {
   create,
   emulatorArguments,
   emulatorExecutable,
+  findManagedEmulatorSerial,
   profile,
 } from './android-emulator.mjs'
 import {
@@ -51,11 +52,11 @@ const wait = (milliseconds) =>
     setTimeout(resolve, milliseconds)
   })
 
-const onlineSerials = () =>
-  adb(['devices'])
+const deviceSerials = (onlineOnly = true) =>
+  adb(['devices'], { timeout: 10_000 })
     .split('\n')
     .slice(1)
-    .filter((line) => /\sdevice(?:\s|$)/.test(line))
+    .filter((line) => (onlineOnly ? /\sdevice(?:\s|$)/.test(line) : /^\S+\s+\S+/.test(line)))
     .map((line) => line.split(/\s+/)[0])
 
 const waitForBoot = async (child, avdName, previousSerials) => {
@@ -69,11 +70,12 @@ const waitForBoot = async (child, avdName, previousSerials) => {
       )
     }
     try {
-      const available = onlineSerials()
+      const available = deviceSerials()
       onlineDevices = available.length
-      const candidates = available.filter((candidate) => !previousSerials.has(candidate))
-      newDevices = candidates.length
-      const serial = candidates[0]
+      newDevices = available.filter((candidate) => !previousSerials.has(candidate)).length
+      const serial = findManagedEmulatorSerial(available, previousSerials, avdName, (candidate) =>
+        adb(['emu', 'avd', 'name'], { timeout: 3_000 }, candidate),
+      )
       if (
         serial &&
         adb(['shell', 'getprop', 'sys.boot_completed'], { timeout: 10_000 }, serial).trim() === '1'
@@ -101,9 +103,20 @@ const stopEmulator = async (child, serial) => {
   } catch {
     // A failed test may already have stopped the emulator.
   }
-  const deadline = Date.now() + 15_000
-  while (child.exitCode === null && Date.now() < deadline) await wait(250)
-  if (child.exitCode === null) child.kill('SIGTERM')
+  const exited = () => child.exitCode !== null || child.signalCode !== null
+  const awaitExit = async (timeout) => {
+    const deadline = Date.now() + timeout
+    while (!exited() && Date.now() < deadline) await wait(250)
+  }
+  await awaitExit(15_000)
+  if (!exited()) {
+    child.kill('SIGTERM')
+    await awaitExit(10_000)
+  }
+  if (!exited()) {
+    child.kill('SIGKILL')
+    await awaitExit(5_000)
+  }
 }
 
 const uninstallIfPresent = (serial) => {
@@ -125,7 +138,7 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
       }
     : adbEnvironment
   create(selected, profileEnvironment)
-  const previousSerials = new Set(onlineSerials())
+  const previousSerials = new Set(deviceSerials(false))
   const selectedEmulatorPath = emulatorExecutable(profileEnvironment, adbEnvironment)
   const child = spawn(
     selectedEmulatorPath,
@@ -352,6 +365,9 @@ const runThreeWay = async () => {
       process.execPath,
       [
         'scripts/test-android.mjs',
+        ...(process.argv.includes('--single-viewer-comparison-smoke')
+          ? ['--single-viewer-comparison-smoke']
+          : []),
         ...(process.argv.includes('--preview-second-link') ? ['--preview-second-link'] : []),
         ...(process.argv.includes('--two-android-receiver-standby-smoke')
           ? ['--two-android-receiver-standby-smoke']
@@ -482,6 +498,13 @@ const main = async () => {
     } else buildThreeWayApk()
     await runThreeWay()
     console.log('Two Android API 36 peers and one desktop browser passed the three-way test.')
+    return
+  }
+  if (process.argv.includes('--single-viewer-comparison-smoke')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runThreeWay()
+    console.log('Two Android emulators verified secure comparison before admitting location.')
     return
   }
   if (process.argv.includes('--two-android-receiver-standby-smoke')) {

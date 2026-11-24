@@ -85,6 +85,9 @@ jobs:
       - name: Device comparison regression
         run: corepack yarn playwright test tests/device-comparison.spec.ts --project=desktop --workers=1
 
+      - name: v0.1.5 incoming-link and consent regression
+        run: corepack yarn playwright test tests/link-onboarding-v015.spec.ts --workers=1
+
       - name: Map UI regression
         run: corepack yarn playwright test tests/map-ui.spec.ts --workers=1
 

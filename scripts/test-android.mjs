@@ -949,13 +949,32 @@ const configureAndroidReceiverOnly = async (cdp) => {
   )
 }
 
-const createAndroidStarShare = async (cdp, name, { persistent = false } = {}) => {
+const createAndroidShare = async (cdp, name, { persistent = false, capacity = 10 } = {}) => {
   await configureAndroidBackgroundSharing(cdp)
   // The first-run settings save uses its own short-lived background runtime.
   adbFor(cdp.serial, ['logcat', '-c'])
   await clickNativePeerAction(cdp, 'All', 'Share location')
   assert.equal(await fillAndroidInput(cdp, 'Name to share', name), true)
-  assert.equal(await clickButton(cdp, '10'), true)
+  assert.equal(
+    await cdp.evaluate(`(() => {
+      const option = [...document.querySelectorAll('[aria-labelledby="share-title"] button')]
+        .find((button) => button.textContent?.trim() === ${JSON.stringify(String(capacity))});
+      if (!option) return false;
+      option.click();
+      return true;
+    })()`),
+    true,
+    'select Android viewer capacity',
+  )
+  if (capacity === 1) {
+    assert.equal(
+      await cdp.evaluate(
+        `Boolean(document.querySelector('[aria-labelledby="share-title"] .warning input[type="checkbox"]')?.checked)`,
+      ),
+      true,
+      'single viewer requires explicit source approval',
+    )
+  }
   if (persistent) {
     assert.equal(await clickButton(cdp, 'Until stopped'), true)
     assert.equal(
@@ -971,9 +990,9 @@ const createAndroidStarShare = async (cdp, name, { persistent = false } = {}) =>
   }
   assert.equal(
     await cdp.evaluate(`([...document.querySelectorAll('button')].some((button) =>
-      button.textContent?.trim() === '10' && button.getAttribute('aria-pressed') === 'true'))`),
+      button.textContent?.trim() === ${JSON.stringify(String(capacity))} && button.getAttribute('aria-pressed') === 'true'))`),
     true,
-    'select ten Viewers on Android',
+    'selected viewer capacity on Android',
   )
   await waitFor(
     () =>
@@ -1008,7 +1027,7 @@ const createAndroidStarShare = async (cdp, name, { persistent = false } = {}) =>
         nativeShareCount: nativeStatus?.shares?.length,
       };
     })()`)
-    throw new Error(`Android Star link unavailable: ${JSON.stringify(state)}`, { cause: error })
+    throw new Error(`Android share link unavailable: ${JSON.stringify(state)}`, { cause: error })
   }
   assert.equal(await closeAndroidDialog(cdp), true)
   return url
@@ -2628,6 +2647,7 @@ const followOnAndroid = async (
   expectedCount,
   method = 'shared-text',
   save = true,
+  { beforeConsent, afterConsent } = {},
 ) => {
   if (method === 'paste') {
     await waitForNativeApp(cdp, 'Android peer controls')
@@ -2653,7 +2673,9 @@ const followOnAndroid = async (
     }))()`)
     throw new Error(`Android invitation did not appear: ${JSON.stringify(state)}`, { cause: error })
   }
+  await beforeConsent?.()
   assert.equal(await clickButton(cdp, 'See location'), true, 'consent to Android P2P location link')
+  await afterConsent?.()
   try {
     await waitFor(
       () => androidTextIncludes(cdp, `Seeing ${expectedCount}`),
@@ -3298,9 +3320,9 @@ const runThreeWayFlow = async (firstSerial, secondSerial) => {
     await desktop.locator('.dock-peers').waitFor({ timeout: 90_000 })
     console.log('Three-way peers started.')
 
-    const firstLink = await createAndroidStarShare(first, 'Synthetic phone A')
+    const firstLink = await createAndroidShare(first, 'Synthetic phone A')
     console.log('First Android link ready.')
-    const secondLink = await createAndroidStarShare(second, 'Synthetic phone B')
+    const secondLink = await createAndroidShare(second, 'Synthetic phone B')
     console.log('Second Android link ready.')
     for (const serial of [firstSerial, secondSerial]) {
       assert.equal(backgroundRuntimeCreations(serial), 1, 'one Android background P2P runtime')
@@ -5548,6 +5570,56 @@ const runTwoAndroidContinuousStandbySoak = async ({
 
 // Two independent Android app processes: A sends, B receives without obtaining
 // local-location permission. Verify the v3 receipt originates from B.
+const approveNativeComparison = async (source, receiver) => {
+  const approval = '[aria-label="Viewer access request"]'
+  const preview = '[aria-label="Location preview"]'
+  await waitFor(
+    () =>
+      receiver.evaluate(
+        `document.querySelector('${preview}')?.textContent?.includes('Waiting for sender approval') === true`,
+      ),
+    'Android viewer waiting for explicit approval',
+    60_000,
+  )
+  const letters = (cdp, selector) =>
+    cdp.evaluate(
+      `document.querySelector('${selector} .device-comparison-letters')?.textContent?.trim() ?? ''`,
+    )
+  await waitFor(
+    async () => /^[A-Z]{4}$/.test(await letters(receiver, preview)),
+    'fresh Android viewer comparison',
+    30_000,
+  )
+  await waitFor(
+    async () => {
+      const sender = await letters(source, approval)
+      const viewer = await letters(receiver, preview)
+      return /^[A-Z]{4}$/.test(sender) && sender === viewer
+    },
+    'matching authenticated four-letter codes on both Android devices',
+    30_000,
+  )
+  const pending = await readBackgroundTransportSummary(source)
+  assert.equal(pending.viewerCount, 0, 'no admitted native viewer before explicit approval')
+  assert.equal(pending.confirmedViewerCount, 0, 'no authenticated location receipt before approval')
+  assert.equal(
+    await receiver.evaluate(
+      `![...document.querySelectorAll('${preview} button')].some((button) => button.textContent?.trim() === 'Add peer')`,
+    ),
+    true,
+    'viewer cannot save an unapproved share',
+  )
+  await waitFor(
+    () =>
+      source.evaluate(
+        `[...document.querySelectorAll('${approval} button')].some((button) => button.textContent?.trim() === 'Approve this device' && !button.disabled)`,
+      ),
+    'enabled native approval after matching comparison',
+    10_000,
+  )
+  assert.equal(await tapAndroidButton(source, 'Approve this device'), true)
+}
+
 const runTwoAndroidReceiverStandbySmoke = async (
   sourceSerial,
   receiverSerial,
@@ -5563,6 +5635,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
     console.log(`[android-acceptance] phase=${value}`)
   }
   const powerRecovery = process.argv.includes('--power-recovery-matrix')
+  const comparisonOnly = process.argv.includes('--single-viewer-comparison-smoke')
   const powerEvents = (serial) => {
     const today = new Date().toISOString().slice(0, 10)
     return parsePowerJournal(
@@ -5621,11 +5694,12 @@ const runTwoAndroidReceiverStandbySmoke = async (
     markPhase('receiver-ui-ready')
     await waitForNativeApp(receiver, 'Android receiver')
     markPhase('source-share-creation')
-    const sourceLink = await createAndroidStarShare(source, 'Sender A', {
+    const sourceLink = await createAndroidShare(source, 'Sender A', {
       persistent: soakMinutes !== null,
+      capacity: comparisonOnly ? 1 : 10,
     })
     if (dualRole) {
-      await createAndroidStarShare(receiver, 'Receiver outgoing source', {
+      await createAndroidShare(receiver, 'Receiver outgoing source', {
         persistent: soakMinutes !== null,
       })
       await waitFor(
@@ -5637,7 +5711,41 @@ const runTwoAndroidReceiverStandbySmoke = async (
       await configureAndroidReceiverOnly(receiver)
     }
     markPhase('receiver-follow')
-    assert.equal(await followOnAndroid(receiver, receiverSerial, sourceLink, 1), true)
+    assert.equal(
+      await followOnAndroid(
+        receiver,
+        receiverSerial,
+        sourceLink,
+        1,
+        'shared-text',
+        true,
+        comparisonOnly
+          ? {
+              beforeConsent: async () => {
+                assert.equal(
+                  await source.evaluate(
+                    `Boolean(document.querySelector('[aria-label="Viewer access request"]'))`,
+                  ),
+                  false,
+                  'no source request before viewer consent',
+                )
+                assert.equal(
+                  await receiver.evaluate(
+                    `Boolean(document.querySelector('[aria-label="Location preview"]'))`,
+                  ),
+                  false,
+                  'no location preview before consent',
+                )
+              },
+              afterConsent: async () => {
+                markPhase('single-viewer-comparison')
+                await approveNativeComparison(source, receiver)
+              },
+            }
+          : {},
+      ),
+      true,
+    )
 
     const receiverStatus = () =>
       receiver.evaluate(`window.__TAURI_INTERNALS__?.invoke('android_receiver_ownership')`)
@@ -5756,6 +5864,7 @@ const runTwoAndroidReceiverStandbySmoke = async (
     }
     const initialConfirmedAt = (await readBackgroundTransportSummary(source)).latestConfirmedAt
     assert.ok(initialConfirmedAt > 0, 'initial Android-to-Android confirmation has a timestamp')
+    if (comparisonOnly) return
     if (dualRole && process.argv.includes('--dual-role-process-restart')) {
       // A receiver-only and source-only restart do not reproduce a device that
       // was simultaneously publishing and following when Android killed it.
@@ -6174,7 +6283,11 @@ const runTwoAndroidReceiverStandbySmoke = async (
 
 const main = async () => {
   const serials = process.env.ANDROID_SERIALS?.split(',')
-  if (serials?.length === 2 && process.argv.includes('--two-android-receiver-standby-smoke')) {
+  if (
+    serials?.length === 2 &&
+    (process.argv.includes('--two-android-receiver-standby-smoke') ||
+      process.argv.includes('--single-viewer-comparison-smoke'))
+  ) {
     await runTwoAndroidReceiverStandbySmoke(
       serials[0],
       serials[1],
@@ -6183,9 +6296,11 @@ const main = async () => {
       parseStandbySoakMinutes(process.argv),
     )
     console.log(
-      process.argv.includes('--dual-role-restart-only')
-        ? 'Android dual-role process restart, state restoration, and authenticated receive passed.'
-        : 'Android-to-Android ACK, independent Doze recovery, and safe receiver ownership passed.',
+      process.argv.includes('--single-viewer-comparison-smoke')
+        ? 'Android single-viewer comparison, consent, and authenticated receipt passed.'
+        : process.argv.includes('--dual-role-restart-only')
+          ? 'Android dual-role process restart, state restoration, and authenticated receive passed.'
+          : 'Android-to-Android ACK, independent Doze recovery, and safe receiver ownership passed.',
     )
     return
   }

@@ -10,6 +10,7 @@ import {
   create,
   emulatorArguments,
   emulatorExecutable,
+  findManagedEmulatorSerial,
   profile,
 } from './android-emulator.mjs'
 
@@ -19,6 +20,34 @@ test('resolves Android tools from ANDROID_HOME', () => {
   assert.equal(
     androidTool('avdmanager', { ANDROID_HOME: '/sdk' }),
     '/sdk/cmdline-tools/latest/bin/avdmanager',
+  )
+})
+
+test('selects only the newly launched owned emulator, not another device on shared ADB', () => {
+  const serials = [
+    'physical-device',
+    'emulator-5554',
+    'emulator-5556',
+    'emulator-5558',
+    'emulator-5560',
+  ]
+  const previous = new Set(['emulator-5554'])
+  const readAvdName = (serial) => {
+    if (serial === 'emulator-5556') throw new Error('not ready')
+    return serial === 'emulator-5560' ? 'constellation-api36-play\nOK\n' : 'another-project\nOK\n'
+  }
+  assert.equal(
+    findManagedEmulatorSerial(serials, previous, 'constellation-api36-play', readAvdName),
+    'emulator-5560',
+  )
+  assert.equal(
+    findManagedEmulatorSerial(
+      serials.slice(0, -1),
+      previous,
+      'constellation-api36-play',
+      readAvdName,
+    ),
+    undefined,
   )
 })
 
@@ -78,10 +107,9 @@ test('defines the supported Android compatibility profiles', () => {
     avdName: 'constellation-api29',
     systemImage: 'system-images;android-29;google_apis_playstore;x86_64',
   })
-  assert.deepEqual(profile('aosp'), {
+  assert.deepEqual(profile('aosp', {}), {
     avdName: 'constellation-api29-aosp',
     systemImage: 'system-images;android-29;default;x86_64',
-    sdkRoot: '/android-state/aosp-sdk',
   })
   assert.deepEqual(profile('modern'), {
     avdName: 'constellation-api36-play',
@@ -120,10 +148,16 @@ test('starts deterministic software-rendered emulators', () => {
 })
 
 test('AOSP emulator uses its separate system-image directory with the host binary', () => {
-  assert.deepEqual(emulatorArguments(profile('aosp')).slice(0, 4), [
-    '-avd',
-    'constellation-api29-aosp',
-    '-sysdir',
-    '/android-state/aosp-sdk/system-images/android-29/default/x86_64',
-  ])
+  assert.deepEqual(
+    emulatorArguments(profile('aosp', { ANDROID_AOSP_SDK_ROOT: '/synthetic/aosp-sdk' })).slice(
+      0,
+      4,
+    ),
+    [
+      '-avd',
+      'constellation-api29-aosp',
+      '-sysdir',
+      '/synthetic/aosp-sdk/system-images/android-29/default/x86_64',
+    ],
+  )
 })

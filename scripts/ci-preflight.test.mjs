@@ -20,6 +20,8 @@ const quality = [
 const browser = [
   'playwright test tests/share-flow.spec.ts --workers=1',
   'playwright test tests/p2p-share.spec.ts --project=desktop --workers=1',
+  'playwright test tests/device-comparison.spec.ts --project=desktop --workers=1',
+  'playwright test tests/link-onboarding-v015.spec.ts --workers=1',
   'playwright test tests/map-ui.spec.ts --workers=1',
   'playwright test tests/sharing-diagnostics.spec.ts --workers=1',
   'test:pages',
