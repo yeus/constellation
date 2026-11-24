@@ -53,17 +53,43 @@ export const androidAdbEnvironment = (environment = process.env) => {
     : localEnvironment
 }
 
-// A shared ADB server may discover another project's device during our boot.
-// Never install, uninstall, or send emulator controls until the AVD is identified.
-export const findManagedEmulatorSerial = (serials, previousSerials, avdName, readAvdName) =>
-  serials.find((serial) => {
-    if (!/^emulator-\d+$/.test(serial) || previousSerials.has(serial)) return false
+// ADB may reuse an emulator serial after a cold boot, but assigns a fresh
+// transport ID. Identify the new transport and its AVD before any mutation.
+export const parseAdbDevices = (output) =>
+  output
+    .split(/\r?\n/)
+    .slice(1)
+    .flatMap((line) => {
+      const [serial, state, ...fields] = line.trim().split(/\s+/)
+      if (!serial || !state) return []
+      const transport = fields.find((field) => field.startsWith('transport_id:'))
+      return [{ serial, state, identity: transport ? `${serial}:${transport}` : serial }]
+    })
+
+export const findManagedEmulatorSerial = (devices, previousIdentities, avdName, readAvdName) =>
+  devices.find(({ serial, state, identity }) => {
+    if (state !== 'device' || !/^emulator-\d+$/.test(serial) || previousIdentities.has(identity))
+      return false
     try {
       return readAvdName(serial).split(/\r?\n/)[0]?.trim() === avdName
     } catch {
       return false
     }
-  })
+  })?.serial
+
+// Inspect retained packages too; a different debug signing key can otherwise
+// leave a stale package that prevents installation. Propagate transport errors.
+export const removeInstalledTestPackage = (adb, packageName) => {
+  const installed = () =>
+    adb(['shell', 'pm', 'list', 'packages', '-u', packageName], { timeout: 10_000 })
+      .split(/\r?\n/)
+      .some((line) => line.trim() === `package:${packageName}`)
+  if (!installed()) return
+  const result = adb(['uninstall', packageName], { timeout: 60_000 })
+  if (result.trim() !== 'Success' || installed()) {
+    throw new Error('Could not remove the existing package from the owned test emulator.')
+  }
+}
 
 const run = (executable, args, options = {}) =>
   execFileSync(executable, args, {

@@ -9,7 +9,9 @@ import {
   emulatorArguments,
   emulatorExecutable,
   findManagedEmulatorSerial,
+  parseAdbDevices,
   profile,
+  removeInstalledTestPackage,
 } from './android-emulator.mjs'
 import {
   buildNetworkLocationFixture,
@@ -52,14 +54,9 @@ const wait = (milliseconds) =>
     setTimeout(resolve, milliseconds)
   })
 
-const deviceSerials = (onlineOnly = true) =>
-  adb(['devices'], { timeout: 10_000 })
-    .split('\n')
-    .slice(1)
-    .filter((line) => (onlineOnly ? /\sdevice(?:\s|$)/.test(line) : /^\S+\s+\S+/.test(line)))
-    .map((line) => line.split(/\s+/)[0])
+const devices = () => parseAdbDevices(adb(['devices', '-l'], { timeout: 10_000 }))
 
-const waitForBoot = async (child, avdName, previousSerials) => {
+const waitForBoot = async (child, avdName, previousIdentities) => {
   const deadline = Date.now() + 180_000
   let onlineDevices = 0
   let newDevices = 0
@@ -70,11 +67,14 @@ const waitForBoot = async (child, avdName, previousSerials) => {
       )
     }
     try {
-      const available = deviceSerials()
+      const available = devices().filter((device) => device.state === 'device')
       onlineDevices = available.length
-      newDevices = available.filter((candidate) => !previousSerials.has(candidate)).length
-      const serial = findManagedEmulatorSerial(available, previousSerials, avdName, (candidate) =>
-        adb(['emu', 'avd', 'name'], { timeout: 3_000 }, candidate),
+      newDevices = available.filter((device) => !previousIdentities.has(device.identity)).length
+      const serial = findManagedEmulatorSerial(
+        available,
+        previousIdentities,
+        avdName,
+        (candidate) => adb(['emu', 'avd', 'name'], { timeout: 3_000 }, candidate),
       )
       if (
         serial &&
@@ -117,17 +117,11 @@ const stopEmulator = async (child, serial) => {
     child.kill('SIGKILL')
     await awaitExit(5_000)
   }
+  if (!exited()) throw new Error('Owned emulator did not exit after shutdown.')
 }
 
-const uninstallIfPresent = (serial) => {
-  try {
-    if (adb(['shell', 'pm', 'path', packageName], { timeout: 10_000 }, serial).trim()) {
-      run(adbPath, ['-s', serial, 'uninstall', packageName])
-    }
-  } catch {
-    // The package is not installed.
-  }
-}
+const uninstallIfPresent = (serial) =>
+  removeInstalledTestPackage((args, options) => adb(args, options, serial), packageName)
 
 const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
   const profileEnvironment = selected.sdkRoot
@@ -138,7 +132,7 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
       }
     : adbEnvironment
   create(selected, profileEnvironment)
-  const previousSerials = new Set(deviceSerials(false))
+  const previousIdentities = new Set(devices().map((device) => device.identity))
   const selectedEmulatorPath = emulatorExecutable(profileEnvironment, adbEnvironment)
   const child = spawn(
     selectedEmulatorPath,
@@ -150,7 +144,7 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
   )
   let serial
   try {
-    serial = await waitForBoot(child, selected.avdName, previousSerials)
+    serial = await waitForBoot(child, selected.avdName, previousIdentities)
     adb(['shell', 'settings', 'put', 'global', 'hide_error_dialogs', '1'], {}, serial)
     if (uninstall) uninstallIfPresent(serial)
     await prepare?.(serial)
@@ -359,7 +353,7 @@ const runThreeWay = async () => {
       avdName: 'constellation-api36-play-peer',
     })
     for (const device of [first, second]) {
-      run(adbPath, ['-s', device.serial, 'install', '-r', threeWayApk])
+      run(adbPath, ['-s', device.serial, 'install', '-r', threeWayApk], { env: adbEnvironment })
     }
     run(
       process.execPath,

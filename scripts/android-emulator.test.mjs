@@ -11,7 +11,9 @@ import {
   emulatorArguments,
   emulatorExecutable,
   findManagedEmulatorSerial,
+  parseAdbDevices,
   profile,
+  removeInstalledTestPackage,
 } from './android-emulator.mjs'
 
 test('resolves Android tools from ANDROID_HOME', () => {
@@ -23,31 +25,76 @@ test('resolves Android tools from ANDROID_HOME', () => {
   )
 })
 
-test('selects only the newly launched owned emulator, not another device on shared ADB', () => {
-  const serials = [
-    'physical-device',
-    'emulator-5554',
-    'emulator-5556',
-    'emulator-5558',
-    'emulator-5560',
-  ]
-  const previous = new Set(['emulator-5554'])
+test('selects only the newly launched owned emulator, including a reused serial after reboot', () => {
+  const devices = parseAdbDevices(
+    [
+      'List of devices attached',
+      'physical-device device transport_id:1',
+      'emulator-5554 device transport_id:2',
+      'emulator-5556 device transport_id:3',
+      'emulator-5558 device transport_id:4',
+      'emulator-5560 device transport_id:5',
+      '',
+    ].join('\n'),
+  )
+  const previous = new Set(['emulator-5554:transport_id:2', 'emulator-5560:transport_id:1'])
   const readAvdName = (serial) => {
     if (serial === 'emulator-5556') throw new Error('not ready')
     return serial === 'emulator-5560' ? 'constellation-api36-play\nOK\n' : 'another-project\nOK\n'
   }
   assert.equal(
-    findManagedEmulatorSerial(serials, previous, 'constellation-api36-play', readAvdName),
+    findManagedEmulatorSerial(devices, previous, 'constellation-api36-play', readAvdName),
     'emulator-5560',
   )
   assert.equal(
     findManagedEmulatorSerial(
-      serials.slice(0, -1),
+      devices.slice(0, -1),
       previous,
       'constellation-api36-play',
       readAvdName,
     ),
     undefined,
+  )
+  assert.equal(
+    findManagedEmulatorSerial(
+      devices,
+      new Set([...previous, 'emulator-5560:transport_id:5']),
+      'constellation-api36-play',
+      readAvdName,
+    ),
+    undefined,
+  )
+})
+
+test('clears a retained package but never treats an ADB failure as absence', () => {
+  const name = 'space.taskyon.constellation'
+  let installed = true
+  let uninstalls = 0
+  const adb = (args) => {
+    if (args[0] === 'uninstall') {
+      uninstalls += 1
+      installed = false
+      return 'Success\n'
+    }
+    return installed ? `package:${name}\n` : `package:${name}.other\n`
+  }
+  removeInstalledTestPackage(adb, name)
+  removeInstalledTestPackage(adb, name)
+  assert.equal(uninstalls, 1)
+  assert.throws(
+    () =>
+      removeInstalledTestPackage(() => {
+        throw new Error('ADB offline')
+      }, name),
+    /ADB offline/,
+  )
+  assert.throws(
+    () =>
+      removeInstalledTestPackage(
+        (args) => (args[0] === 'uninstall' ? 'Failure' : `package:${name}`),
+        name,
+      ),
+    /Could not remove/,
   )
 })
 
