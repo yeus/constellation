@@ -21,6 +21,7 @@ export const summarizeAndroidNativeCrash = (logs, applicationId) => ({
     ['allocation', /Out of memory|Failed to allocate|Scudo ERROR/i],
     ['thread-start', /pthread_create|failed to create.*thread/i],
     ['v8-fatal', /Fatal error.*v8|v8.*Fatal error/i],
+    ['skia-glyph-mask', /SkGlyph\.cpp[^\r\n]*Unknown mask format/i],
     ['fdsan', /fdsan/i],
   ]
     .filter(([, pattern]) => pattern.test(logs))
