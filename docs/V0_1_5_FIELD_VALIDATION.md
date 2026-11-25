@@ -1,6 +1,8 @@
 # v0.1.5 — field validation of the release candidate
 
-`field-validation` in `SYSTEM_DEFINITION.csv` means the implementation exists and the available automated acceptance checks have passed; the remaining evidence requires an **installed release candidate used in real conditions**, rather than additional sandbox automation. `implemented` means automated checks are still pending or failing. Neither label authorizes final release.
+`field-validation` in `SYSTEM_DEFINITION.csv` means the implementation exists and the available automated acceptance checks have passed; the remaining evidence requires manual alpha acceptance and/or an installed release candidate used in real conditions, rather than additional sandbox automation. `implemented` means automated checks are still pending or failing. Neither label authorizes final release.
+
+Follow the release lifecycle in [AGENTS.md](../AGENTS.md). First verify basic installation, permissions, pairing, sharing, navigation, revocation and recovery on an identifiable alpha and obtain maintainer acceptance. Then run the sustained field scenarios below on rc.1. Iterate numbered alpha or RC builds as needed; this checklist does not itself authorize publication.
 
 ## Test record
 
@@ -17,4 +19,4 @@ Record the **exact commit and installed APK**, Android version, manufacturer/OEM
 
 For a failed case, export Share logs from **both** phones after reopening, capture approximate UTC incident time and OS event/battery settings, and link the relevant requirement ID in `SYSTEM_DEFINITION.csv`. Keep it at `field-validation` until that real-world check passes; if a runnable emulator/browser regression is found failing, move it back to `implemented` and add a focused test.
 
-When all required field cases pass on the **same source revision as rc.1**, update the catalog's verification evidence and promote the relevant requirements to `tracked`. No version bump or release should be inferred from this checklist.
+When all required field cases pass on the same source revision as the accepted RC (rc.1 or a later numbered candidate), update the catalog's verification evidence and promote the relevant requirements to `tracked` where maintained regression coverage exists. No version bump or release should be inferred from this checklist.
