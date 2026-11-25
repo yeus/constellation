@@ -171,6 +171,7 @@ test('Android diagnostics share a native file rather than requesting clipboard a
   const view = read('src/views/MapView.vue')
   const plugin = read(pluginPath + 'ConstellationAndroidPlugin.kt')
   assert.match(acceptance, /tapAndroidButton\(cdp, 'Share logs as file'\)/)
+  assert.match(acceptance, /readOptionalLogDirectory\(/)
   assert.match(acceptance, /run-as', packageName, 'ls', 'cache\/shared-logs'/)
   assert.match(view, /v-if="!isAndroid" type="button" @click="copyLogs"/)
   assert.match(plugin, /Intent\.ACTION_SEND/)

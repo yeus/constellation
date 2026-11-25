@@ -26,3 +26,28 @@ export const summarizeAndroidNativeCrash = (logs, applicationId) => ({
     .filter(([, pattern]) => pattern.test(logs))
     .map(([category]) => category),
 })
+
+export const readOptionalLogDirectory = (read) => {
+  try {
+    return read()
+  } catch (error) {
+    if (
+      /^ls: cache\/shared-logs: No such file or directory\s*$/.test(
+        String(error?.stderr ?? '').trim(),
+      )
+    )
+      return ''
+    throw error
+  }
+}
+
+export const summarizeNotificationPause = (journal) =>
+  journal
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = line.match(
+        /^\d+ sharing\.pause\.request paused=(true|false);origin=(notification|ui)$/,
+      )
+      return match ? [{ paused: match[1] === 'true', origin: match[2] }] : []
+    })
+    .slice(-20)
