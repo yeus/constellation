@@ -9,7 +9,7 @@ import {
   androidTool,
   create,
   emulatorArguments,
-  emulatorExecutable,
+  emulatorLaunch,
   findManagedEmulatorSerial,
   parseAdbDevices,
   profile,
@@ -117,11 +117,23 @@ test('uses the host emulator binary for an AOSP SDK that contains only a system 
     const executable = path.join(host, 'emulator', 'emulator')
     fs.mkdirSync(path.dirname(executable), { recursive: true })
     fs.writeFileSync(executable, '')
-    assert.equal(emulatorExecutable({ ANDROID_HOME: sdk }, { ANDROID_HOME: host }), executable)
+    const profileEnv = { ANDROID_HOME: sdk }
+    const hostEnv = { ANDROID_HOME: host }
+    assert.deepEqual(emulatorLaunch(profileEnv, hostEnv), {
+      executable,
+      environment: hostEnv,
+    })
     const local = path.join(sdk, 'emulator', 'emulator')
     fs.mkdirSync(path.dirname(local), { recursive: true })
     fs.writeFileSync(local, '')
-    assert.equal(emulatorExecutable({ ANDROID_HOME: sdk }, { ANDROID_HOME: host }), local)
+    assert.deepEqual(emulatorLaunch(profileEnv, hostEnv), {
+      executable,
+      environment: hostEnv,
+    })
+    assert.deepEqual(emulatorLaunch(profileEnv, { ANDROID_HOME: '/missing' }), {
+      executable: local,
+      environment: profileEnv,
+    })
   } finally {
     fs.rmSync(sdk, { recursive: true, force: true })
     fs.rmSync(host, { recursive: true, force: true })

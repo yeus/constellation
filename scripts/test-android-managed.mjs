@@ -7,7 +7,7 @@ import {
   androidTool,
   create,
   emulatorArguments,
-  emulatorExecutable,
+  emulatorLaunch,
   findManagedEmulatorSerial,
   parseAdbDevices,
   profile,
@@ -133,13 +133,13 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
     : adbEnvironment
   create(selected, profileEnvironment)
   const previousIdentities = new Set(devices().map((device) => device.identity))
-  const selectedEmulatorPath = emulatorExecutable(profileEnvironment, adbEnvironment)
+  const launch = emulatorLaunch(profileEnvironment, adbEnvironment)
   const child = spawn(
-    selectedEmulatorPath,
+    launch.executable,
     emulatorArguments(selected, ['-no-window', '-no-boot-anim']),
     {
       stdio: 'ignore',
-      env: profileEnvironment,
+      env: launch.environment,
     },
   )
   let serial
@@ -239,14 +239,23 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
         },
       })
     } catch (error) {
-      const outcomes = adb(['-s', device.serial, 'logcat', '-d', '-s', 'ConstellationRuntime:E'], {
-        env: adbEnvironment,
-      })
+      const read = (args) => {
+        try {
+          return adb(args, { timeout: 10_000 }, device.serial)
+        } catch {
+          return ''
+        }
+      }
+      const outcomes = read(['logcat', '-d', '-s', 'ConstellationRuntime:E'])
         .split(/\r?\n/)
         .flatMap((line) => line.match(/private-state-(?:load|save)-failed:[A-Za-z]+/g) ?? [])
-      if (!outcomes.length) throw error
+      const crash = summarizeAndroidNativeCrash(
+        read(['logcat', '-b', 'crash', '-d', '-t', '200']),
+        packageName,
+      )
       throw new Error(
-        `${error instanceof Error ? error.message : 'Android smoke failed.'} Safe protected-state diagnostics: ${[...new Set(outcomes)].join(', ')}.`,
+        'Android smoke failed. Safe diagnostics: ' +
+          JSON.stringify({ profile: name, protectedState: [...new Set(outcomes)], crash }),
         { cause: error },
       )
     }

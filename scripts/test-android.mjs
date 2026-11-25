@@ -7,7 +7,12 @@ import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 
 import { compileAndroidWebViewExpression } from './android-cdp-source.mjs'
 import { browserProcessEnvironment } from './browser-environment.mjs'
-import { redactAndroidTestError, summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
+import {
+  redactAndroidTestError,
+  summarizeAndroidNativeCrash,
+  summarizeNotificationPause,
+  readOptionalLogDirectory,
+} from './android-test-privacy.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
 import { parsePowerJournal, powerMatrixCases, runPowerMatrixCase } from './android-power-matrix.mjs'
 import {
@@ -1204,6 +1209,96 @@ const clickNotificationAction = async (actionLabel, titleLabel) => {
   adb(['shell', 'input', 'tap', String(Math.round(x)), String(Math.round(y))])
 }
 
+const readNotificationPauseRequests = () => {
+  const directory = 'files/reliability-journal-v1'
+  const files = adb(['shell', 'run-as', packageName, 'ls', directory])
+    .split(/\s+/)
+    .filter((name) => /^\d{4}-\d{2}-\d{2}\.log$/.test(name))
+  return summarizeNotificationPause(
+    files
+      .map((name) => adb(['shell', 'run-as', packageName, 'cat', `${directory}/${name}`]))
+      .join('\n'),
+  )
+}
+
+const readPauseIdentity = (cdp) =>
+  cdp.evaluate(`(async () => {
+  const status = await window.__TAURI_INTERNALS__.invoke('android_background_share_status');
+  return {
+    paused: status.paused,
+    shares: (status.shares ?? []).map(({ shareId, expiresAt, paused }) => ({ shareId, expiresAt, paused })),
+  };
+})()`)
+
+const verifyNativePause = async (original, paused) => {
+  adb(['shell', 'cmd', 'statusbar', 'collapse'])
+  adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
+  const cdp = await connectCdp()
+  try {
+    await waitFor(
+      async () => {
+        const status = await readPauseIdentity(cdp)
+        return (
+          status.paused === paused &&
+          status.shares.length === 1 &&
+          status.shares[0].shareId === original.shareId &&
+          status.shares[0].expiresAt === original.expiresAt &&
+          (paused ? status.shares[0].paused === 'user' : status.shares[0].paused !== 'user')
+        )
+      },
+      'native pause state and original link identity/expiry',
+      30_000,
+    )
+  } finally {
+    cdp.close()
+  }
+  adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+}
+
+const waitForNotificationPause = async (paused) => {
+  const readState = () => {
+    const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
+    return {
+      resumeAction: dump.includes('"Resume sharing"'),
+      pauseAction: dump.includes('"Pause sharing"'),
+      pausedTitle: dump.includes('Constellation sharing is paused'),
+      activeTitle: dump.includes('Constellation is sharing your location'),
+      oneLink: dump.includes('1 link'),
+      expiry: dump.includes('next ends in'),
+    }
+  }
+  try {
+    await waitFor(
+      () => {
+        const state = readState()
+        return (
+          state.oneLink &&
+          state.expiry &&
+          (paused
+            ? state.pausedTitle && state.resumeAction
+            : state.activeTitle && state.pauseAction) &&
+          readNotificationPauseRequests().some(
+            (request) => request.origin === 'notification' && request.paused === paused,
+          )
+        )
+      },
+      `notification ${paused ? 'Pause' : 'Resume'} sharing action to change the same link`,
+      30_000,
+    )
+  } catch (error) {
+    const requests = readNotificationPauseRequests()
+    throw new Error(
+      'Notification transition failed: ' +
+        JSON.stringify({
+          expectedPaused: paused,
+          ...readState(),
+          requests,
+        }),
+      { cause: error },
+    )
+  }
+}
+
 const runNotificationPauseSmoke = async () => {
   try {
     adb(['shell', 'pm', 'clear', packageName])
@@ -1215,9 +1310,14 @@ const runNotificationPauseSmoke = async () => {
     adb(['shell', 'am', 'start', '-n', `${packageName}/.MainActivity`])
     await wait(1_000)
 
+    let original
     const cdp = await connectCdp()
     try {
       await createBackgroundShareForSmoke(cdp)
+      const status = await readPauseIdentity(cdp)
+      assert.equal(status.paused, false)
+      assert.equal(status.shares.length, 1)
+      original = status.shares[0]
       const cleared =
         await cdp.evaluate(`window.__TAURI_INTERNALS__.invoke('android_clear_old_peers', {
         protection: { peerIds: [], shareIds: [] },
@@ -1238,19 +1338,7 @@ const runNotificationPauseSmoke = async () => {
     )
     await assertNotificationPauseAction()
     await clickNotificationAction('Pause sharing', 'Constellation is sharing your location')
-    await waitFor(
-      () => {
-        const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
-        return (
-          dump.includes('"Resume sharing"') &&
-          dump.includes('Sharing paused') &&
-          dump.includes('1 link') &&
-          dump.includes('next ends in')
-        )
-      },
-      'notification Pause sharing action to pause the link and offer Resume sharing',
-      20_000,
-    )
+    await waitForNotificationPause(true)
     await waitFor(
       () =>
         adb(['shell', 'dumpsys', 'activity', 'services', packageName]).includes(
@@ -1259,19 +1347,10 @@ const runNotificationPauseSmoke = async () => {
       'the foreground service to keep running while sharing is paused',
       20_000,
     )
+    await verifyNativePause(original, true)
     await clickNotificationAction('Resume sharing', 'Constellation sharing is paused')
-    await waitFor(
-      () => {
-        const dump = adb(['shell', 'dumpsys', 'notification', '--noredact'])
-        return (
-          dump.includes('"Pause sharing"') &&
-          dump.includes('1 link') &&
-          !dump.includes('Sharing paused')
-        )
-      },
-      'notification Resume sharing action to resume the same link',
-      20_000,
-    )
+    await waitForNotificationPause(false)
+    await verifyNativePause(original, false)
   } finally {
     try {
       adb(['shell', 'cmd', 'statusbar', 'collapse'])
@@ -6602,7 +6681,9 @@ const main = async () => {
       assert.equal(await tapAndroidButton(cdp, 'Share logs as file'), true)
       await waitFor(
         () => {
-          const filenames = adb(['shell', 'run-as', packageName, 'ls', 'cache/shared-logs'])
+          const filenames = readOptionalLogDirectory(() =>
+            adb(['shell', 'run-as', packageName, 'ls', 'cache/shared-logs']),
+          )
           return /^constellation-logs-\d+\.txt$/m.test(filenames)
         },
         'a native Android session log export file',

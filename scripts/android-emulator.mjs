@@ -28,17 +28,13 @@ export const androidTool = (name, environment = process.env) => {
   return sdk ? path.join(sdk, ...segments) : name
 }
 
-// AOSP images can live in a minimal SDK root without their own emulator binary.
-// Keep the profile SDK for system-image resolution, but use the host toolchain
-// when that isolated SDK does not provide its own executable.
-export const emulatorExecutable = (
-  profileEnvironment = process.env,
-  hostEnvironment = process.env,
-) => {
-  const local = androidTool('emulator', profileEnvironment)
-  if (fs.existsSync(local)) return local
+// An isolated SDK may contain only an image. The emulator needs the SDK
+// containing its binary, while -sysdir independently selects the image.
+export const emulatorLaunch = (profileEnvironment = process.env, hostEnvironment = process.env) => {
   const host = androidTool('emulator', hostEnvironment)
-  if (fs.existsSync(host)) return host
+  if (fs.existsSync(host)) return { executable: host, environment: hostEnvironment }
+  const local = androidTool('emulator', profileEnvironment)
+  if (fs.existsSync(local)) return { executable: local, environment: profileEnvironment }
   throw new Error(`Android emulator binary unavailable in profile or host SDK: ${local}`)
 }
 

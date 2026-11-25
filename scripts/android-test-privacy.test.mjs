@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { redactAndroidTestError, summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
+import {
+  redactAndroidTestError,
+  summarizeAndroidNativeCrash,
+  summarizeNotificationPause,
+  readOptionalLogDirectory,
+} from './android-test-privacy.mjs'
 
 test('native crash summaries retain only allowlisted categories', () => {
   const logs = [
@@ -27,5 +32,39 @@ test('redacts a share capability from a navigation failure without losing the fa
   assert.equal(
     redactAndroidTestError(error),
     'page.goto: navigating to "http://127.0.0.1:4173/#share=<redacted>"\n at runShareFlow (test-android.mjs:1042)',
+  )
+})
+
+test('only a missing export directory is a pending log file', () => {
+  assert.equal(
+    readOptionalLogDirectory(() => {
+      throw Object.assign(new Error('missing'), {
+        stderr: 'ls: cache/shared-logs: No such file or directory',
+      })
+    }),
+    '',
+  )
+  assert.equal(
+    readOptionalLogDirectory(() => 'constellation-logs-123.txt'),
+    'constellation-logs-123.txt',
+  )
+  assert.throws(
+    () =>
+      readOptionalLogDirectory(() => {
+        throw new Error('device offline')
+      }),
+    /device offline/,
+  )
+})
+
+test('notification diagnostics allowlist pause events and omit unrelated journal content', () => {
+  assert.deepEqual(
+    summarizeNotificationPause(
+      '123 sharing.pause.request paused=true;origin=notification\n124 sharing.pause.request paused=false;origin=ui\n125 sharing.pause.request paused=true;origin=notification;secret=private\n126 unrelated private-data',
+    ),
+    [
+      { paused: true, origin: 'notification' },
+      { paused: false, origin: 'ui' },
+    ],
   )
 })
