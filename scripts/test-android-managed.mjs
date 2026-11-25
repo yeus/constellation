@@ -23,6 +23,7 @@ import {
 import { androidApkCandidates, managedAndroidApkPath } from './copy-android-apk.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
 import { summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
+import { EmulatorCleanupError, runAcceptanceMatrix } from './android-acceptance-matrix.mjs'
 
 const packageName = 'space.taskyon.constellation'
 const apk = managedAndroidApkPath(process.cwd())
@@ -118,7 +119,7 @@ const stopEmulator = async (child, serial) => {
     child.kill('SIGKILL')
     await awaitExit(5_000)
   }
-  if (!exited()) throw new Error('Owned emulator did not exit after shutdown.')
+  if (!exited()) throw new EmulatorCleanupError('Owned emulator did not exit after shutdown.')
 }
 
 const uninstallIfPresent = (serial) =>
@@ -259,11 +260,11 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
         read(['logcat', '-b', 'crash', '-d', '-t', '200']),
         packageName,
       )
-      throw new Error(
+      const diagnostic =
         'Android smoke failed. Safe diagnostics: ' +
-          JSON.stringify({ profile: name, protectedState: [...new Set(outcomes)], crash }),
-        { cause: error },
-      )
+        JSON.stringify({ profile: name, protectedState: [...new Set(outcomes)], crash })
+      console.error(diagnostic)
+      throw new Error(diagnostic, { cause: error })
     }
   } finally {
     if (mockNetwork) resetMockNetworkLocation(device.serial)
@@ -735,29 +736,41 @@ const main = async () => {
       throw new Error('The full --skip-build matrix requires both retained Android debug APKs.')
     }
   }
-  await runProfile('modern')
   if (!process.argv.includes('--skip-build')) buildThreeWayApk()
-  await runProfile(
-    'compat',
-    undefined,
-    ['--local-share-flow', '--network-location-fixture'],
-    threeWayApk,
-  )
-  await runProfile('aosp', undefined, ['--no-gms-flow'])
-  await runProfile('modern', undefined, ['--notification-pause-smoke'])
-  await runProfile('modern', undefined, ['--permission-denial-smoke'])
-  await runProfile('modern', undefined, ['--location-off-smoke'])
-  await runProfile('modern', undefined, ['--expiry-smoke'])
-  await runProfile('modern', undefined, ['--foreground-only-smoke'])
-  await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
-  await runProfile('modern', undefined, ['--native-fallback-smoke'])
-  await runProfile('modern', undefined, ['--ui-policy-smoke'])
-
-  await runProfile('modern', undefined, ['--power-network-smoke'], threeWayApk)
-  await runProfile('modern', undefined, ['--service-restart-smoke', '--local-relay'], threeWayApk)
-  await runManagedRestore('boot')
-  await runManagedRestore('update')
-  console.log('Android API 29 stock/no-GMS and API 36 location-sharing tests passed.')
+  const modern = (name, args = [], selectedApk = apk) => ({
+    name,
+    run: () => runProfile('modern', undefined, args, selectedApk),
+  })
+  await runAcceptanceMatrix([
+    modern('api36-play'),
+    {
+      name: 'api29-play',
+      run: () =>
+        runProfile(
+          'compat',
+          undefined,
+          ['--local-share-flow', '--network-location-fixture'],
+          threeWayApk,
+        ),
+    },
+    { name: 'api29-aosp', run: () => runProfile('aosp', undefined, ['--no-gms-flow']) },
+    ...[
+      'notification-pause',
+      'permission-denial',
+      'location-off',
+      'expiry',
+      'foreground-only',
+      'multiple-source-links',
+      'native-fallback',
+      'ui-policy',
+    ].map((name) => modern(name, [`--${name}-smoke`])),
+    modern('power-network', ['--power-network-smoke'], threeWayApk),
+    modern('service-restart', ['--service-restart-smoke', '--local-relay'], threeWayApk),
+    ...['boot', 'update'].map((reason) => ({
+      name: reason,
+      run: () => runManagedRestore(reason),
+    })),
+  ])
 }
 
 main().catch((error) => {

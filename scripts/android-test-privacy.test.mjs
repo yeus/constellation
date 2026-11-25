@@ -26,6 +26,15 @@ test('native crash summaries retain only allowlisted categories', () => {
   assert.equal(summarizeAndroidNativeCrash(logs, 'other.application').appProcess, false)
 })
 
+test('recognizes the stock WebView Skia glyph-mask abort without exposing the raw log', () => {
+  const summary = summarizeAndroidNativeCrash(
+    'SkGlyph.cpp: fatal error: Unknown mask format. private-value',
+    'synthetic.application',
+  )
+  assert.deepEqual(summary.categories, ['skia-glyph-mask'])
+  assert.equal(JSON.stringify(summary).includes('private-value'), false)
+})
+
 test('redacts a share capability from a navigation failure without losing the failure site', () => {
   const error =
     'page.goto: navigating to "http://127.0.0.1:4173/#share=syntheticSecret_42"\n at runShareFlow (test-android.mjs:1042)'
