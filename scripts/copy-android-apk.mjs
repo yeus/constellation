@@ -18,6 +18,15 @@ export const androidArtifactName = (mode, target) => {
   return `constellation-android-${mode}-${architecture}.apk`
 }
 
+export const managedAndroidApkPath = (root, localRelay = false) =>
+  path.join(
+    root,
+    'src-tauri/target',
+    localRelay
+      ? 'constellation-android-e2e-local-x86_64.apk'
+      : androidArtifactName('debug', 'x86_64'),
+  )
+
 const apkPath = (root, variant, filename) =>
   path.join(root, 'src-tauri/gen/android/app/build/outputs/apk', variant, filename)
 
@@ -73,6 +82,11 @@ const copyAndroidApk = (root, mode, target) => {
   const destination = path.join(outputDirectory, androidArtifactName(mode, target))
   fs.mkdirSync(outputDirectory, { recursive: true })
   fs.copyFileSync(source, destination)
+  if (mode === 'debug' && target === 'x86_64') {
+    const retained = managedAndroidApkPath(root)
+    fs.mkdirSync(path.dirname(retained), { recursive: true })
+    fs.copyFileSync(source, retained)
+  }
   if (mode === 'release') {
     const hash = createHash('sha256').update(fs.readFileSync(destination)).digest('hex')
     fs.writeFileSync(`${destination}.sha256`, `${hash}  ${path.basename(destination)}\n`)

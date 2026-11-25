@@ -133,6 +133,9 @@ export const profile = (name, environment = process.env) => {
     return {
       avdName: 'constellation-api29',
       systemImage: 'system-images;android-29;google_apis_playstore;x86_64',
+      ...(environment.ANDROID_COMPAT_SDK_ROOT
+        ? { sdkRoot: environment.ANDROID_COMPAT_SDK_ROOT }
+        : {}),
     }
   if (name === 'aosp')
     return {
@@ -146,6 +149,17 @@ export const profile = (name, environment = process.env) => {
       systemImage: 'system-images;android-36;google_apis_playstore;x86_64',
     }
   throw new Error(`Unknown Android emulator profile: ${name}`)
+}
+
+export const requireProfileImage = (selected, environment = process.env) => {
+  const sdk = selected.sdkRoot ?? environment.ANDROID_HOME ?? environment.ANDROID_SDK_ROOT
+  if (!sdk) return
+  const image = path.join(sdk, ...selected.systemImage.split(';'), 'system.img')
+  if (!fs.existsSync(image)) {
+    throw new Error(
+      `Android system image is missing for ${selected.avdName}: ${selected.systemImage}. Check the selected SDK root.`,
+    )
+  }
 }
 
 export const emulatorArguments = (selected, extraArguments = []) => [

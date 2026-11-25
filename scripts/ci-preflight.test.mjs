@@ -167,9 +167,23 @@ test('full preflight runs Quality, browser, Pages, and screenshots on the commit
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(
       recorded(f),
-      [...quality, ...browser].map((command) => `yarn ${command}`),
+      [quality[0], 'check:map-source', ...quality.slice(1), ...browser].map(
+        (command) => `yarn ${command}`,
+      ),
     )
     assert.match(result.stdout, /Committed revision validated/)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('preflight stops on an inaccessible deployment map before the expensive quality checks', () => {
+  const f = fixture()
+  try {
+    const result = run(f, 'preflight', { CI_FIXTURE_FAIL_ON: 'check:map-source' })
+    assert.notEqual(result.status, 0)
+    assert.deepEqual(recorded(f), ['yarn install --immutable', 'yarn check:map-source'])
+    assert.equal(fs.existsSync(lockPath(f)), false)
   } finally {
     f.cleanup()
   }
@@ -185,7 +199,9 @@ test('preflight fails on a failed CI step or missing screenshot artifacts', () =
       if (env.CI_FIXTURE_FAIL_ON) {
         assert.deepEqual(
           recorded(f),
-          quality.slice(0, 4).map((command) => `yarn ${command}`),
+          [quality[0], 'check:map-source', ...quality.slice(1, 4)].map(
+            (command) => `yarn ${command}`,
+          ),
         )
       } else {
         assert.match(result.stderr, /Screenshot/i)

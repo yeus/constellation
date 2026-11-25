@@ -150,7 +150,9 @@ jobs:
           name: android-standby-debug-apk
           path: dist
       - name: Prepare the same local-relay build for both independent devices
-        run: cp dist/constellation-android-debug-x86_64.apk dist/constellation-android-e2e-local-x86_64.apk
+        run: |
+          mkdir -p src-tauri/target
+          cp dist/constellation-android-debug-x86_64.apk src-tauri/target/constellation-android-e2e-local-x86_64.apk
       - name: Single-recipient secure comparison and explicit source approval
         run: corepack yarn test:android:managed --single-viewer-comparison-smoke --skip-build
       - name: Sender and receiver Doze exit with authenticated ACK
