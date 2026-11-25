@@ -13,6 +13,7 @@ import {
   findManagedEmulatorSerial,
   parseAdbDevices,
   profile,
+  requireProfileImage,
   removeInstalledTestPackage,
 } from './android-emulator.mjs'
 
@@ -175,6 +176,27 @@ test('defines the supported Android compatibility profiles', () => {
     systemImage: 'system-images;android-36;google_apis_playstore;x86_64',
   })
   assert.throws(() => profile('unknown'), /Unknown Android emulator profile/)
+})
+
+test('supports a separate API29 Play SDK and checks the expected image before boot', (t) => {
+  const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-compat-sdk-'))
+  t.after(() => fs.rmSync(sdk, { recursive: true, force: true }))
+  const selected = profile('compat', { ANDROID_COMPAT_SDK_ROOT: sdk })
+  const directory = path.join(sdk, 'system-images/android-29/google_apis_playstore/x86_64')
+  assert.equal(selected.sdkRoot, sdk)
+  assert.throws(
+    () => requireProfileImage(selected, { ANDROID_HOME: '/different-sdk' }),
+    /system image is missing/,
+  )
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, 'system.img'), 'synthetic')
+  assert.doesNotThrow(() => requireProfileImage(selected, { ANDROID_HOME: '/different-sdk' }))
+  assert.deepEqual(emulatorArguments(selected).slice(0, 4), [
+    '-avd',
+    selected.avdName,
+    '-sysdir',
+    directory,
+  ])
 })
 
 test('accepts an existing AVD without requiring avdmanager', () => {

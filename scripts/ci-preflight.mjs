@@ -128,7 +128,10 @@ const main = () => {
         ? `Validating committed revision ${revision}`
         : 'Running Quality checks on the working tree.',
     )
-    for (const command of quickCommands) yarn(root, command)
+    const [install, ...quality] = quickCommands
+    yarn(root, install)
+    if (mode === 'preflight') yarn(root, ['check:map-source'])
+    for (const command of quality) yarn(root, command)
     if (mode === 'quick') return
 
     for (const command of browserCommands) yarn(root, command)

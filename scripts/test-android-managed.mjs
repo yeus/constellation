@@ -11,6 +11,7 @@ import {
   findManagedEmulatorSerial,
   parseAdbDevices,
   profile,
+  requireProfileImage,
   removeInstalledTestPackage,
 } from './android-emulator.mjs'
 import {
@@ -19,13 +20,13 @@ import {
   networkFixturePackage,
   networkFixtureReceiver,
 } from './android-network-location-fixture.mjs'
-import { androidApkCandidates } from './copy-android-apk.mjs'
+import { androidApkCandidates, managedAndroidApkPath } from './copy-android-apk.mjs'
 import { parseStandbySoakMinutes } from './android-standby-soak.mjs'
 import { summarizeAndroidNativeCrash } from './android-test-privacy.mjs'
 
 const packageName = 'space.taskyon.constellation'
-const apk = 'dist/constellation-android-debug-x86_64.apk'
-const threeWayApk = 'dist/constellation-android-e2e-local-x86_64.apk'
+const apk = managedAndroidApkPath(process.cwd())
+const threeWayApk = managedAndroidApkPath(process.cwd(), true)
 const localRelayAddress = '/ip4/127.0.0.1/tcp/9111/ws'
 
 const run = (executable, args, options = {}) =>
@@ -131,6 +132,7 @@ const startProfile = async (selected, prepare, { uninstall = true } = {}) => {
         ANDROID_SDK_ROOT: selected.sdkRoot,
       }
     : adbEnvironment
+  requireProfileImage(selected, profileEnvironment)
   create(selected, profileEnvironment)
   const previousIdentities = new Set(devices().map((device) => device.identity))
   const launch = emulatorLaunch(profileEnvironment, adbEnvironment)
@@ -218,6 +220,10 @@ const resetMockNetworkLocation = (serial) => {
 }
 
 const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
+  if (!fs.existsSync(selectedApk))
+    throw new Error(
+      'Required managed Android APK is missing; build the matching debug APK before using --skip-build.',
+    )
   const mockNetwork = name === 'compat' && testArgs.includes('--network-location-fixture')
   const device = await startProfile(profile(name), prepare)
   try {
@@ -724,8 +730,13 @@ const main = async () => {
     console.log('Android API 29 compatibility sharing and locked-screen delivery passed.')
     return
   }
+  if (process.argv.includes('--skip-build')) {
+    if (!fs.existsSync(apk) || !fs.existsSync(threeWayApk)) {
+      throw new Error('The full --skip-build matrix requires both retained Android debug APKs.')
+    }
+  }
   await runProfile('modern')
-  if (!fs.existsSync(threeWayApk)) buildThreeWayApk()
+  if (!process.argv.includes('--skip-build')) buildThreeWayApk()
   await runProfile(
     'compat',
     undefined,
@@ -741,7 +752,7 @@ const main = async () => {
   await runProfile('modern', undefined, ['--multiple-source-links-smoke'])
   await runProfile('modern', undefined, ['--native-fallback-smoke'])
   await runProfile('modern', undefined, ['--ui-policy-smoke'])
-  if (!fs.existsSync(threeWayApk)) buildThreeWayApk()
+
   await runProfile('modern', undefined, ['--power-network-smoke'], threeWayApk)
   await runProfile('modern', undefined, ['--service-restart-smoke', '--local-relay'], threeWayApk)
   await runManagedRestore('boot')

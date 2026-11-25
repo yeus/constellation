@@ -17,8 +17,7 @@ import {
   type PmtilesCacheStorageHandle,
 } from './pmtilesCacheStorage.ts'
 
-export const DEFAULT_WORLD_PMTILES_URL =
-  'https://eu2.contabostorage.com/af09f5440e00407ca6d2d275a4a4dc89:protomaps/world.pmtiles'
+export { DEFAULT_WORLD_PMTILES_URL } from './pmtilesSource.ts'
 
 export type MapFamily = 'default' | 'minimalist'
 export type MapTheme = 'light' | 'dark'

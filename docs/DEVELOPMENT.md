@@ -41,6 +41,19 @@ commands as the corresponding GitHub Actions jobs; this does not reproduce
 GitHub-only deployment, signing secrets, or differences in runner images and
 Node versions. For targeted browser testing, use `yarn test:e2e`.
 
+After immutable dependency installation, full preflight runs `yarn check:map-source` to check the configured
+public PMTiles archive (anonymous 127-byte HTTP range, v3 signature, browser
+CORS). An unavailable source fails fast; `yarn ci:quick` remains independent
+of that deployment check. For the Android managed runner, normal x86_64
+debug and local-relay test APKs are retained in `src-tauri/target/` outside
+the web output directory. The normal debug build still copies its APK to
+`dist/` for distribution. `--skip-build` requires the matching retained
+APK(s); do not copy an arbitrary Gradle output over either named artifact.
+When SDKs are split, set `ANDROID_COMPAT_SDK_ROOT` and `ANDROID_AOSP_SDK_ROOT`
+to the API29 Play and AOSP image SDKs; the runner uses the complete host SDK's
+emulator with the explicit profile image directory. Missing images fail before
+launching an emulator.
+
 The end-to-end browser launcher removes a Nix-only library override before
 starting Playwright's downloaded Chromium. This prevents host Chromium from
 loading an incompatible Nix glibc. Browser P2P tests start a disposable
@@ -354,6 +367,18 @@ welcome, share settings before a private link exists, and Following with the
 fictional River and Forest locations. It grants only synthetic geolocation and
 waits for the map and interface. Map failures fail capture. No production peers,
 share URLs, QR codes, videos, or traces are published.
+If `yarn check:map-source` reports HTTP 401/403, check that the existing
+Contabo Object Storage account and EU endpoint are active, that the
+`protomaps/world.pmtiles` object exists, and that anonymous read access
+is enabled **for this intended public map object only**. Inspect the
+existing ACL/policy and CORS configuration in the storage panel before
+changing anything; do not make unrelated objects or the entire account
+public, and never embed an S3 key or expiring signed URL in the app.
+Use Contabo's object-sharing settings or a narrowly scoped GetObject
+policy, preserving all other policy entries. Re-run the anonymous probe
+and `yarn screenshots` after the change; the latter still checks real map
+rendering, not a mock archive.
+Reference: https://docs.contabo.com/docs/storage/object-storage/
 
 Outputs are ignored in `.screenshots/`:
 

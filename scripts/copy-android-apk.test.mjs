@@ -35,6 +35,32 @@ test('debug candidates allow Tauri universal and plain outputs', () => {
   )
 })
 
+test('retains the normal emulator APK independently of web dist cleanup', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-apk-copy-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const source = androidApkCandidates(root, 'debug')[0]
+  fs.mkdirSync(path.dirname(source), { recursive: true })
+  fs.writeFileSync(source, 'synthetic emulator APK')
+  const script = fileURLToPath(new URL('./copy-android-apk.mjs', import.meta.url))
+  const result = spawnSync(process.execPath, [script, 'debug', 'x86_64'], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(
+    fs.readFileSync(path.join(root, 'dist/constellation-android-debug-x86_64.apk'), 'utf8'),
+    'synthetic emulator APK',
+  )
+  fs.rmSync(path.join(root, 'dist'), { recursive: true, force: true })
+  assert.equal(
+    fs.readFileSync(
+      path.join(root, 'src-tauri/target/constellation-android-debug-x86_64.apk'),
+      'utf8',
+    ),
+    'synthetic emulator APK',
+  )
+})
+
 test('release copy rejects an APK whose signature fails verification', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'constellation-apk-copy-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

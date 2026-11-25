@@ -14,6 +14,7 @@
   "scripts": {
     "ci:quick": "node scripts/ci-preflight.mjs quick",
     "ci:preflight": "node scripts/ci-preflight.mjs preflight",
+    "check:map-source": "node scripts/check-map-source.mjs",
     "build:vendor": "yarn workspace @taskyon/diagnostics build && yarn workspace @taskyon/protocol build && yarn workspace @taskyon/p2p-core build && yarn workspace @taskyon/pmtiles-cache build",
     "icons:generate": "tauri icon assets/icon-manifest.json -o src-tauri/icons",
     "dev": "yarn build:vendor && vite",
