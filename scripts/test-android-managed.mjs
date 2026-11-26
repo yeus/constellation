@@ -483,6 +483,30 @@ const main = async () => {
     console.log('Two sequential Android protected-state saves completed.')
     return
   }
+  if (process.argv.includes('--browser-android-comparison-smoke')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile(
+      'modern',
+      undefined,
+      ['--local-share-flow', '--browser-android-comparison-smoke'],
+      threeWayApk,
+    )
+    console.log('Android-to-browser fresh-letter comparison and gated admission passed.')
+    return
+  }
+  if (process.argv.includes('--android-browser-reverse-comparison-smoke')) {
+    if (!process.argv.includes('--skip-build')) buildThreeWayApk()
+    if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')
+    await runProfile(
+      'modern',
+      undefined,
+      ['--local-share-flow', '--android-browser-reverse-comparison-smoke'],
+      threeWayApk,
+    )
+    console.log('Browser-to-Android fresh-letter comparison and gated admission passed.')
+    return
+  }
   if (process.argv.includes('--local-share-flow')) {
     if (!process.argv.includes('--skip-build')) buildThreeWayApk()
     if (!fs.existsSync(threeWayApk)) throw new Error('Build the local-relay Android APK first.')

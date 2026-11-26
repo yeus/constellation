@@ -142,7 +142,10 @@ test('native single-recipient comparison remains a maintained two-emulator gate'
 })
 
 test('API 29 synthetic locations arrive after viewer admission enables the native watch', () => {
-  const acceptance = read('scripts/test-android.mjs')
+  const script = read('scripts/test-android.mjs')
+  const shareFlowStart = script.indexOf('const runShareFlow = async')
+  assert.ok(shareFlowStart >= 0, 'shared Android/browser flow must be present')
+  const acceptance = script.slice(shareFlowStart)
   const viewer = acceptance.indexOf('await startBrowserLocationPreview(viewer)')
   const admitted = acceptance.indexOf(
     "'the first authenticated viewer before injecting a synthetic location fix'",

@@ -2793,11 +2793,28 @@ const followOnAndroid = async (
     assert.equal(await clickButton(cdp, 'Not now'), true, 'dismiss optional peer saving')
     return false
   }
-  assert.equal(
-    await tapAndroidButton(cdp, 'Add peer'),
-    true,
-    'save authorized Android peer with a touch',
-  )
+  if (!(await tapAndroidButton(cdp, 'Add peer'))) {
+    // Inspect only touch geometry and UI categories; not invitation or peer data.
+    const state = await cdp.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find((candidate) => candidate.textContent?.trim() === 'Add peer')
+      const rect = button?.getBoundingClientRect()
+      const center = rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+      const hit = center && document.elementFromPoint(center.x, center.y)
+      return {
+        previewPresent: Boolean(document.querySelector('[aria-label="Location preview"]')),
+        peerListPresent: Boolean(document.querySelector('.peer-list')),
+        buttonPresent: Boolean(button),
+        disabled: button?.disabled ?? null,
+        width: rect?.width ?? null,
+        height: rect?.height ?? null,
+        hitSameButton: Boolean(hit && (hit === button || button?.contains(hit))),
+        hitTag: hit?.tagName ?? null,
+        hitClass: typeof hit?.className === 'string' ? hit.className.slice(0, 90) : null,
+      }
+    })()`)
+    throw new Error(`Android Add peer touch target obstructed: ${JSON.stringify(state)}`)
+  }
   try {
     await waitFor(
       () => cdp.evaluate(`Boolean(document.querySelector('[aria-label="Peer added"]'))`),
@@ -2950,11 +2967,14 @@ const openBrowserPeerFilter = async (page, filter) => {
   return peers
 }
 
-const createBrowserStarShare = async (page, name, { persistent = false } = {}) => {
+const createBrowserStarShare = async (page, name, { persistent = false, capacity = 10 } = {}) => {
   const peers = await openBrowserPeerList(page)
   await peers.getByRole('button', { name: 'Share location', exact: true }).click()
   await page.getByRole('textbox', { name: 'Name to share' }).fill(name)
-  await page.getByRole('dialog').getByRole('button', { name: '10', exact: true }).click()
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: String(capacity), exact: true })
+    .click()
   if (persistent) {
     await page.getByRole('dialog').getByRole('button', { name: 'Until stopped' }).click()
     await page
@@ -4446,6 +4466,153 @@ const verifyNativeAutomaticReturn = async (cdp, browser, shareUrl) => {
   console.log(
     '[android-test] same-link group accepted a second return without another prompt or viewer loop',
   )
+}
+
+const runAndroidBrowserComparisonSmoke = async (source, browser) => {
+  // A real Android background publisher and an independent Chromium viewer.
+  // In particular, this is not two browser tabs or two emulated Android apps.
+  const sourceLink = await createAndroidShare(source, 'Synthetic Android source', { capacity: 1 })
+  const context = await browser.newContext({
+    geolocation: { latitude: 40.0002, longitude: -70.0002 },
+    permissions: ['geolocation'],
+  })
+  try {
+    const viewer = await context.newPage()
+    const invitation = new URL(sourceLink)
+    await viewer.goto(`http://127.0.0.1:4173/${invitation.hash}`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90_000,
+    })
+    const approval = '[aria-label="Viewer access request"]'
+    const preview = await startBrowserLocationPreview(viewer)
+    await preview.getByText('Waiting for sender approval').waitFor({ timeout: 60_000 })
+    const browserLetters = () =>
+      preview
+        .locator('.device-comparison-letters')
+        .textContent()
+        .then((text) => text?.trim() ?? '')
+    const androidLetters = () =>
+      source.evaluate(
+        `document.querySelector('${approval} .device-comparison-letters')?.textContent?.trim() ?? ''`,
+      )
+    await waitFor(
+      async () => {
+        const receiver = await browserLetters().catch(() => '')
+        const sender = await androidLetters().catch(() => '')
+        return /^[A-Z]{4}$/.test(receiver) && receiver === sender
+      },
+      'matching authenticated letters on Android source and desktop browser viewer',
+      60_000,
+    )
+    const pending = await readBackgroundTransportSummary(source)
+    assert.equal(pending.viewerCount, 0, 'sender cannot admit viewer before approval')
+    assert.equal(pending.confirmedViewerCount, 0, 'no location receipt before approval')
+    assert.equal(
+      await preview.getByRole('button', { name: 'Add peer' }).count(),
+      0,
+      'browser cannot save a not-yet-authorized peer',
+    )
+    await waitFor(
+      () =>
+        source.evaluate(
+          `[...document.querySelectorAll('${approval} button')].some(
+            (button) => button.textContent?.trim() === 'Approve this device' && !button.disabled
+          )`,
+        ),
+      'enabled Android approval after code comparison',
+      15_000,
+    )
+    assert.equal(await tapAndroidButton(source, 'Approve this device'), true)
+    await waitFor(
+      async () => (await readBackgroundTransportSummary(source)).viewerCount === 1,
+      'exactly one admitted browser viewer',
+      60_000,
+    )
+    injectShareFlowLocation('-70.0011', '40.0011')
+    await preview.getByRole('button', { name: 'Add peer' }).waitFor({ timeout: 60_000 })
+    await preview.getByRole('button', { name: 'Add peer' }).click()
+    await waitFor(
+      async () => (await readBackgroundTransportSummary(source)).confirmedViewerCount === 1,
+      'authenticated location receipt from approved browser viewer',
+      60_000,
+    )
+    console.log(
+      'Android source and browser viewer displayed matching fresh letters before authorization.',
+    )
+  } finally {
+    await context.close()
+  }
+}
+
+const runBrowserAndroidComparisonSmoke = async (viewer, browser) => {
+  // Independent Chromium publisher and Android WebView recipient.
+  const context = await browser.newContext({
+    geolocation: { latitude: 40.0002, longitude: -70.0002 },
+    permissions: ['geolocation'],
+  })
+  try {
+    await waitForNativeApp(viewer, 'Android receiver before browser invitation')
+    await dismissAndroidSettingsSheet(viewer)
+    const sender = await context.newPage()
+    await sender.goto('http://127.0.0.1:4173/', {
+      waitUntil: 'domcontentloaded',
+      timeout: 90_000,
+    })
+    const sourceLink = await createBrowserStarShare(sender, 'Synthetic browser source', {
+      capacity: 1,
+    })
+    await followOnAndroid(viewer, viewer.serial, sourceLink, 1, 'paste', true, {
+      beforeConsent: async () => {
+        assert.equal(
+          await sender.getByRole('region', { name: 'Viewer access request' }).count(),
+          0,
+          'browser sender must not receive a request before Android consent',
+        )
+      },
+      afterConsent: async () => {
+        const approval = sender.getByRole('region', { name: 'Viewer access request' })
+        await approval.waitFor({ state: 'visible', timeout: 60_000 })
+        const receiverLetters = () =>
+          viewer.evaluate(
+            `document.querySelector('[aria-label="Location preview"] .device-comparison-letters')?.textContent?.trim() ?? ''`,
+          )
+        const senderLetters = () =>
+          approval
+            .locator('.device-comparison-letters')
+            .textContent()
+            .then((text) => text?.trim() ?? '')
+        await waitFor(
+          async () => {
+            const receiver = await receiverLetters()
+            const source = await senderLetters().catch(() => '')
+            return /^[A-Z]{4}$/.test(receiver) && receiver === source
+          },
+          'matching authenticated letters on browser sender and Android viewer',
+          60_000,
+        )
+        assert.equal(
+          await viewer.evaluate(
+            `![...document.querySelectorAll('[aria-label="Location preview"] button')].some(
+              (button) => button.textContent?.trim() === 'Add peer'
+            )`,
+          ),
+          true,
+          'Android cannot save an unapproved peer',
+        )
+        await approval.getByRole('button', { name: 'Approve this device' }).click()
+      },
+    })
+    const peers = await openBrowserPeerFilter(sender, 'Sharing')
+    await peers
+      .locator('.peer-list__count')
+      .getByText(/1 connected/)
+      .waitFor({ timeout: 60_000 })
+    console.log(
+      'Browser source and Android viewer displayed matching fresh letters before authorization.',
+    )
+  } finally {
+    await context.close()
+  }
 }
 
 const runShareFlow = async (cdp, browser, options = {}) => {
@@ -6835,6 +7002,14 @@ const main = async () => {
     browser = await chromium.launch({
       env: browserProcessEnvironment(process.env),
     })
+    if (process.argv.includes('--browser-android-comparison-smoke')) {
+      await runAndroidBrowserComparisonSmoke(cdp, browser)
+      return
+    }
+    if (process.argv.includes('--android-browser-reverse-comparison-smoke')) {
+      await runBrowserAndroidComparisonSmoke(cdp, browser)
+      return
+    }
     cdp = await runShareFlow(cdp, browser, {
       skipProcessRestart: process.argv.includes('--no-gms-flow'),
       exactLocationFixture: process.argv.includes('--exact-location-fixture'),
