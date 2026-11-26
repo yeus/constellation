@@ -5,7 +5,7 @@ import type { LocationObservationV1 } from '../location/locationObservation.ts'
 import type { MapCamera } from '../map/mapCamera.ts'
 import type { ShareBatteryPolicy, ShareDraft, ShareNetworkPolicy } from '../shareDraft.ts'
 import type { DeliveryReceiptState } from './deliveryReceipt.ts'
-import type { DeviceComparison } from './deviceComparison.ts'
+import type { DeviceComparison, DeviceComparisonPhase } from './deviceComparison.ts'
 import type { FollowTraceEvent } from './followTrace.ts'
 import type { PeerNamePreference } from './peerNames.ts'
 import type { PrivateState, StoppedViewerRecord } from './privateStore.ts'
@@ -254,7 +254,10 @@ export interface PeerHistoryProtection {
 }
 
 export interface SharingRuntime {
-  startDeviceComparison: (shareId: string) => Promise<void>
+  startDeviceComparison: (
+    shareId: string,
+    onProgress?: (phase: DeviceComparisonPhase) => void,
+  ) => Promise<void>
   confirmDeviceComparison: (shareId: string, challenge: string) => Promise<void>
   cancelDeviceComparison: (shareId: string, challenge: string) => Promise<void>
   networkDiagnostics: () => NetworkDiagnostics

@@ -49,6 +49,16 @@ nonces, codes or identities enter diagnostic logs.
    counter. A 32-bit sample is rejection-sampled into `26^4`; base-26 digits map
    to A-Z. This is a fresh interactive transcript, not an identity-hash prefix.
 
+The sender's absolute `expiresAt` is authenticated in the transcript and
+enforced by the sender's responder. The viewer must **not** directly compare that
+remote wall-clock timestamp with its own clock: clocks can differ even between
+Android and a browser on the same local network. After verification, the viewer
+uses a separate, conservative local deadline of two minutes from sending its
+commit request, not two minutes from receiving the completion response. Both
+sides independently enforce their two-minute windows; the sender still denies
+expired challenges. This change does not skip MAC, identity, replay, or attempt
+checks, and does not change the wire protocol.
+
 An honest viewer hides its nonce until the sender challenge is fixed. An honest
 sender issues an unpredictable challenge after the commitment is fixed. Under
 SHA-256 commitment binding/hiding and HMAC pseudorandomness assumptions, a

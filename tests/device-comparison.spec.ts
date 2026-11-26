@@ -18,6 +18,7 @@ for (const requireApproval of [true, false]) {
     }, requireApproval)
     expect(result).toEqual({
       agreed: true,
+      progressStagesPassed: true,
       automaticConfirmation: false,
       manuallyConfirmed: true,
       cancelled: true,

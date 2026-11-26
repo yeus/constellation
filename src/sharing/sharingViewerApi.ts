@@ -6,10 +6,13 @@ import { suggestedPeerName as generatedFollowName } from '../identity/peerName.t
 export { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
 import {
   DEVICE_COMPARISON_PROTOCOL,
-  COMPARISON_TTL_MS,
   deviceComparisonProtocol,
   createComparisonCommit,
   finishComparison,
+  assertViewerComparisonFollow,
+  viewerComparisonLocalExpiry,
+  type DeviceComparisonPhase,
+  type ViewerComparisonFollowBinding,
   requireComparisonStreamPeer,
   type DeviceComparison,
 } from './deviceComparison.ts'
@@ -313,7 +316,13 @@ const prepareViewerComparison = async (ctx: SharingContext, shareId: string) => 
   const ownPeerId = node.peerId.toString()
   const run: { cancelled: boolean; close?: () => Promise<void> } = { cancelled: false }
   ctx.comparisonRuns.set(shareId, run)
-  return { follow, capability, node, ownPeerId, run }
+  return {
+    expectedFollow: { url: follow.url, sourcePeerId: follow.sourcePeerId },
+    capability,
+    node,
+    ownPeerId,
+    run,
+  }
 }
 
 const COMPARISON_DIAL_TIMEOUT_MS = 20_000
@@ -350,15 +359,26 @@ const openComparisonPort = async (
 const assertComparisonResult = (
   ctx: SharingContext,
   shareId: string,
-  follow: FollowEntry,
+  expectedFollow: ViewerComparisonFollowBinding,
+  ownPeerId: string,
+  capability: ShareCapability,
   run: { cancelled: boolean },
-  result: { expiresAt: number },
+  expiresAt: number,
 ) => {
-  if (run.cancelled) throw new Error('Device comparison was cancelled.')
-  if (Date.now() >= result.expiresAt) throw new Error('Device comparison expired.')
-  if (result.expiresAt > Date.now() + COMPARISON_TTL_MS)
-    throw new Error('Device comparison expiry was invalid.')
-  if (ctx.followed.get(shareId) !== follow)
+  if (Date.now() >= expiresAt) throw new Error('Device comparison expired.')
+  assertViewerComparisonFollow(
+    expectedFollow,
+    ctx.followed.get(shareId),
+    !run.cancelled && ctx.comparisonRuns.get(shareId) === run,
+  )
+  if (
+    !ctx.comparisonPeerIsEligible({
+      shareId,
+      peerId: capability.sourcePeerId,
+      ownPeerId,
+      role: 'viewer',
+    })
+  )
     throw new Error('Device comparison was interrupted by a follow-state change.')
 }
 
@@ -385,37 +405,55 @@ const storeViewerComparison = (
 const finishViewerComparison = async (
   ctx: SharingContext,
   shareId: string,
-  follow: FollowEntry,
+  expectedFollow: ViewerComparisonFollowBinding,
   capability: ShareCapability,
   ownPeerId: string,
   run: { cancelled: boolean },
   port: ReturnType<typeof createProtocolMessagePort>,
+  progress: (phase: DeviceComparisonPhase) => void,
 ) => {
   if (run.cancelled) throw new Error('Device comparison cancelled.')
   const client = createPortClient(port.port, deviceComparisonProtocol)
   const binding = { shareId, sourcePeerId: capability.sourcePeerId, viewerPeerId: ownPeerId }
   const secret = base64UrlToBytes(capability.secret)
+  const commitStartedAt = Date.now()
   const commit = await createComparisonCommit(secret, binding)
-  const result = await finishComparison(
-    secret,
-    binding,
-    commit,
-    await client.comparison.commit(commit.request),
-    (request) => client.comparison.reveal(request),
+  const challenge = await client.comparison.commit(commit.request)
+  progress('challenge-received')
+  const result = await finishComparison(secret, binding, commit, challenge, (request) =>
+    client.comparison.reveal(request),
   )
-  assertComparisonResult(ctx, shareId, follow, run, result)
-  storeViewerComparison(ctx, shareId, capability, ownPeerId, result)
+  progress('proof-verified')
+  const localExpiresAt = viewerComparisonLocalExpiry(commitStartedAt, Date.now())
+  assertComparisonResult(ctx, shareId, expectedFollow, ownPeerId, capability, run, localExpiresAt)
+  storeViewerComparison(ctx, shareId, capability, ownPeerId, {
+    ...result,
+    expiresAt: localExpiresAt,
+  })
+  progress('result-stored')
 }
 
 const createStartDeviceComparison =
   (ctx: SharingContext): SharingRuntime['startDeviceComparison'] =>
-  async (shareId) => {
-    const { follow, capability, node, ownPeerId, run } = await prepareViewerComparison(ctx, shareId)
+  async (shareId, onProgress) => {
+    const { expectedFollow, capability, node, ownPeerId, run } = await prepareViewerComparison(
+      ctx,
+      shareId,
+    )
+    // Telemetry is optional, and must never alter a cryptographic decision.
+    const progress = (phase: DeviceComparisonPhase): void => {
+      try {
+        onProgress?.(phase)
+      } catch {
+        // A diagnostics consumer must not abort or approve the exchange.
+      }
+    }
     const controller = new AbortController()
     let timeout: number | undefined
     let timedOut = false
     try {
       await ctx.reserveDeviceComparison(shareId, ownPeerId)
+      progress('attempt-reserved')
       if (run.cancelled) throw new Error('Device comparison was cancelled.')
       // The P2P stream dial used to have no deadline. A stalled remote handler
       // must return an error and allow explicit retry, not hold UI forever.
@@ -425,11 +463,21 @@ const createStartDeviceComparison =
       }, COMPARISON_DIAL_TIMEOUT_MS)
       run.close = () => Promise.resolve(controller.abort())
       const port = await openComparisonPort(node, capability, controller.signal)
+      progress('stream-open')
       window.clearTimeout(timeout)
       timeout = undefined
       run.close = () => port.close()
       try {
-        await finishViewerComparison(ctx, shareId, follow, capability, ownPeerId, run, port)
+        await finishViewerComparison(
+          ctx,
+          shareId,
+          expectedFollow,
+          capability,
+          ownPeerId,
+          run,
+          port,
+          progress,
+        )
       } finally {
         await port.close()
       }

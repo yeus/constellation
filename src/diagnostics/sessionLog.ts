@@ -37,6 +37,13 @@ const EVENT_CODES = [
   'location.provider.fallback',
   'location.device.services',
   'sharing.session.lifecycle',
+  'sharing.comparison.started',
+  'sharing.comparison.progress',
+  'sharing.comparison.ready',
+  'sharing.comparison.presented',
+  'sharing.comparison.failed',
+  'sharing.comparison.confirmed',
+  'sharing.comparison.cancelled',
 ] as const
 
 const CATEGORIES = [
@@ -130,6 +137,68 @@ export const describeDiagnosticError = (
                 ? 'style'
                 : 'unknown'
   return { category, message: redactDiagnosticMessage(message) }
+}
+
+// Never export peer identities, challenges, shared secrets or comparison letters.
+// Keep failure reasons bounded to a stable vocabulary suitable for both devices.
+export const deviceComparisonFailureReason = (
+  error: unknown,
+):
+  | 'follow-changed'
+  | 'timeout'
+  | 'attempt-limit'
+  | 'authentication'
+  | 'storage'
+  | 'cancelled'
+  | 'expired'
+  | 'unavailable'
+  | 'transport'
+  | 'other' => {
+  const message = errorMessage(error)
+  if (/follow-state change|follow state change/i.test(message)) return 'follow-changed'
+  if (/timed out|timeout|deadline/i.test(message)) return 'timeout'
+  if (/attempts exhausted|attempt limit/i.test(message)) return 'attempt-limit'
+  if (/authenticated.*mismatch|device comparison denied|invalid proof/i.test(message))
+    return 'authentication'
+  if (/private storage|protected storage|storage fail|could not save/i.test(message))
+    return 'storage'
+  if (/cancelled|canceled|abort/i.test(message)) return 'cancelled'
+  if (/expired|expiry/i.test(message)) return 'expired'
+  if (/comparison is unavailable|comparison unavailable/i.test(message)) return 'unavailable'
+  if (/transport|connection|stream|dial|network|closed/i.test(message)) return 'transport'
+  return 'other'
+}
+
+// The native crash journal accepts only a short event code plus enum state.
+// Encode an allowlisted phase into the event name so it survives an Activity
+// restart without persisting any comparison challenge or secret.
+export const nativeSessionEventName = (
+  entry: Pick<SessionLogInput, 'event' | 'message'>,
+): string => {
+  if (!entry.event.startsWith('sharing.comparison.')) return entry.event
+  const message = entry.message ?? ''
+  const phase =
+    /\bstage=(attempt-reserved|stream-open|challenge-received|proof-verified|result-stored|preparing)\b/.exec(
+      message,
+    )?.[1]
+  const reason =
+    /\breason=(follow-changed|timeout|attempt-limit|authentication|storage|cancelled|expired|unavailable|transport|other)\b/.exec(
+      message,
+    )?.[1]
+  const surface = /\bsurface=(dialog|approval|preview)\b/.exec(message)?.[1]
+  const trigger = /\btrigger=(automatic|manual)\b/.exec(message)?.[1]
+  const role = /\brole=(sender|viewer)\b/.exec(message)?.[1]
+  const detail =
+    entry.event === 'sharing.comparison.progress'
+      ? phase
+      : entry.event === 'sharing.comparison.failed'
+        ? reason
+        : entry.event === 'sharing.comparison.presented'
+          ? surface
+          : entry.event === 'sharing.comparison.started'
+            ? trigger
+            : role
+  return detail ? `${entry.event}.${detail}` : entry.event
 }
 
 export const createSessionLog = (now: () => number, mirror?: (entry: SessionLogEntry) => void) => {
