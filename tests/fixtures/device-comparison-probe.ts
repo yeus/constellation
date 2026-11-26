@@ -37,7 +37,11 @@ export const probeDeviceComparison = async (requireViewerApproval: boolean) => {
   try {
     const share = await source.createShare({ ...createShareDraft(), requireViewerApproval })
     await viewer.acceptShare(share.url)
-    await viewer.startDeviceComparison(share.shareId)
+    const observedPhases: string[] = []
+    await viewer.startDeviceComparison(share.shareId, (phase) => observedPhases.push(phase))
+    const progressStagesPassed =
+      observedPhases.join(',') ===
+      'attempt-reserved,stream-open,challenge-received,proof-verified,result-stored'
     const senderCode = sourceState.deviceComparisons![0]!,
       viewerCode = viewerState.deviceComparisons![0]!
     const agreed =
@@ -66,7 +70,10 @@ export const probeDeviceComparison = async (requireViewerApproval: boolean) => {
     })
     await viewer.acceptShare(share.url)
     const budgetSurvivedRestart = viewerSaved?.comparisonBudgets?.[0]?.attempts === 1
-    await viewer.startDeviceComparison(share.shareId)
+    // Diagnostics callbacks must not alter a completed security exchange.
+    await viewer.startDeviceComparison(share.shareId, () => {
+      throw new Error('Synthetic diagnostics failure.')
+    })
     await viewer.startDeviceComparison(share.shareId)
     let deniedFourthAttempt = false
     try {
@@ -75,6 +82,7 @@ export const probeDeviceComparison = async (requireViewerApproval: boolean) => {
       deniedFourthAttempt = error instanceof Error && /attempts exhausted/.test(error.message)
     }
     return {
+      progressStagesPassed,
       agreed,
       automaticConfirmation,
       manuallyConfirmed,

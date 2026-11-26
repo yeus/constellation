@@ -232,3 +232,53 @@ test('comparison uses the authenticated owner of the exact stream, not invitatio
     /authenticated peer/i,
   )
 })
+
+test('viewer comparison survives a new follow-state object for the same authenticated link', async () => {
+  const { assertViewerComparisonFollow } = await import('./deviceComparison.ts')
+  const original = {
+    url: 'https://example.invalid/#share=synthetic-link',
+    sourcePeerId: 'synthetic-source',
+    terminal: false,
+    approvalDenied: false,
+  }
+  const afterReconnection = {
+    ...original,
+    connected: true,
+    approvalPending: false,
+  }
+  assert.notStrictEqual(original, afterReconnection)
+  assert.doesNotThrow(() => assertViewerComparisonFollow(original, afterReconnection, true))
+
+  for (const current of [
+    undefined,
+    { ...afterReconnection, url: 'https://example.invalid/#share=other' },
+    { ...afterReconnection, sourcePeerId: 'other-source' },
+    { ...afterReconnection, terminal: true },
+    { ...afterReconnection, approvalDenied: true },
+  ]) {
+    assert.throws(
+      () => assertViewerComparisonFollow(original, current, true),
+      /interrupted by a follow-state change/,
+    )
+  }
+  assert.throws(() => assertViewerComparisonFollow(original, afterReconnection, false), /cancelled/)
+})
+
+test('viewer uses its own bounded deadline despite sender wall-clock skew', async () => {
+  const { viewerComparisonLocalExpiry, COMPARISON_TTL_MS } = await import('./deviceComparison.ts')
+  const { responder } = setup()
+  const commit = await createComparisonCommit(secret, binding)
+  const response = await responder.commit(commit.request)
+  const result = await finishComparison(secret, binding, commit, response, responder.reveal)
+  // The sender authenticated an absolute epoch from its own clock. That epoch
+  // must remain in the MAC transcript but must not be used as the viewer clock.
+  const viewerStartedAt = result.expiresAt + 600_000
+  assert.equal(
+    viewerComparisonLocalExpiry(viewerStartedAt, viewerStartedAt + 7_000),
+    viewerStartedAt + COMPARISON_TTL_MS,
+  )
+  assert.throws(
+    () => viewerComparisonLocalExpiry(viewerStartedAt, viewerStartedAt + COMPARISON_TTL_MS),
+    /expired/,
+  )
+})

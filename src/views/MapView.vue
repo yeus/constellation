@@ -779,7 +779,12 @@ import PeerListSheet from '../components/PeerListSheet.vue'
 import DeviceComparisonSheet from '../components/DeviceComparisonSheet.vue'
 import ShareReadySheet from '../components/ShareReadySheet.vue'
 import ShareSheet from '../components/ShareSheet.vue'
-import { createSessionLog, describeDiagnosticError } from '../diagnostics/sessionLog.ts'
+import {
+  createSessionLog,
+  describeDiagnosticError,
+  deviceComparisonFailureReason,
+  nativeSessionEventName,
+} from '../diagnostics/sessionLog.ts'
 import { createAndroidBackgroundReceiver } from '../android/backgroundReceiver.ts'
 import {
   readBackgroundFollowingPreference,
@@ -863,7 +868,7 @@ const recordSessionEvents = (
 const sessionLog = createSessionLog(Date.now, (entry) => {
   if ('__TAURI_INTERNALS__' in window && /Android/i.test(navigator.userAgent)) {
     void invoke('android_record_session_event', {
-      event: entry.event,
+      event: nativeSessionEventName(entry),
       state: entry.state ?? '',
       level: entry.level,
     }).catch(() => undefined)
@@ -1507,6 +1512,32 @@ void subscribeTauriDeepLinks(shareBaseUrl, offerInvitation)
     localError.value = 'Could not listen for shared links.'
   })
 
+// Log the transition from protocol result to visible state, for both Activity
+// and Android service ownership. Challenges and letters are never exported.
+const logComparisonStateChanges = (
+  previous: readonly DeviceComparison[] | undefined,
+  next: readonly DeviceComparison[],
+  owner: 'activity' | 'service',
+): void => {
+  const prior = new Map((previous ?? []).map((entry) => [entry.challenge, entry]))
+  for (const entry of next) {
+    const old = prior.get(entry.challenge)
+    if (!old) {
+      sessionLog.record({
+        level: 'info',
+        event: 'sharing.comparison.ready',
+        message: `role=${entry.role}; owner=${owner}`,
+      })
+    } else if (!old.confirmedAt && entry.confirmedAt) {
+      sessionLog.record({
+        level: 'info',
+        event: 'sharing.comparison.confirmed',
+        message: `role=${entry.role}; owner=${owner}`,
+      })
+    }
+  }
+}
+
 const unsubscribe = runtime.subscribe((next) => {
   if (runtimeState.value.peerStatus !== next.peerStatus) {
     sessionLog.record({ level: 'info', event: 'sharing.peer.status', state: next.peerStatus })
@@ -1521,6 +1552,7 @@ const unsubscribe = runtime.subscribe((next) => {
     })
   }
   const previous = runtimeState.value
+  logComparisonStateChanges(previous.deviceComparisons, next.deviceComparisons ?? [], 'activity')
   runtimeState.value = next
   dismissReadyShareOnNewRecipient(previous, next)
   const latestNetwork = runtime.networkDiagnostics()
@@ -1593,6 +1625,7 @@ const logBackgroundStatusChanges = (
       message: transportSummary(next.diagnostics),
     })
   }
+  logComparisonStateChanges(previous?.deviceComparisons, next.deviceComparisons ?? [], 'service')
   if (next.diagnostics) recordSessionEvents(previous?.diagnostics, next.diagnostics)
 }
 
@@ -1803,12 +1836,34 @@ const closeDeviceComparison = (): void => {
   if (comparingDevice.value === comparisonShareId.value) void clearSelectedComparison()
   comparisonOpen.value = false
 }
-const startDeviceComparison = async (shareId: string): Promise<void> => {
+const startDeviceComparison = async (
+  shareId: string,
+  trigger: 'automatic' | 'manual' = 'manual',
+): Promise<void> => {
+  if (comparingDevice.value === shareId) return
   comparingDevice.value = shareId
   comparisonError.value = undefined
+  let stage = 'preparing'
+  sessionLog.record({
+    level: 'info',
+    event: 'sharing.comparison.started',
+    message: `role=viewer; trigger=${trigger}`,
+  })
   try {
-    await runtime.startDeviceComparison(shareId)
+    await runtime.startDeviceComparison(shareId, (phase) => {
+      stage = phase
+      sessionLog.record({
+        level: 'info',
+        event: 'sharing.comparison.progress',
+        message: `role=viewer; stage=${phase}`,
+      })
+    })
   } catch (error) {
+    sessionLog.record({
+      level: 'warning',
+      event: 'sharing.comparison.failed',
+      message: `role=viewer; stage=${stage}; reason=${deviceComparisonFailureReason(error)}`,
+    })
     comparisonError.value =
       error instanceof Error ? error.message : 'Device comparison unavailable.'
   } finally {
@@ -1835,6 +1890,11 @@ const clearSelectedComparison = async (): Promise<boolean> => {
     } else {
       await runtime.cancelDeviceComparison(shareId, current?.challenge ?? '')
     }
+    sessionLog.record({
+      level: 'info',
+      event: 'sharing.comparison.cancelled',
+      message: `role=${current?.role ?? 'viewer'}; action=user`,
+    })
     return true
   } catch (error) {
     comparisonError.value = error instanceof Error ? error.message : 'Could not cancel comparison.'
@@ -1879,16 +1939,28 @@ const changeDeviceComparison = async (
         (entry) => entry.challenge === comparison.challenge,
       ) &&
       backgroundSharing
-    )
+    ) {
       backgroundStatus.value = await backgroundSharing.deviceComparison(
         comparison.shareId,
         comparison.challenge,
         action,
       )
-    else if (action === 'confirm')
+    } else if (action === 'confirm') {
       await runtime.confirmDeviceComparison(comparison.shareId, comparison.challenge)
-    else await runtime.cancelDeviceComparison(comparison.shareId, comparison.challenge)
+    } else {
+      await runtime.cancelDeviceComparison(comparison.shareId, comparison.challenge)
+    }
+    sessionLog.record({
+      level: 'info',
+      event: action === 'confirm' ? 'sharing.comparison.confirmed' : 'sharing.comparison.cancelled',
+      message: `role=${comparison.role}; action=${action}`,
+    })
   } catch (error) {
+    sessionLog.record({
+      level: 'warning',
+      event: 'sharing.comparison.failed',
+      message: `role=${comparison.role}; operation=${action}; reason=${deviceComparisonFailureReason(error)}`,
+    })
     comparisonError.value =
       error instanceof Error ? error.message : 'Could not save device comparison.'
   }
@@ -1924,7 +1996,7 @@ watch(
   ([shareId, status]) => {
     if (!shareId || status !== 'approval-pending' || attemptedAutoComparisons.has(shareId)) return
     attemptedAutoComparisons.add(shareId)
-    void startDeviceComparison(shareId)
+    void startDeviceComparison(shareId, 'automatic')
   },
 )
 const senderComparisonAttention = computed(() =>
@@ -1935,6 +2007,53 @@ const senderComparisonAttention = computed(() =>
       Date.now() < entry.expiresAt &&
       activeShares.value.some((share) => share.shareId === entry.shareId),
   ),
+)
+// Distinguish a completed exchange from a code actually made visible by the UI.
+const presentedComparisons = new Set<string>()
+const recordPresentedComparison = (
+  comparison: DeviceComparison | undefined,
+  surface: 'dialog' | 'approval' | 'preview',
+): void => {
+  if (!comparison) return
+  const key = `${comparison.challenge}:${surface}`
+  if (presentedComparisons.has(key)) return
+  if (presentedComparisons.size >= 256)
+    presentedComparisons.delete(presentedComparisons.values().next().value!)
+  presentedComparisons.add(key)
+  sessionLog.record({
+    level: 'info',
+    event: 'sharing.comparison.presented',
+    message: `role=${comparison.role}; surface=${surface}`,
+  })
+}
+watch(
+  [
+    comparisonOpen,
+    selectedDeviceComparison,
+    comparisonMismatch,
+    pendingViewerApproval,
+    pendingDeviceComparison,
+    approvalComparisonReady,
+    previewFollow,
+    viewerPendingComparison,
+    dismissedPreviewIds,
+  ],
+  () => {
+    if (comparisonOpen.value && !comparisonMismatch.value) {
+      recordPresentedComparison(selectedDeviceComparison.value, 'dialog')
+      return
+    }
+    if (pendingViewerApproval.value && approvalComparisonReady.value)
+      recordPresentedComparison(pendingDeviceComparison.value, 'approval')
+    if (
+      previewFollow.value?.status === 'approval-pending' &&
+      !dismissedPreviewIds.value.includes(previewFollow.value.shareId) &&
+      viewerPendingComparison.value &&
+      comparisonNow.value < viewerPendingComparison.value.expiresAt
+    )
+      recordPresentedComparison(viewerPendingComparison.value, 'preview')
+  },
+  { flush: 'post' },
 )
 
 const ownAreaHidden = ref(false)

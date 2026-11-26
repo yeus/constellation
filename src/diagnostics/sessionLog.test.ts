@@ -125,3 +125,99 @@ test('exports bounded session lifecycle reasons without a peer identity', () => 
   assert.match(log.format('android'), /heartbeat-timeout; 1 active sessions/)
   assert.doesNotMatch(log.format('android'), /peer|\/ip4\/|#share=/i)
 })
+
+test('device comparison diagnostics record stages and classify failures without identities or codes', async () => {
+  const { deviceComparisonFailureReason } = await import('./sessionLog.ts')
+  assert.equal(
+    deviceComparisonFailureReason(
+      new Error('Device comparison was interrupted by a follow-state change.'),
+    ),
+    'follow-changed',
+  )
+  assert.equal(
+    deviceComparisonFailureReason(
+      new Error('Secure comparison connection timed out. Retry manually.'),
+    ),
+    'timeout',
+  )
+  assert.equal(
+    deviceComparisonFailureReason(new Error('Device comparison attempts exhausted for this link.')),
+    'attempt-limit',
+  )
+  assert.equal(
+    deviceComparisonFailureReason(new Error('Device comparison authenticated peer mismatch.')),
+    'authentication',
+  )
+  assert.equal(deviceComparisonFailureReason(new Error('Private storage failed.')), 'storage')
+  assert.equal(
+    deviceComparisonFailureReason(new Error('Device comparison was cancelled.')),
+    'cancelled',
+  )
+  assert.equal(deviceComparisonFailureReason(new Error('Device comparison expired.')), 'expired')
+  assert.equal(deviceComparisonFailureReason(new Error('Transport closed.')), 'transport')
+  assert.equal(
+    deviceComparisonFailureReason(new Error('unrecognized secret=synthetic-private-key')),
+    'other',
+  )
+
+  const log = createSessionLog(() => 1_000)
+  for (const event of [
+    'sharing.comparison.started',
+    'sharing.comparison.progress',
+    'sharing.comparison.ready',
+    'sharing.comparison.presented',
+    'sharing.comparison.failed',
+    'sharing.comparison.confirmed',
+    'sharing.comparison.cancelled',
+  ] as const) {
+    log.record({ level: 'info', event, message: 'viewer; stage=stream-open' })
+  }
+  const output = log.format('browser')
+  assert.match(output, /sharing.comparison.started/)
+  assert.match(output, /sharing.comparison.failed/)
+  assert.match(output, /sharing.comparison.presented/)
+  assert.doesNotMatch(output, /synthetic-private-key|#share=|peerId=|letters=/)
+})
+
+test('Android crash journal keeps only allowlisted comparison stages, never a challenge', async () => {
+  const { nativeSessionEventName } = await import('./sessionLog.ts')
+  assert.equal(
+    nativeSessionEventName({
+      event: 'sharing.comparison.progress',
+      message: 'role=viewer; stage=challenge-received; secret=synthetic-private-key',
+    }),
+    'sharing.comparison.progress.challenge-received',
+  )
+  assert.equal(
+    nativeSessionEventName({
+      event: 'sharing.comparison.failed',
+      message: 'reason=follow-changed; letters=ABCD',
+    }),
+    'sharing.comparison.failed.follow-changed',
+  )
+  assert.equal(
+    nativeSessionEventName({
+      event: 'sharing.comparison.ready',
+      message: 'role=sender; key=not-exported',
+    }),
+    'sharing.comparison.ready.sender',
+  )
+  assert.equal(
+    nativeSessionEventName({
+      event: 'sharing.comparison.presented',
+      message: 'surface=preview; peerId=not-exported',
+    }),
+    'sharing.comparison.presented.preview',
+  )
+  assert.equal(
+    nativeSessionEventName({
+      event: 'sharing.comparison.progress',
+      message: 'stage=not-listed; letters=ABCD',
+    }),
+    'sharing.comparison.progress',
+  )
+  assert.equal(
+    nativeSessionEventName({ event: 'sharing.follow.status', message: 'state=connected' }),
+    'sharing.follow.status',
+  )
+})

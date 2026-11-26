@@ -301,6 +301,56 @@ export const finishComparison = async (
   }
 }
 
+// The remote expiresAt remains authenticated in the proof transcript and is
+// enforced by the sender, but it is an absolute value in the sender's clock.
+// Comparing it to the viewer's wall clock rejects valid proof on skewed devices.
+// Each viewer independently limits its display to two minutes from commit.
+export const viewerComparisonLocalExpiry = (commitStartedAt: number, now: number): number => {
+  const expiresAt = commitStartedAt + COMPARISON_TTL_MS
+  if (
+    !Number.isFinite(commitStartedAt) ||
+    !Number.isFinite(now) ||
+    now < commitStartedAt ||
+    now >= expiresAt
+  )
+    throw new Error('Device comparison expired.')
+  return expiresAt
+}
+
+// A follow entry may be replaced while the viewer exchanges the comparison proof
+// (pending -> connected, reconnect, or a projection refresh). Object identity
+// is not a security binding: the unchanged capability and authenticated peer are.
+export interface ViewerComparisonFollowBinding {
+  readonly url: string
+  readonly sourcePeerId: string
+  readonly terminal?: string | boolean
+  readonly approvalDenied?: boolean
+}
+
+export const assertViewerComparisonFollow = (
+  expected: ViewerComparisonFollowBinding,
+  current: ViewerComparisonFollowBinding | undefined,
+  runActive: boolean,
+): void => {
+  if (!runActive) throw new Error('Device comparison was cancelled.')
+  if (
+    !current ||
+    current.url !== expected.url ||
+    current.sourcePeerId !== expected.sourcePeerId ||
+    current.terminal ||
+    current.approvalDenied
+  ) {
+    throw new Error('Device comparison was interrupted by a follow-state change.')
+  }
+}
+
+export type DeviceComparisonPhase =
+  | 'attempt-reserved'
+  | 'stream-open'
+  | 'challenge-received'
+  | 'proof-verified'
+  | 'result-stored'
+
 // Stream IDs are only unique within a muxer. Find the exact stream object on
 // an authenticated live connection before using the invitation identity.
 export const requireComparisonStreamPeer = <Stream>(

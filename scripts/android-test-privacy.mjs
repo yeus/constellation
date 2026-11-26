@@ -52,3 +52,45 @@ export const summarizeNotificationPause = (journal) =>
       return match ? [{ paused: match[1] === 'true', origin: match[2] }] : []
     })
     .slice(-20)
+
+const comparisonJournalSuffixes = {
+  started: ['automatic', 'manual'],
+  progress: [
+    'preparing',
+    'attempt-reserved',
+    'stream-open',
+    'challenge-received',
+    'proof-verified',
+    'result-stored',
+  ],
+  ready: ['sender', 'viewer'],
+  presented: ['dialog', 'approval', 'preview'],
+  failed: [
+    'follow-changed',
+    'timeout',
+    'attempt-limit',
+    'authentication',
+    'storage',
+    'cancelled',
+    'expired',
+    'unavailable',
+    'transport',
+    'other',
+  ],
+  confirmed: ['sender', 'viewer'],
+  cancelled: ['sender', 'viewer'],
+}
+
+// Parse only the allowlisted native journal event name, not its arbitrary
+// detail text. No peer, link, device secret or comparison letters can escape.
+export const summarizeAndroidComparisonJournal = (journal) =>
+  journal
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = line.match(/^\d{13} ui\.sharing\.comparison\.([a-z-]+)(?:\.([a-z-]+))? /)
+      if (!match) return []
+      const allowed = comparisonJournalSuffixes[match[1]]
+      if (!allowed || (match[2] && !allowed.includes(match[2]))) return []
+      return [`${match[1]}${match[2] ? `.${match[2]}` : ''}`]
+    })
+    .slice(-24)

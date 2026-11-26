@@ -6,6 +6,7 @@ import {
   summarizeAndroidNativeCrash,
   summarizeNotificationPause,
   readOptionalLogDirectory,
+  summarizeAndroidComparisonJournal,
 } from './android-test-privacy.mjs'
 
 test('native crash summaries retain only allowlisted categories', () => {
@@ -76,4 +77,26 @@ test('notification diagnostics allowlist pause events and omit unrelated journal
       { paused: false, origin: 'ui' },
     ],
   )
+})
+
+test('native comparison-failure diagnostics preserve only phase and reason enums', () => {
+  const journal = [
+    '1795670000000 ui.sharing.comparison.started.automatic level=info;state=none; peer=private',
+    '1795670000001 ui.sharing.comparison.progress.attempt-reserved level=info;state=none',
+    '1795670000002 ui.sharing.comparison.progress.challenge-received level=info;state=none',
+    '1795670000003 ui.sharing.comparison.ready.sender level=info;state=none; letters=ABCD',
+    '1795670000004 ui.sharing.comparison.failed.follow-changed level=warning;state=none',
+    '1795670000005 ui.sharing.comparison.failed.private-identifier level=error;state=none',
+    '1795670000006 ui.sharing.comparison.progress.private-value level=warning;state=none',
+    '1795670000007 unrelated.service.event secret=private',
+  ].join('\n')
+  const result = summarizeAndroidComparisonJournal(journal)
+  assert.deepEqual(result, [
+    'started.automatic',
+    'progress.attempt-reserved',
+    'progress.challenge-received',
+    'ready.sender',
+    'failed.follow-changed',
+  ])
+  assert.doesNotMatch(JSON.stringify(result), /private|ABCD|peer|secret|identifier/)
 })

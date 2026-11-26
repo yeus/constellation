@@ -10,6 +10,7 @@ import { browserProcessEnvironment } from './browser-environment.mjs'
 import {
   redactAndroidTestError,
   summarizeAndroidNativeCrash,
+  summarizeAndroidComparisonJournal,
   summarizeNotificationPause,
   readOptionalLogDirectory,
 } from './android-test-privacy.mjs'
@@ -6327,8 +6328,54 @@ const runTwoAndroidReceiverStandbySmoke = async (
           read(['logcat', '-b', 'crash', '-d', '-t', '500']),
           packageName,
         ),
+        comparisonJournal: summarizeAndroidComparisonJournal(
+          read([
+            'shell',
+            'run-as',
+            packageName,
+            'cat',
+            `files/reliability-journal-v1/${new Date().toISOString().slice(0, 10)}.log`,
+          ]),
+        ),
       }
     })
+    const compareUi = async (cdp) => {
+      if (!cdp) return { available: false }
+      try {
+        return await cdp.evaluate(`(() => {
+          const preview = document.querySelector('[aria-label="Location preview"]')
+          const approval = document.querySelector('[aria-label="Viewer access request"]')
+          const text = preview?.textContent ?? ''
+          return {
+            available: true,
+            preview: Boolean(preview),
+            approval: Boolean(approval),
+            waiting: text.includes('Waiting for sender approval'),
+            comparing: text.includes('Establishing secure comparison'),
+            connecting: text.includes('Connecting securely to compare device letters'),
+            retry: [...(preview?.querySelectorAll('button') ?? [])].some((button) =>
+              button.textContent?.trim() === 'Retry comparison'
+            ),
+            alert: Boolean(preview?.querySelector('[role="alert"]')),
+            viewerLetters: /^[A-Z]{4}$/.test(
+              preview?.querySelector('.device-comparison-letters')?.textContent?.trim() ?? ''
+            ),
+            senderLetters: /^[A-Z]{4}$/.test(
+              approval?.querySelector('.device-comparison-letters')?.textContent?.trim() ?? ''
+            ),
+          }
+        })()`)
+      } catch {
+        return { available: false }
+      }
+    }
+    console.error(
+      '[android-acceptance] privacy-safe comparison UI: ' +
+        JSON.stringify({
+          source: await compareUi(source),
+          receiver: await compareUi(receiver),
+        }),
+    )
     console.error(
       '[android-acceptance] pre-cleanup two-device state: ' + JSON.stringify(observations),
     )
