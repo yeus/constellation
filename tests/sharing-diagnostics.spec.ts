@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const openSuite = async (page: Page) => {
-  await page.goto('/')
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: 'Open menu' }).click()
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
   await page.getByRole('button', { name: 'Run sharing diagnostics' }).click()
