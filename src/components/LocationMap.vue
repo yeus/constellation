@@ -186,7 +186,6 @@ import {
 } from '../map/pmtiles.ts'
 import type { MapCamera } from '../map/mapCamera.ts'
 import { markerAgePresentation } from '../location/lastKnownMarker.ts'
-import OwnPositionMarker from './OwnPositionMarker.vue'
 import MapPeerAvatar from './MapPeerAvatar.vue'
 
 const LOCATION_SOURCE_ID = 'constellation-locations'
