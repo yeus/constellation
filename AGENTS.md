@@ -49,6 +49,9 @@ clarify the relevant requirement instead of inventing semantics.
   identifiers to logs, filenames, crash reports, fixtures, or repository artifacts.
 - Preserve unrelated worktree and index changes. Do not use destructive Git commands without an
   explicit request.
+- Do not create Git commits or tags, push changes, merge branches, or publish releases unless the
+  maintainer explicitly authorizes that specific operation. Requests to implement, fix, test,
+  finish, or continue work do not imply permission to commit.
 - Run the smallest relevant type checks, tests, diagnostics, and formatter checks after changes, and
   report both completed checks and environmental limitations.
 
