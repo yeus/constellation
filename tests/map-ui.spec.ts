@@ -67,6 +67,51 @@ test('preserves the map viewport when the compact peer list opens and closes', a
     .toBe(Math.round((await surface.boundingBox())?.height ?? 0))
 })
 
+test('keeps all dialogs below the Android status bar and inside the safe viewport', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 480 })
+  await page.goto('/')
+
+  const assertSafeDialog = async (selector: string, expectedTopPadding: number) => {
+    const dialog = page.locator(selector)
+    await expect(dialog).toBeVisible()
+    const bounds = await dialog.boundingBox()
+    const padding = await dialog.locator('xpath=..').evaluate((backdrop) => {
+      const styles = getComputedStyle(backdrop)
+      return {
+        top: Number.parseFloat(styles.paddingTop),
+        bottom: Number.parseFloat(styles.paddingBottom),
+      }
+    })
+    expect(padding.top).toBeGreaterThanOrEqual(expectedTopPadding)
+    expect(bounds).not.toBeNull()
+    expect(bounds!.y).toBeGreaterThanOrEqual(padding.top - 1)
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(480 - padding.bottom + 1)
+  }
+
+  await page.getByRole('button', { name: 'Open menu' }).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  // Simulate Android after Vue has applied the dialog's reactive class update.
+  await page.locator('.map-screen').evaluate((element) => {
+    element.classList.add('map-screen--android')
+  })
+  await assertSafeDialog('.settings-sheet', 40)
+
+  // A larger inset (for example, a display cutout) must reduce the available dialog height.
+  await page.locator('.map-screen').evaluate((element) => {
+    ;(element as HTMLElement).style.setProperty('--sheet-safe-top', '48px')
+  })
+  await assertSafeDialog('.settings-sheet', 64)
+  await page.getByRole('button', { name: 'Close settings' }).click()
+
+  await openShareCreator(page)
+  await page.locator('.map-screen').evaluate((element) => {
+    element.classList.add('map-screen--android')
+  })
+  await assertSafeDialog('.share-sheet--create', 56)
+})
+
 test('keeps map attribution clear of the peer dock at the lower-right', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 })
   await page.goto('/')

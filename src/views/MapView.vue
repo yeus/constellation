@@ -1,7 +1,7 @@
 <template>
   <main
     class="map-screen"
-    :class="{ 'map-screen--menu-open': menuOpen }"
+    :class="{ 'map-screen--menu-open': menuOpen, 'map-screen--android': isAndroid }"
     @click.capture="closeMenuOnOutsideClick"
   >
     <div class="map-surface" aria-label="Location map">

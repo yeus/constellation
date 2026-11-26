@@ -43,6 +43,12 @@
   --toast-background: #2a3548;
   --toast-text: #f8fafc;
   --offline-dot: #7b8794;
+  --sheet-safe-top: env(safe-area-inset-top, 0px);
+}
+
+.map-screen--android {
+  /* Android WebViews may not expose the system status-bar inset to CSS. */
+  --sheet-safe-top: max(1.5rem, env(safe-area-inset-top, 0px));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -668,14 +674,15 @@ button {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 1rem;
+  padding: calc(1rem + var(--sheet-safe-top)) max(1rem, env(safe-area-inset-right, 0px))
+    calc(1rem + env(safe-area-inset-bottom, 0px)) max(1rem, env(safe-area-inset-left, 0px));
   background: var(--backdrop);
   backdrop-filter: blur(6px);
 }
 
 .share-sheet {
   width: min(34rem, 100%);
-  max-height: calc(100dvh - 2rem);
+  max-height: 100%;
   overflow: auto;
   padding: 1.25rem;
   border: 1px solid var(--border);
@@ -1001,12 +1008,13 @@ legend {
 
 @media (max-width: 600px) {
   .share-backdrop {
-    padding: max(0.5rem, env(safe-area-inset-top)) 0.75rem max(0.5rem, env(safe-area-inset-bottom));
+    padding: calc(0.5rem + var(--sheet-safe-top)) max(0.75rem, env(safe-area-inset-right, 0px))
+      calc(0.5rem + env(safe-area-inset-bottom, 0px)) max(0.75rem, env(safe-area-inset-left, 0px));
   }
 
   .share-sheet--create {
     min-height: 0;
-    max-height: calc(100dvh - 1rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: 100%;
     padding: 0.85rem;
     border-radius: 1.1rem;
   }
