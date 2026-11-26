@@ -697,15 +697,27 @@ const handleEndedFollow = async (
   throw new Error('This location link has ended.')
 }
 
+type FollowPeerIdentity = Pick<FollowEntry, 'sourcePeerId' | 'peerId'>
+
+const sameFollowPeer = (left: FollowPeerIdentity, right: FollowPeerIdentity): boolean =>
+  left.sourcePeerId === right.sourcePeerId ||
+  (left.peerId !== undefined && left.peerId === right.peerId)
+
+const colorForNewFollow = (ctx: SharingContext, state: FollowState): string => {
+  const prior = [...ctx.followed.values()]
+  const identity = { sourcePeerId: state.capability.sourcePeerId, peerId: state.knownPeerId }
+  return (
+    prior.find((entry) => sameFollowPeer(entry, identity))?.color ??
+    randomVividPeerColor(prior.map(({ color }) => color))
+  )
+}
+
 const pendingFollowEntry = (
   ctx: SharingContext,
   state: FollowState,
   denied: boolean,
 ): FollowEntry => {
   const existing = ctx.followed.get(state.capability.shareId)
-  const existingPeer = [...ctx.followed.values()].find(
-    (entry) => entry.sourcePeerId === state.capability.sourcePeerId,
-  )
   return {
     url: state.url,
     sourcePeerId: state.capability.sourcePeerId,
@@ -716,10 +728,7 @@ const pendingFollowEntry = (
     localName:
       existing?.localName ??
       (state.options.localName?.trim() || generatedFollowName(state.capability.shareId)),
-    color:
-      existing?.color ??
-      existingPeer?.color ??
-      randomVividPeerColor([...ctx.followed.values()].map(({ color }) => color)),
+    color: existing?.color ?? colorForNewFollow(ctx, state),
     connected: false,
     approvalPending: !denied,
     approvalDenied: denied,
@@ -753,9 +762,6 @@ const activeFollowEntry = (
   session: ActiveFollowSession,
 ): FollowEntry => {
   const existing = ctx.followed.get(state.capability.shareId)
-  const existingPeer = [...ctx.followed.values()].find(
-    (entry) => entry.sourcePeerId === state.capability.sourcePeerId,
-  )
   return {
     url: state.url,
     sourcePeerId: state.capability.sourcePeerId,
@@ -769,10 +775,7 @@ const activeFollowEntry = (
       existing ? undefined : state.options.localName,
       generatedFollowName(state.capability.shareId),
     ),
-    color:
-      existing?.color ??
-      existingPeer?.color ??
-      randomVividPeerColor([...ctx.followed.values()].map(({ color }) => color)),
+    color: existing?.color ?? colorForNewFollow(ctx, state),
     connected: true,
     approvalPending: false,
     approvalDenied: false,
@@ -1415,8 +1418,8 @@ const createSetFollowColor =
     const entry = ctx.followed.get(shareId)
     if (!entry) return
     const normalized = color.toLowerCase()
-    const samePeer = [...ctx.followed.values()].filter(
-      (candidate) => candidate.sourcePeerId === entry.sourcePeerId,
+    const samePeer = [...ctx.followed.values()].filter((candidate) =>
+      sameFollowPeer(candidate, entry),
     )
     samePeer.forEach((candidate) => (candidate.color = normalized))
     if (samePeer.some((candidate) => candidate.saved))

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPair, privateKeyToProtobuf } from '@libp2p/crypto/keys'
 import { bytesToBase64Url } from './encoding.ts'
-import { createShareInvitation, returnOwnerMessage } from './shareLink.ts'
+import { createShareInvitation, returnOwnerMessage, shareInvitationUrl } from './shareLink.ts'
 import type { PrivateState } from './privateStore.ts'
 
 import { createBrowserLocationSource, type BrowserPosition } from '../location/browser.ts'
@@ -276,6 +276,51 @@ test('generated names are stable for a share and do not expose its identifier', 
   assert.equal(generatedFollowName('private-share-123'), name)
   assert.match(name, /^[A-Z][a-z]+ [A-Z][a-z]+$/)
   assert.equal(name.includes('123'), false)
+})
+
+test('color overrides propagate only across cryptographically verified same-owner follows', async () => {
+  const ownerPrivateKey = await generateKeyPair('Ed25519')
+  const first = await testInvitation('source-A', { ownerPrivateKey })
+  const second = await testInvitation('source-B', { ownerPrivateKey })
+  const unrelated = await testInvitation('source-C')
+  const differentOwner = await generateKeyPair('Ed25519')
+  const original = await testInvitation('source-D', { ownerPrivateKey: differentOwner })
+  // Claim the trusted owner's ID without a matching proof; this is not authenticated.
+  const forged = shareInvitationUrl(
+    { ...original.capability, ownerPeerId: first.capability.ownerPeerId },
+    'https://example.test/',
+  )
+  const initial: PrivateState = {
+    version: 1,
+    privateKey: await testPrivateKey(),
+    shares: [],
+    followed: [
+      { url: first.url, localName: 'First', color: '#438ec9', followedAt: 1_000 },
+      { url: second.url, localName: 'Second', color: '#438ec9', followedAt: 1_000 },
+      { url: unrelated.url, localName: 'Third', color: '#8a6fc9', followedAt: 1_000 },
+      { url: forged, localName: 'Unverified', color: '#33aa55', followedAt: 1_000 },
+    ],
+  }
+  let saved: PrivateState | undefined
+  const restoreWindow = installSyntheticWindow()
+  const runtime = createTestRuntime(initial, {
+    receiver: 'external',
+    save: async (state) => {
+      saved = state
+    },
+  })
+  try {
+    await runtime.initialize()
+    runtime.setFollowColor(first.capability.shareId, '#E84373')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.deepEqual(
+      saved?.followed.map(({ color }) => color),
+      ['#e84373', '#e84373', '#8a6fc9', '#33aa55'],
+    )
+  } finally {
+    await runtime.stop()
+    restoreWindow()
+  }
 })
 
 test('unavailable protected storage leaves temporary previews possible', async () => {
