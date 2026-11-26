@@ -21,8 +21,6 @@ export const sessionSweepReason = (
   return undefined
 }
 
-export const FOLLOW_COLORS = ['#438ec9', '#8a6fc9', '#289a82', '#c0709a'] as const
-
 export const appendSessionEvent = (
   events: readonly SessionEvent[],
   event: SessionEvent,

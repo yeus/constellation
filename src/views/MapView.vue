@@ -2091,7 +2091,7 @@ const locations = computed(() => {
       ? [locationObservationToMapLocation(own.observation, own.status)]
       : []
   return [
-    ...ownLocations.map((location) => ({ ...location, isOwn: true, color: '#f78f3b' })),
+    ...ownLocations.map((location) => ({ ...location, isOwn: true, color: '#2563eb' })),
     ...receivedLocations.value
       .filter((entry) =>
         activeFollowing.value.some(

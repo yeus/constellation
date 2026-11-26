@@ -873,6 +873,7 @@ test('peer list uses distinct main actions, one filter menu, and compact details
         },
       ],
       focused: false,
+      color: '#438ec9',
       compared: '',
       sharedName: null as string | null,
       traceEnabled: false,
@@ -930,7 +931,7 @@ test('peer list uses distinct main actions, one filter menu, and compact details
               peerId: 'synthetic-peer',
               localName: 'River',
               displayName: 'River',
-              color: '#438ec9',
+              color: state.color,
               connected: true,
               status: 'live',
               saved: true,
@@ -973,6 +974,9 @@ test('peer list uses distinct main actions, one filter menu, and compact details
           onTraceClear: () => {
             state.trace = []
           },
+          onColor: (_shareId: string, color: string) => {
+            state.color = color
+          },
           onProfile: (_peerId: string, _associateNames: boolean, sharedName: string | null) => {
             state.sharedName = sharedName
           },
@@ -997,6 +1001,45 @@ test('peer list uses distinct main actions, one filter menu, and compact details
   await expect(peer.locator('.peer-list__section--connection .peer-link-item__colors')).toHaveCount(
     0,
   )
+  const colorPicker = peer.locator('.peer-color-picker')
+  await colorPicker.locator('summary').click()
+  const wheel = colorPicker.getByRole('slider', { name: 'Hue and saturation' })
+  await expect(wheel).toBeVisible()
+  await wheel.press('ArrowRight')
+  expect(
+    await page.evaluate(
+      () => (window as Window & { __peerCompareTest?: { color: string } }).__peerCompareTest?.color,
+    ),
+  ).not.toBe('#438ec9')
+  const previousColor = await page.evaluate(
+    () => (window as Window & { __peerCompareTest?: { color: string } }).__peerCompareTest?.color,
+  )
+  const wheelBounds = await wheel.boundingBox()
+  if (!wheelBounds) throw new Error('Color wheel is not visible')
+  await page.mouse.click(
+    wheelBounds.x + wheelBounds.width * 0.75,
+    wheelBounds.y + wheelBounds.height * 0.25,
+  )
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __peerCompareTest?: { color: string } }).__peerCompareTest?.color,
+      ),
+    )
+    .not.toBe(previousColor)
+  await colorPicker.getByRole('textbox', { name: 'Location color hex' }).fill('#e84373')
+  await colorPicker.getByRole('textbox', { name: 'Location color hex' }).press('Tab')
+  expect(
+    await page.evaluate(
+      () => (window as Window & { __peerCompareTest?: { color: string } }).__peerCompareTest?.color,
+    ),
+  ).toBe('#e84373')
+  await expect(colorPicker.locator('.peer-color-picker__swatch')).toHaveCSS(
+    'background-color',
+    'rgb(232, 67, 115)',
+  )
+  await colorPicker.locator('summary').click()
   await expect(peer.locator('.peer-list__private-names')).toContainText('Unnamed viewer device')
   await expect(peer.locator('.peer-list__private-names')).toContainText(
     'Local label for a device viewing your location',

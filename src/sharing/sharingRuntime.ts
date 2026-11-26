@@ -7,7 +7,6 @@ import { createSharingContext } from './sharingContext.ts'
 export { followStatusFor, savedFollowRecords } from './sharingProjection.ts'
 export { acceptReturnShare } from './sharingReturn.ts'
 export {
-  FOLLOW_COLORS,
   appendSessionEvent,
   claimSingleRecipient,
   rememberRedeemedNonce,

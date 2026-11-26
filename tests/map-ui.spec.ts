@@ -790,8 +790,11 @@ test('selects self and peers independently in a group and paints only own point 
   const root = page.locator('#self-group-test')
   const self = root.getByRole('button', { name: 'Open settings for my location' })
   await expect(self).toBeVisible()
-  await expect(self).toHaveText('ME')
-  await expect(self.locator('.peer-avatar')).toHaveCSS('color', 'rgb(247, 143, 59)')
+  await expect(self).toHaveText('me')
+  await expect(self.locator('.own-position-marker__dot')).toHaveCSS(
+    'background-color',
+    'rgb(37, 99, 235)',
+  )
   await self.click()
   await root.getByRole('button', { name: 'Show River details' }).click()
   expect(
@@ -821,6 +824,8 @@ test('selects self and peers independently in a group and paints only own point 
   )
   await expect(root.locator('.location-map__group')).toHaveCount(0)
   await expect(root.locator('.location-map__single-avatar')).toHaveCount(1)
+  await expect(root.locator('.location-map__own-marker')).toBeVisible()
+  await expect(root.locator('.location-map__own-marker')).toContainText('me')
   await page.evaluate(() =>
     (window as typeof window & { selfGroupTest: { dispose(): void } }).selfGroupTest.dispose(),
   )

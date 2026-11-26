@@ -71,6 +71,16 @@
       >
         <MapPeerAvatar :location="marker.location" :now="displayNow" />
       </button>
+      <button
+        v-if="ownMarker"
+        class="location-map__own-marker"
+        type="button"
+        :style="{ left: `${ownMarker.x}px`, top: `${ownMarker.y}px` }"
+        aria-label="Open settings for my location"
+        @click.stop="emit('selectOwn')"
+      >
+        <MapPeerAvatar :location="ownMarker.location" :now="displayNow" />
+      </button>
       <aside
         v-if="offscreenPeers.length && maxOffscreenItems > 0"
         class="location-map__offscreen-peers"
@@ -176,6 +186,7 @@ import {
 } from '../map/pmtiles.ts'
 import type { MapCamera } from '../map/mapCamera.ts'
 import { markerAgePresentation } from '../location/lastKnownMarker.ts'
+import OwnPositionMarker from './OwnPositionMarker.vue'
 import MapPeerAvatar from './MapPeerAvatar.vue'
 
 const LOCATION_SOURCE_ID = 'constellation-locations'
@@ -253,6 +264,7 @@ const visibleOffscreenPeers = computed(() => {
   return offscreenPeers.value.slice(0, shown)
 })
 const individualAvatars = ref<{ location: MapLocation; x: number; y: number }[]>([])
+const ownMarker = ref<{ location: MapLocation; x: number; y: number }>()
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = ref<'light' | 'dark'>(darkScheme.matches ? 'dark' : 'light')
 const runtime = createPmtilesRuntime({ maxBytes: props.cacheMaxBytes })
@@ -438,6 +450,18 @@ const updatePresentation = (): void => {
     represented,
   )
   const visible = new Set(next.mapLocations.map(({ id }) => id))
+  const ownPosition = projectedLocations.find(
+    ({ location, x, y }) =>
+      location.isOwn &&
+      visible.has(location.id) &&
+      x >= 0 &&
+      x <= clientWidth &&
+      y >= 0 &&
+      y <= clientHeight,
+  )
+  ownMarker.value = ownPosition
+    ? { location: ownPosition.location, x: ownPosition.x, y: ownPosition.y }
+    : undefined
   individualAvatars.value = projectedLocations
     .filter(
       ({ location, x, y }) =>
@@ -607,6 +631,24 @@ onBeforeUnmount(() => {
   transform: translate(-50%, -50%);
   pointer-events: auto;
   cursor: pointer;
+}
+.location-map__own-marker {
+  position: absolute;
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.location-map__own-marker:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 7px;
+  border-radius: 50%;
 }
 .location-map__group-member {
   display: grid;

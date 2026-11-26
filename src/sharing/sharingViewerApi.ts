@@ -53,12 +53,8 @@ import {
 import { type PendingStopNotice } from './privateStore.ts'
 
 import type { SharingContext } from './sharingContext.ts'
-import {
-  FOLLOW_COLORS,
-  LOCATION_SENSOR_ID,
-  randomToken,
-  viewerFingerprint,
-} from './sharingRuntimeHelpers.ts'
+import { randomVividPeerColor } from '../identity/peerColor.ts'
+import { LOCATION_SENSOR_ID, randomToken, viewerFingerprint } from './sharingRuntimeHelpers.ts'
 
 export const createViewerApi = (
   ctx: SharingContext,
@@ -723,7 +719,7 @@ const pendingFollowEntry = (
     color:
       existing?.color ??
       existingPeer?.color ??
-      FOLLOW_COLORS[ctx.followed.size % FOLLOW_COLORS.length]!,
+      randomVividPeerColor([...ctx.followed.values()].map(({ color }) => color)),
     connected: false,
     approvalPending: !denied,
     approvalDenied: denied,
@@ -776,7 +772,7 @@ const activeFollowEntry = (
     color:
       existing?.color ??
       existingPeer?.color ??
-      FOLLOW_COLORS[ctx.followed.size % FOLLOW_COLORS.length]!,
+      randomVividPeerColor([...ctx.followed.values()].map(({ color }) => color)),
     connected: true,
     approvalPending: false,
     approvalDenied: false,
@@ -1415,13 +1411,15 @@ const createSetFollowName =
 const createSetFollowColor =
   (ctx: SharingContext): SharingRuntime['setFollowColor'] =>
   (shareId, color) => {
-    if (!FOLLOW_COLORS.includes(color as (typeof FOLLOW_COLORS)[number])) return
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return
     const entry = ctx.followed.get(shareId)
     if (!entry) return
-    for (const candidate of ctx.followed.values()) {
-      if (candidate.sourcePeerId === entry.sourcePeerId) candidate.color = color
-    }
-    if (entry.saved)
+    const normalized = color.toLowerCase()
+    const samePeer = [...ctx.followed.values()].filter(
+      (candidate) => candidate.sourcePeerId === entry.sourcePeerId,
+    )
+    samePeer.forEach((candidate) => (candidate.color = normalized))
+    if (samePeer.some((candidate) => candidate.saved))
       void ctx.persist().catch(() => ctx.publish({ message: 'Color could not be saved.' }))
     ctx.publish()
   }

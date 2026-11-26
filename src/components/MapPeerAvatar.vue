@@ -7,10 +7,8 @@
     "
   >
     <span class="map-peer-avatar__portrait" :style="{ opacity: presentation.opacity }">
-      <PeerAvatar
-        :name="location.isOwn ? 'Me' : location.label || 'Shared location'"
-        :color="location.color"
-      />
+      <OwnPositionMarker v-if="location.isOwn" />
+      <PeerAvatar v-else :name="location.label || 'Shared location'" :color="location.color" />
     </span>
     <Clock v-if="presentation.clockBadge" class="map-peer-avatar__clock" aria-hidden="true" />
   </span>
@@ -21,6 +19,7 @@ import { LucideClock3 as Clock } from '@lucide/vue'
 import { computed } from 'vue'
 import type { MapLocation } from '../location/mapModel.ts'
 import { markerAgePresentation } from '../location/lastKnownMarker.ts'
+import OwnPositionMarker from './OwnPositionMarker.vue'
 import PeerAvatar from './PeerAvatar.vue'
 
 const props = defineProps<{ location: MapLocation; now: number }>()

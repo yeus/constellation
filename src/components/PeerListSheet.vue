@@ -166,22 +166,14 @@
             <div v-if="peer.following.length" class="peer-list__direction">
               <span class="peer-list__direction-label">{{ peer.name }}’s location to you</span>
               <span class="peer-list__direction-status">{{ incomingSummary(peer) }}</span>
-              <div
+              <PeerColorPicker
                 v-for="follow in peer.following"
                 :key="`color:${follow.shareId}`"
                 class="peer-link-item__colors"
-                :aria-label="`Location color for ${follow.displayName || follow.localName}`"
-              >
-                <button
-                  v-for="color in FOLLOW_COLORS"
-                  :key="color"
-                  type="button"
-                  :style="{ backgroundColor: color }"
-                  :aria-label="`Use ${color} color`"
-                  :aria-pressed="follow.color === color"
-                  @click="emit('color', follow.shareId, color)"
-                />
-              </div>
+                :color="follow.color"
+                :label="follow.displayName || follow.localName"
+                @change="emit('color', follow.shareId, $event)"
+              />
             </div>
           </div>
           <details class="peer-list__section peer-list__section--names" open>
@@ -777,10 +769,11 @@ import { rankPeersByProximity } from '../location/peerRanking.ts'
 import type { DeviceComparison } from '../sharing/deviceComparison.ts'
 import CloseIcon from './icons/CloseIcon.vue'
 import PeerAvatar from './PeerAvatar.vue'
+import PeerColorPicker from './PeerColorPicker.vue'
 import { advertisedPeerName, type PeerNamePreference } from '../sharing/peerNames.ts'
 import { canClearPeerRecord, protectActivePeerHistory } from '../sharing/peerHistory.ts'
 import type { StoppedViewerRecord } from '../sharing/privateStore.ts'
-import { FOLLOW_COLORS, type FollowSummary, type ShareSummary } from '../sharing/sharingRuntime.ts'
+import type { FollowSummary, ShareSummary } from '../sharing/sharingRuntime.ts'
 import { followActivitySummary } from '../sharing/followPresentation.ts'
 
 type PeerFilter = 'all' | 'sharing' | 'viewing' | 'both' | 'group'
@@ -1910,20 +1903,8 @@ const remaining = (timestamp: number): string => {
 }
 
 .peer-link-item__colors {
-  display: flex;
-  gap: 0.35rem;
-}
-
-.peer-link-item__colors button {
-  width: 1.5rem;
-  height: 1.5rem;
-  border: 2px solid transparent;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.peer-link-item__colors button[aria-pressed='true'] {
-  border-color: var(--text);
+  margin-top: 0.3rem;
+  align-self: flex-start;
 }
 .peer-trace-optin {
   display: flex;
