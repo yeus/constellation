@@ -454,6 +454,20 @@ EOF
             desktopLibraries ++ browserLibraries
           );
 
+          CONSTELLATION_BROWSER_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
+            (with pkgs; [
+              glib
+              at-spi2-core
+              atk
+              cairo
+              pango
+              fontconfig
+              freetype
+              systemd
+              stdenv.cc.cc.lib
+            ]) ++ browserLibraries
+          );
+
           __EGL_VENDOR_LIBRARY_FILENAMES =
             "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
           LIBGL_DRIVERS_PATH = "${pkgs.mesa}/lib/dri";
