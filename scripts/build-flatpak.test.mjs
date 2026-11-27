@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { createFixtureToolPath } from './test-fixture-tool-path.mjs'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -48,7 +49,7 @@ printf 'build-commit=%s\n' "\${CONSTELLATION_BUILD_COMMIT-unset}" >> "$FLATPAK_C
     cwd: fixtureRoot,
     encoding: 'utf8',
     env: {
-      PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: createFixtureToolPath(fixtureRoot, fakeBin),
       FLATPAK_CALL_LOG: callLog,
       GITHUB_SHA: 'a'.repeat(40),
     },

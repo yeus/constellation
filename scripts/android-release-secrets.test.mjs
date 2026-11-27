@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { createFixtureToolPath } from './test-fixture-tool-path.mjs'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -21,6 +22,7 @@ const createFixture = (t, secretStore = {}) => {
   fs.mkdirSync(bin)
   fs.mkdirSync(config, { recursive: true })
   fs.writeFileSync(storePath, JSON.stringify(secretStore))
+  const systemToolPath = createFixtureToolPath(root)
 
   fs.writeFileSync(
     path.join(bin, 'secret-tool'),
@@ -122,9 +124,10 @@ process.exit(2)
     githubWrites,
     keytoolCalls,
     storePath,
+    systemToolPath,
     env: {
       HOME: home,
-      PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: `${bin}:${systemToolPath}`,
       XDG_CONFIG_HOME: config,
       CONSTELLATION_TEST_SECRET_STORE: storePath,
       CONSTELLATION_TEST_KEYTOOL_CALLS: keytoolCalls,
@@ -515,7 +518,7 @@ test('accepts explicit signing values without Secret Service', (t) => {
   fs.symlinkSync(path.join(fixture.bin, 'keytool'), path.join(keytoolOnly, 'keytool'))
 
   const result = runPrepare(fixture, {
-    PATH: `${keytoolOnly}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    PATH: `${keytoolOnly}:${fixture.systemToolPath}`,
     ANDROID_KEYSTORE_PATH: keystorePath,
     ANDROID_KEYSTORE_PASSWORD: 'synthetic-store-password',
     ANDROID_KEY_ALIAS: 'synthetic-release-alias',
@@ -532,7 +535,7 @@ test('accepts explicit base64 signing values without Secret Service or local fil
   fs.mkdirSync(keytoolOnly)
   fs.symlinkSync(path.join(fixture.bin, 'keytool'), path.join(keytoolOnly, 'keytool'))
   const result = runPrepare(fixture, {
-    PATH: `${keytoolOnly}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    PATH: `${keytoolOnly}:${fixture.systemToolPath}`,
     ANDROID_KEYSTORE_BASE64: Buffer.from('synthetic-remote-keystore').toString('base64'),
     ANDROID_KEYSTORE_PASSWORD: 'synthetic-store-password',
     ANDROID_KEY_ALIAS: 'synthetic-release-alias',
@@ -549,7 +552,7 @@ test('fails clearly when signing values are missing and Secret Service is unavai
   fs.mkdirSync(keytoolOnly)
   fs.symlinkSync(path.join(fixture.bin, 'keytool'), path.join(keytoolOnly, 'keytool'))
   const result = runPrepare(fixture, {
-    PATH: `${keytoolOnly}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    PATH: `${keytoolOnly}:${fixture.systemToolPath}`,
   })
 
   assert.notEqual(result.status, 0)

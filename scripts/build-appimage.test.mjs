@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { createFixtureToolPath } from './test-fixture-tool-path.mjs'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -50,7 +51,7 @@ printf 'fresh appimage' > "$CARGO_TARGET_DIR/release/bundle/appimage/constellati
     cwd: fixtureRoot,
     encoding: 'utf8',
     env: {
-      PATH: `${fakeBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: createFixtureToolPath(fixtureRoot, fakeBin),
       CARGO_TARGET_DIR: staleTarget,
       APPIMAGE_STALE_TARGET: staleTarget,
       APPIMAGE_TARGET_LOG: targetLog,

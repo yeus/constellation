@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { createFixtureToolPath } from './test-fixture-tool-path.mjs'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -30,7 +31,7 @@ test('does not overwrite an existing local Android keystore.properties', (t) => 
   const result = spawnSync('bash', [scriptPath], {
     encoding: 'utf8',
     env: {
-      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: createFixtureToolPath(fixtureRoot),
       ANDROID_KEYSTORE_PATH: keystorePath,
       ANDROID_KEYSTORE_PASSWORD: 'synthetic-store-password',
       ANDROID_KEY_ALIAS: 'synthetic-alias',
