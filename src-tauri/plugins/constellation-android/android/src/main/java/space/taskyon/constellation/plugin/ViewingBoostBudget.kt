@@ -7,8 +7,10 @@ import java.util.ArrayDeque
  * records coordinates, viewer identities or links. Does not grant any authorization.
  */
 internal class ViewingBoostBudget(
-  private val windowMs: Long = 600_000L,
-  private val limitMs: Long = 60_000L,
+  // A full ten-minute allowance in a ten-minute rolling window is an
+  // unlimited duty cycle. Reserve at least ten minutes for saver mode.
+  private val windowMs: Long = 1_200_000L,
+  private val limitMs: Long = 600_000L,
 ) {
   private val spent = ArrayDeque<Pair<Long, Long>>()
   private var lastSampleAt = -1L

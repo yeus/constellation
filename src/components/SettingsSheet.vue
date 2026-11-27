@@ -62,6 +62,30 @@
             ><span>Android notification</span>
           </button>
         </div>
+        <label v-if="isAndroid" class="settings-network">
+          Background location interval
+          <select
+            aria-label="Background location interval"
+            :value="draft.backgroundIntervalMinutes ?? 5"
+            @change="
+              changeDraft({
+                ...draft,
+                backgroundIntervalMinutes: Number(($event.target as HTMLSelectElement).value) as
+                  | 1
+                  | 5
+                  | 10,
+              })
+            "
+          >
+            <option :value="1">Every 1 minute</option>
+            <option :value="5">Every 5 minutes (default)</option>
+            <option :value="10">Every 10 minutes</option>
+          </select>
+        </label>
+        <p v-if="isAndroid" class="field-help">
+          Inactive viewers use low-power network positioning. An opportunistic passive fix after
+          moving 50 m may arrive sooner. Viewing actively increases the rate.
+        </p>
       </fieldset>
       <p v-if="fallbackNotice" class="settings-permissions" role="status">
         <strong>Requested mode (save to keep it); execution restricted.</strong>
@@ -129,8 +153,8 @@
         >
       </fieldset>
       <p v-if="isAndroid" class="field-help">
-        Background sharing always uses the lower-power rate (about every 30 s), even if Balanced is
-        selected.
+        Background sharing uses the selected low-power interval unless an authorized viewer is
+        active.
       </p>
       <fieldset v-if="isAndroid" :disabled="busy">
         <legend>Background location source</legend>
@@ -146,7 +170,7 @@
                   : 'automatic',
               })
             "
-          />Use network positioning only (never turn on GPS for background sharing)</label
+          />Always use network positioning, including while the app is open</label
         >
         <p class="field-help">
           May use less battery, but location can become unavailable. This does not change your
@@ -165,8 +189,9 @@
           />Allow brief faster tracking when an authorized recipient is actively viewing
         </label>
         <p v-if="isAndroid" class="field-help">
-          Authenticated viewing requests expire automatically. Faster tracking is capped at one
-          minute per ten minutes and never overrides network-only mode or the shared precision.
+          Viewing hints expire automatically. Responsive 15-second tracking can run for up to ten
+          minutes while a recipient is actively viewing. Background prefers network positioning;
+          only Automatic can fall back to GPS if the network provider is unavailable.
         </p>
       </fieldset>
       <p class="field-help">

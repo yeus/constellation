@@ -188,7 +188,7 @@ const enableMockNetworkLocation = (serial) => {
     serial,
   )
   if (!/Broadcast completed: result=0\b/.test(result)) {
-    throw new Error('Android API 29 network mock provider was not enabled.')
+    throw new Error('Android emulator network mock provider was not enabled.')
   }
 }
 
@@ -225,7 +225,10 @@ const runProfile = async (name, prepare, testArgs = [], selectedApk = apk) => {
     throw new Error(
       'Required managed Android APK is missing; build the matching debug APK before using --skip-build.',
     )
-  const mockNetwork = name === 'compat' && testArgs.includes('--network-location-fixture')
+  // Android emulators may not provide network positioning out of the box.
+  // Exercise background network-only sharing with an explicit low-power
+  // test provider instead of silently reverting the app to GPS.
+  const mockNetwork = testArgs.includes('--network-location-fixture')
   const device = await startProfile(profile(name), prepare)
   try {
     run(adbPath, ['start-server'], { env: adbEnvironment })
@@ -739,7 +742,7 @@ const main = async () => {
     return
   }
   if (process.argv.includes('--modern-only')) {
-    await runProfile('modern')
+    await runProfile('modern', undefined, ['--network-location-fixture'])
     console.log('Android API 36 location-sharing tests passed.')
     return
   }
@@ -766,7 +769,7 @@ const main = async () => {
     run: () => runProfile('modern', undefined, args, selectedApk),
   })
   await runAcceptanceMatrix([
-    modern('api36-play'),
+    modern('api36-play', ['--network-location-fixture']),
     {
       name: 'api29-play',
       run: () =>

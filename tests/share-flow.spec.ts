@@ -1266,10 +1266,16 @@ test('Android sharing preferences stay editable with missing permissions and sho
               servicesEnabled: true,
             }
           },
-          onSave: (behavior: { publication: string; battery: string; network: string }) => {
+          onSave: (behavior: {
+            publication: string
+            battery: string
+            network: string
+            backgroundIntervalMinutes?: number
+          }) => {
             container.dataset.publication = behavior.publication
             container.dataset.battery = behavior.battery
             container.dataset.network = behavior.network
+            container.dataset.interval = String(behavior.backgroundIntervalMinutes ?? 5)
             state.error = 'Synthetic save failure; retry is available.'
           },
         }),
@@ -1293,6 +1299,11 @@ test('Android sharing preferences stay editable with missing permissions and sho
   await expect(page.locator('[data-system-settings="power-saver"]')).toHaveCount(1)
   await expect(setup.getByRole('button', { name: /In background/ })).toBeEnabled()
   await expect(setup.getByRole('button', { name: 'Save settings' })).toBeEnabled()
+  const backgroundInterval = setup.getByRole('combobox', {
+    name: 'Background location interval',
+  })
+  await expect(backgroundInterval).toHaveValue('5')
+  await backgroundInterval.selectOption('10')
   await expect(setup).toContainText(
     'Effective fallback: location sharing only while the app is open',
   )
@@ -1302,6 +1313,7 @@ test('Android sharing preferences stay editable with missing permissions and sho
   await expect(page.locator('[data-publication="background"]')).toHaveCount(1)
   await expect(page.locator('[data-battery="saver"]')).toHaveCount(1)
   await expect(page.locator('[data-network="pause-when-metered"]')).toHaveCount(1)
+  await expect(page.locator('[data-interval="10"]')).toHaveCount(1)
   await expect(setup.getByRole('alert')).toContainText('Synthetic save failure')
   await setup.getByRole('button', { name: 'Enable background sharing' }).click()
   await expect(setup).not.toContainText(

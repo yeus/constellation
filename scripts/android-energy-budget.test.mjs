@@ -34,6 +34,17 @@ test('background sharing watches only one provider; precise grants select GPS on
   assert.match(service, /onProviderDisabled\(provider: String\)/)
 })
 
+test('background sampling defaults to five minutes and uses passive movement detection', () => {
+  assert.match(behavior, /backgroundIntervalMinutes: 5/)
+  assert.match(service, /private var backgroundIntervalMinutes = 5/)
+  assert.match(service, /backgroundIntervalMinutes \* 60_000L/)
+  assert.match(service, /LocationManager\.PASSIVE_PROVIDER, 30_000L, 50f/)
+  assert.match(service, /maxOf\(50f, previous\.accuracy, location\.accuracy\)/)
+  assert.match(service, /reason=network-unavailable;target=gps/)
+  assert.match(service, /it\.optString\("precision"\) == "exact" && appVisible/)
+  assert.match(service, /networkOnlyLocationRequested\(\): Boolean = networkOnlyPolicy/)
+})
+
 test('one-shot refresh remains independent from the periodic watch manager', () => {
   assert.match(service, /refreshManager = manager/)
   assert.match(service, /refreshManager\?\.removeUpdates\(listener\)/)
@@ -51,10 +62,13 @@ test('GPS diagnostics coalesce disk writes without dropping per-provider counts'
   assert.match(service, /SystemClock\.elapsedRealtime\(\) - lastFixJournalAt < 300_000L/)
   assert.match(service, /private fun flushLocationFixJournal\(\)/)
   assert.match(service, /watch=\$watchFixesSinceJournal;refresh=\$refreshFixesSinceJournal/)
+  assert.match(service, /private fun sendPosition\(location: Location, type: String\)/)
   assert.match(
     service,
-    /private fun sendPosition\(location: Location, type: String\) \{\n {4}recordLocationFix\(type\)/,
+    /if \(!appVisible && activeViewingBoostUntil <= SystemClock\.elapsedRealtime\(\)\)/,
   )
+  assert.match(service, /lastBackgroundPositionAt < backgroundIntervalMinutes \* 60_000L/)
+  assert.match(service, /recordLocationFix\(type\)\s+send\(JSONObject\(\)/)
   assert.match(service, /override fun onDestroy\(\) \{\n {4}flushLocationFixJournal\(\)/)
 })
 
@@ -98,8 +112,8 @@ test('active-viewing boosts require a sourced, bounded, authenticated P2P lease'
   assert.match(source, /session\.lastHeartbeatAt \+ 25_000/)
   assert.match(viewer, /state\.isV3 \? \{ viewing:/)
   assert.match(projection, /activeViewingUntil > input\.now/)
-  assert.match(budget, /windowMs: Long = 600_000L/)
-  assert.match(budget, /limitMs: Long = 60_000L/)
+  assert.match(budget, /windowMs: Long = 1_200_000L/)
+  assert.match(budget, /limitMs: Long = 600_000L/)
   assert.match(service, /viewingBudget\.permittedUntil/)
   assert.match(service, /power\?\.isDeviceIdleMode != true/)
   assert.match(service, /mainHandler\.postDelayed\(viewingBoostTimer/)

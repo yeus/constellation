@@ -78,6 +78,7 @@ class SharingBehaviorPayload {
   var network: String = ""
   var locationProvider: String = "automatic"
   var activeViewingBoost: Boolean = true
+  var backgroundIntervalMinutes: Int = 5
 }
 
 @InvokeArg
@@ -316,6 +317,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
       check(behavior.battery in setOf("balanced", "saver")) { "Invalid battery policy." }
       check(behavior.network in setOf("always", "pause-when-metered")) { "Invalid network policy." }
       check(behavior.locationProvider in setOf("automatic", "network-only")) { "Invalid location provider policy." }
+      check(behavior.backgroundIntervalMinutes in setOf(1, 5, 10)) { "Invalid background sampling interval." }
       // The user's choice is durable regardless of the Android permission state.
       // Effective execution is downgraded to foreground-only until the OS permits
       // background location. Never silently replace the desired preference.
@@ -325,6 +327,7 @@ class ConstellationAndroidPlugin(private val activity: Activity) : Plugin(activi
         .put("network", behavior.network)
         .put("locationProvider", behavior.locationProvider)
         .put("activeViewingBoost", behavior.activeViewingBoost)
+        .put("backgroundIntervalMinutes", behavior.backgroundIntervalMinutes)
       store.saveBehaviorPreference(desired.toString())
       val permissions = sharingSetupResult().getJSONObject("permissions")
       val canBackground = listOf("location", "background", "notifications", "servicesEnabled")

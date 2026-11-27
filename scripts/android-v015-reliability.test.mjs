@@ -161,6 +161,8 @@ test('API 29 Play Store fixture mocks network locations without modifying the ap
   const manifest = read('scripts/fixtures/android-network-location/AndroidManifest.xml')
   assert.match(managed, /testArgs.includes\('--network-location-fixture'\)/)
   assert.match(managed, /'--local-share-flow', '--network-location-fixture'/)
+  assert.match(managed, /runProfile\('modern', undefined, \['--network-location-fixture'\]\)/)
+  assert.match(managed, /modern\('api36-play', \['--network-location-fixture'\]\)/)
   assert.match(native, /retryMockLocationFix\('-70\.0201', '40\.0201'\)/)
   assert.match(fixture, /LocationManager\.NETWORK_PROVIDER/)
   assert.match(fixture, /setTestProviderLocation\(PROVIDER, location\)/)

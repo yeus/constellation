@@ -65,6 +65,10 @@ class LocationShareService : Service(), LocationListener {
   private val viewingBoostTimer = Runnable { updatePolicyState() }
   private var networkOnlyPolicy = false
   private var activeViewingBoostPolicy = true
+  private var backgroundIntervalMinutes = 5
+  private var passiveMovementListener: LocationListener? = null
+  private var lastBackgroundPosition: Location? = null
+  private var lastBackgroundPositionAt = -1L
   private fun reloadLocationPolicies() {
     val wasNetworkOnly = networkOnlyPolicy
     val loaded = runCatching { store.loadBehaviorPreference()?.let(::JSONObject) }
@@ -72,11 +76,14 @@ class LocationShareService : Service(), LocationListener {
       // Unreadable power preferences must not silently reactivate GPS.
       networkOnlyPolicy = true
       activeViewingBoostPolicy = false
+      backgroundIntervalMinutes = 5
       journal.record("location.policy.fallback", "reason=unreadable-preferences")
     } else {
       val desired = loaded.getOrNull()
       networkOnlyPolicy = desired?.optString("locationProvider") == "network-only"
       activeViewingBoostPolicy = desired?.optBoolean("activeViewingBoost", true) != false
+      backgroundIntervalMinutes = desired?.optInt("backgroundIntervalMinutes", 5)
+        ?.takeIf { it in setOf(1, 5, 10) } ?: 5
     }
     // Only a policy transition must cancel a pending automatic/GPS one-shot fix.
     // Ordinary low-power sampler changes must preserve the first viewer's refresh.
@@ -556,6 +563,18 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun sendPosition(location: Location, type: String) {
+    // Passive fixes are opportunistic. Suppress jitter and frequent idle updates.
+    if (!appVisible && activeViewingBoostUntil <= SystemClock.elapsedRealtime()) {
+      if (lastViewerCount == 0) return
+      val now = SystemClock.elapsedRealtime()
+      val previous = lastBackgroundPosition
+      val moved = previous != null && location.distanceTo(previous) >=
+        maxOf(50f, previous.accuracy, location.accuracy)
+      if (previous != null && !moved && lastBackgroundPositionAt >= 0 &&
+        now - lastBackgroundPositionAt < backgroundIntervalMinutes * 60_000L) return
+      lastBackgroundPosition = location
+      lastBackgroundPositionAt = now
+    }
     recordLocationFix(type)
     send(JSONObject()
       .put("type", type)
@@ -847,6 +866,11 @@ class LocationShareService : Service(), LocationListener {
           lastJournalConfirmed = confirmed
         }
         lastShares = shares
+        if (viewers > 0 && lastViewerCount == 0) {
+          // The first authorized viewer must not inherit a stale saver throttle.
+          lastBackgroundPosition = null
+          lastBackgroundPositionAt = -1L
+        }
         lastViewerCount = viewers
         lastPaused = status.optBoolean("paused", false)
         updatePolicyState()
@@ -949,6 +973,12 @@ class LocationShareService : Service(), LocationListener {
     val sampling = samplingFor(lastShares)
     val preferredProvider = preferredLocationProvider(lastShares)
     val manager = getSystemService(LocationManager::class.java)
+    if (!appVisible && !networkOnlyPolicy &&
+      LocationManager.NETWORK_PROVIDER !in availableLocationProviders(manager)) {
+      // Automatic prefers low-power network fixes, but an unavailable provider
+      // must not silently stop an authorized share on devices without GMS/NLP.
+      journal.record("location.provider.fallback", "reason=network-unavailable;target=gps")
+    }
     if (watchAndroidLocation(
       manager,
       this,
@@ -958,7 +988,15 @@ class LocationShareService : Service(), LocationListener {
       allowFallback = !networkOnlyLocationRequested(),
     )) {
       locationManager = manager
-      appliedSampling = "$sampling:$preferredProvider:${networkOnlyLocationRequested()}"
+      if (!appVisible && sampling == "saver") {
+        // Passive fixes do not wake GPS; meaningful motion can be sent early.
+        val movement = androidLocationListener(onLocationChanged = { sendPosition(it, "location") })
+        if (runCatching {
+          manager.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 30_000L, 50f,
+            movement, Looper.getMainLooper())
+        }.isSuccess) passiveMovementListener = movement
+      }
+      appliedSampling = "$sampling:$preferredProvider:${networkOnlyLocationRequested()}:$backgroundIntervalMinutes"
     } else {
       send(JSONObject().put("type", "location-error").put("code", 2))
     }
@@ -966,7 +1004,11 @@ class LocationShareService : Service(), LocationListener {
 
   private fun stopLocationUpdates(cancelRefresh: Boolean = true) {
     if (cancelRefresh) clearRefresh()
-    locationManager?.let { manager -> runCatching { manager.removeUpdates(this) } }
+    locationManager?.let { manager ->
+      runCatching { manager.removeUpdates(this) }
+      passiveMovementListener?.let { runCatching { manager.removeUpdates(it) } }
+    }
+    passiveMovementListener = null
     locationManager = null
     appliedSampling = null
   }
@@ -1002,9 +1044,7 @@ class LocationShareService : Service(), LocationListener {
   private fun preferredLocationProvider(shares: JSONArray?): String =
     if (!networkOnlyLocationRequested() && locationGrant(this) == "fine" && shareObjects(shares).any {
         it.isNull("paused") && it.optInt("viewerCount", 0) > 0 &&
-        it.optString("precision") == "exact" &&
-        (appVisible || (activeViewingBoostUntil > SystemClock.elapsedRealtime() &&
-          it.optLong("activeViewingUntil", 0L) > System.currentTimeMillis()))
+        it.optString("precision") == "exact" && appVisible
       }) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
 
   private fun shareObjects(shares: JSONArray?): List<JSONObject> =
@@ -1019,10 +1059,12 @@ class LocationShareService : Service(), LocationListener {
   }
 
   private fun intervalFor(sampling: String): Long =
-    if (sampling == "saver") SAVER_UPDATE_INTERVAL_MS else BALANCED_UPDATE_INTERVAL_MS
+    if (!appVisible && sampling == "saver") backgroundIntervalMinutes * 60_000L
+    else if (sampling == "saver") SAVER_UPDATE_INTERVAL_MS else BALANCED_UPDATE_INTERVAL_MS
 
   private fun distanceFor(sampling: String): Float =
-    if (sampling == "saver") SAVER_UPDATE_MINIMUM_DISTANCE_METRES else BALANCED_UPDATE_MINIMUM_DISTANCE_METRES
+    if (!appVisible && sampling == "saver") 0f
+    else if (sampling == "saver") SAVER_UPDATE_MINIMUM_DISTANCE_METRES else BALANCED_UPDATE_MINIMUM_DISTANCE_METRES
 
   private fun connectivityRestriction(): String? {
     val manager = connectivityManager ?: return null
@@ -1061,7 +1103,7 @@ class LocationShareService : Service(), LocationListener {
     if (publishingShareCount(shares) == 0 || lastViewerCount == 0 || !permitted) {
       if (locationManager != null || refreshManager != null) stopLocationUpdates()
     } else if (watchRequested &&
-      (locationManager == null || appliedSampling != "$sampling:${preferredLocationProvider(shares)}:${networkOnlyLocationRequested()}")) {
+      (locationManager == null || appliedSampling != "$sampling:${preferredLocationProvider(shares)}:${networkOnlyLocationRequested()}:$backgroundIntervalMinutes")) {
       stopLocationUpdates(cancelRefresh = false)
       startLocationUpdates()
     }
@@ -1096,7 +1138,7 @@ class LocationShareService : Service(), LocationListener {
       availableLocationProviders(manager),
       networkOnlyLocationRequested(),
       locationGrant(this) == "fine",
-      shareObjects(lastShares).any { it.isNull("paused") && it.optString("precision") == "exact" },
+      shareObjects(lastShares).any { it.isNull("paused") && it.optString("precision") == "exact" && appVisible },
     ) ?: return
     journal.record("location.refresh", "provider=${if (provider == LocationManager.GPS_PROVIDER) "gps" else "network"}")
     clearRefresh()

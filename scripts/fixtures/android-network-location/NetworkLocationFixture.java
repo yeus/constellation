@@ -9,7 +9,7 @@ import android.location.LocationManager;
 import android.os.SystemClock;
 
 /**
- * Android 10 emulator-only fixture. ADB grants this APK the mock-location app op;
+ * Emulator-only fixture (API 29 and API 36). ADB grants this APK the mock-location app op;
  * Constellation never receives that permission or ships this code.
  */
 public final class NetworkLocationFixture extends BroadcastReceiver {

@@ -8,6 +8,7 @@ export const SharingBehavior = z.object({
   locationProvider: z.enum(['automatic', 'network-only']).optional(),
   /** Sender controls whether authenticated viewers may temporarily boost tracking. */
   activeViewingBoost: z.boolean().optional(),
+  backgroundIntervalMinutes: z.union([z.literal(1), z.literal(5), z.literal(10)]).optional(),
 })
 export type SharingBehavior = z.infer<typeof SharingBehavior>
 
@@ -17,4 +18,5 @@ export const defaultSharingBehavior = (isAndroid: boolean): SharingBehavior => (
   network: 'always',
   locationProvider: 'automatic',
   activeViewingBoost: true,
+  backgroundIntervalMinutes: 5,
 })
