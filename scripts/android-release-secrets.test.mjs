@@ -17,12 +17,19 @@ const createFixture = (t, secretStore = {}) => {
   const home = path.join(root, 'home')
   const config = path.join(home, '.config')
   const storePath = path.join(root, 'secret-store.json')
+  const prepareScript = path.join(root, 'prepare-fixture.sh')
   const keytoolCalls = path.join(root, 'keytool-calls')
   const githubWrites = path.join(root, 'github-writes')
   fs.mkdirSync(bin)
   fs.mkdirSync(config, { recursive: true })
   fs.writeFileSync(storePath, JSON.stringify(secretStore))
   const systemToolPath = createFixtureToolPath(root)
+  fs.writeFileSync(
+    prepareScript,
+    // Explicitly restore the fixture's tool path after Bash startup. Some NixOS
+    // shells reconfigure PATH when invoked for a test subprocess.
+    'set -euo pipefail\nexport PATH="$1"\nsource "$2"\nprepare_constellation_android_signing build "$3"\n',
+  )
 
   fs.writeFileSync(
     path.join(bin, 'secret-tool'),
@@ -124,6 +131,7 @@ process.exit(2)
     githubWrites,
     keytoolCalls,
     storePath,
+    prepareScript,
     systemToolPath,
     env: {
       HOME: home,
@@ -136,18 +144,19 @@ process.exit(2)
   }
 }
 
-const runPrepare = (fixture, environment = {}, interactive = false, input = '') =>
-  spawnSync(
+const runPrepare = (fixture, environment = {}, interactive = false, input = '') => {
+  const env = { ...fixture.env, ...environment }
+  return spawnSync(
     'bash',
     [
-      '-c',
-      'set -euo pipefail; source "$1"; prepare_constellation_android_signing build "$2"',
-      'test',
+      fixture.prepareScript,
+      env.PATH,
       path.join(projectRoot, 'scripts/android-release-secrets.sh'),
       interactive ? '1' : '0',
     ],
-    { encoding: 'utf8', env: { ...fixture.env, ...environment }, input },
+    { encoding: 'utf8', env, input },
   )
+}
 
 const runSync = (fixture, input = '', environment = {}) =>
   spawnSync(
@@ -165,6 +174,18 @@ const runRestore = (fixture, environment = {}) =>
     encoding: 'utf8',
     env: { ...fixture.env, ...environment },
   })
+
+test('restores isolated signing tools after Bash startup changes PATH', (t) => {
+  const fixture = createFixture(t)
+  const bashEnv = path.join(fixture.home, 'bash-startup.sh')
+  fs.writeFileSync(bashEnv, 'export PATH=/unavailable-host-tools\n')
+
+  const result = runPrepare(fixture, { BASH_ENV: bashEnv })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /new signing identity requires interactive confirmation/i)
+  assert.doesNotMatch(result.stderr, /keytool.*not.*PATH/i)
+})
 
 test('creates missing signing credentials and persists them to Secret Service', (t) => {
   const fixture = createFixture(t)
