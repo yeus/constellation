@@ -16,16 +16,14 @@ import {
   type PeerHistoryProtection,
 } from './peerHistory.ts'
 export { suggestedPeerName as generatedFollowName } from '../identity/peerName.ts'
-import { DEVICE_COMPARISON_PROTOCOL, type ComparisonBudget } from './deviceComparison.ts'
-import type { BrowserLibp2pNode } from '@taskyon/p2p-core/browser'
+import type { ComparisonBudget } from './deviceComparison.ts'
 import type { PrivateKey } from '@libp2p/interface'
 import { generateKeyPair } from '@libp2p/crypto/keys'
 import { peerIdFromPrivateKey } from '@libp2p/peer-id'
 
 import { shareExpiryFor, type ShareDraft } from '../shareDraft.ts'
-import { startPrivateBrowserPeer } from './browserPeer.ts'
+import { offlineShareAddresses } from './browserPeer.ts'
 import { base64UrlToBytes, bytesToBase64Url } from './encoding.ts'
-import { PEER_NAMES_PROTOCOL } from './peerNames.ts'
 import {
   createShareInvitation,
   parseShareInvitation,
@@ -35,12 +33,13 @@ import {
   type ShareCapability,
 } from './shareLink.ts'
 import { backgroundSharePolicy } from './sharePolicy.ts'
-import { constellationProtocolV2, SHARE_STREAM_PROTOCOLS } from './shareProtocol.ts'
+import { constellationProtocolV2 } from './shareProtocol.ts'
 import { parsePrivateState, type PrivateState } from './privateStore.ts'
 import { retainedEndNotifications } from './shareLifecycle.ts'
 
 import type { SharingContext } from './sharingContext.ts'
 import { capacityFor } from './sharingRuntimeHelpers.ts'
+import { acceptApprovedReturnWithRetries } from './sharingHelpers.ts'
 
 export const createSourceApi = (
   ctx: SharingContext,
@@ -566,16 +565,8 @@ const createApproveReturnLink =
     // Receiving a return location is network-dependent. It must not delay or undo
     // the already-persisted permission decision.
     const pending = [...ctx.returnOffers.entries()].filter(([, offer]) => offer.shareId === shareId)
-    void Promise.all(
-      pending.map(async ([key, offer]) => {
-        try {
-          await ctx.acceptPendingReturn(key, offer)
-        } catch {
-          ctx.publish({
-            message: 'Permission saved. A return location is still pending; retry when connected.',
-          })
-        }
-      }),
+    void Promise.allSettled(
+      pending.map(([key, offer]) => acceptApprovedReturnWithRetries(ctx, key, offer)),
     )
   }
 
@@ -657,31 +648,6 @@ const buildSourceShare = (
   blockedPeerIds: new Set(),
 })
 
-const registerSourceHandlers = async (
-  ctx: SharingContext,
-  share: SourceShare,
-  node: BrowserLibp2pNode,
-) => {
-  const shareId = share.capability.shareId
-  await node.handle(
-    [...SHARE_STREAM_PROTOCOLS],
-    (stream, connection) => ctx.handleIncomingStream(stream, connection, shareId),
-    { runOnLimitedConnection: true },
-  )
-  await node.handle(
-    PEER_NAMES_PROTOCOL,
-    (stream, connection) => ctx.handleNameStream(stream, connection, shareId),
-    { runOnLimitedConnection: true },
-  )
-  await node.handle(
-    DEVICE_COMPARISON_PROTOCOL,
-    (stream, connection) => ctx.handleComparisonStream(stream, connection, shareId),
-    { maxInboundStreams: 8, runOnLimitedConnection: true },
-  )
-  ctx.sourceNodes.set(shareId, node)
-  ctx.publish({ peerStatus: 'online', message: '' })
-}
-
 const applyInitialShareLocation = (ctx: SharingContext, share: SourceShare) => {
   const currentLocation = ctx.locationSource.getState()
   if (
@@ -697,37 +663,36 @@ const createCreateShare =
   async (draft, expiresAt = shareExpiryFor(draft, Date.now()), linkBaseUrl = ctx.shareBaseUrl) => {
     await ctx.prepareState()
     if (ctx.sharingBehavior) draft = { ...draft, ...ctx.sharingBehavior }
-    ctx.publish({ peerStatus: 'connecting', message: 'Connecting to the P2P network…' })
     const sourcePrivateKey = await generateKeyPair('Ed25519')
-    const started = await startPrivateBrowserPeer(sourcePrivateKey)
+    const sourcePeerId = peerIdFromPrivateKey(sourcePrivateKey).toString()
+    // The public link is independent of whether a circuit reservation exists now.
+    const addresses = offlineShareAddresses(sourcePeerId)
+    if (!addresses.length) throw new Error('No P2P relay is configured for sharing.')
     const invitation = await createShareInvitation({
       baseUrl: linkBaseUrl,
-      sourcePeerId: started.node.peerId.toString(),
-      addresses: started.addresses,
+      sourcePeerId,
+      addresses,
       expiresAt,
       ownerPrivateKey: ctx.privateKey,
     })
     const share = buildSourceShare(draft, invitation, sourcePrivateKey)
     ctx.shares.set(share.capability.shareId, share)
-    try {
-      await registerSourceHandlers(ctx, share, started.node)
-      ctx.sourceStarts.set(share.capability.shareId, Promise.resolve(started))
-    } catch (error) {
-      ctx.shares.delete(share.capability.shareId)
-      await started.node.stop()
-      throw error
-    }
     applyInitialShareLocation(ctx, share)
     try {
       await ctx.persist()
     } catch (error) {
       ctx.shares.delete(share.capability.shareId)
-      await ctx.stopSourcePeer(share.capability.shareId)
       throw error
     }
     if (!ctx.paused && (ctx.visible || draft.publication === 'background'))
       ctx.locationSource.start()
-    ctx.publish()
+    ctx.publish({
+      peerStatus: 'connecting',
+      message: 'Link created; waiting for P2P connectivity.',
+    })
+    // Connecting and re-establishing the relay must never block link generation.
+    // Offline sources persist and are retried on network changes or recovery ticks.
+    void ctx.startSourcePeer(share).catch(() => undefined)
     return ctx.state.shares.find(({ shareId }) => shareId === share.capability.shareId)!
   }
 

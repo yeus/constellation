@@ -136,9 +136,18 @@ export const probeRevocationDuringAdmission = async () => {
 
 export const probeWebRtcReachability = async (url: string, offerDelayMs = 0) => {
   const capability = parseShareInvitation(url)
-  const address = capability.addresses.find((value) => value.includes('/webrtc'))
-  if (!address) throw new Error('The share must advertise WebRTC reachability.')
   const { node } = await startPrivateBrowserPeer()
+  let address = capability.addresses.find((value) => value.includes('/webrtc'))
+  if (!address) {
+    const hint = capability.addresses.find((value) => !value.includes('/p2p/'))
+    if (!hint) throw new Error('No WebRTC or relay endpoint is advertised.')
+    const relay = await node.dial(multiaddr(hint))
+    const remote = relay.remoteAddr.toString()
+    const relayAddress = /\/p2p\/[^/]+$/.test(remote)
+      ? remote
+      : `${remote}/p2p/${relay.remotePeer.toString()}`
+    address = `${relayAddress}/p2p-circuit/webrtc/p2p/${capability.sourcePeerId}`
+  }
   // Preserve the method for restoration; calls below explicitly keep its connection receiver.
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const createOffer = RTCPeerConnection.prototype.createOffer
@@ -205,7 +214,15 @@ export const probePrivateDiscovery = async () => {
 export const probeEndedShare = async (url: string) => {
   const capability = parseShareInvitation(url, 0)
   const { node } = await startPrivateBrowserPeer()
-  const stream = await dialShareStream(node, capability.addresses, SHARE_STREAM_PROTOCOL, [])
+  const stream = await dialShareStream(
+    node,
+    capability.addresses,
+    SHARE_STREAM_PROTOCOL,
+    [],
+    undefined,
+    undefined,
+    capability.sourcePeerId,
+  )
   const messagePort = createProtocolMessagePort(stream, parseConstellationMessage)
   const client = createPortClient(messagePort.port, constellationProtocolV2)
   const viewerNonce = crypto.randomUUID()
@@ -294,15 +311,20 @@ export const probeInitialNamesAndReturnPresence = async () => {
   viewer.subscribe((state) => {
     viewerState = state
   })
-  const wait = async (matches: () => boolean) => {
-    const deadline = Date.now() + 15_000
+  const wait = async (matches: () => boolean, phase: string) => {
+    const deadline = Date.now() + 25_000
     while (!matches()) {
-      if (Date.now() > deadline) throw new Error('Synthetic contact lifecycle timed out.')
+      if (Date.now() > deadline) {
+        throw new Error(
+          `Synthetic contact lifecycle timed out: ${phase}; source=${sourceState.peerStatus}; viewer=${viewerState.peerStatus}; offers=${sourceState.returnOffers.length}; follows=${sourceState.following.length}`,
+        )
+      }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
   try {
     const share = await source.createShare({ ...createShareDraft('River'), viewerCapacity: 1 })
+    await wait(() => sourceState.peerStatus === 'online', 'source-online')
     await viewer.acceptShare(share.url)
     const pendingName = viewerState.following[0]!.displayName
     const request = sourceState.pendingViewerApprovals[0]!
@@ -325,14 +347,16 @@ export const probeInitialNamesAndReturnPresence = async () => {
     await viewer.acceptShare(share.url)
     const initialName = viewerState.following[0]!.displayName
     const returned = await viewer.createShare(createShareDraft('Forest'))
+    await wait(() => viewerState.peerStatus === 'online', 'return-source-online')
     await viewer.offerReturnShare(share.shareId, returned.url)
     const recipientBound =
       viewerState.shares[0]!.recipientPeerId === viewerState.following[0]!.peerId
-    await wait(() => sourceState.returnOffers.length === 1)
+    await wait(() => sourceState.returnOffers.length === 1, 'return-offer')
     await source.approveReturnLink(share.shareId)
     await wait(
       () =>
         viewerState.shares[0]!.viewerCount === 1 && sourceState.following[0]?.connected === true,
+      'return-admission',
     )
     const returnViewerCount = viewerState.shares[0]!.viewerCount
     const reciprocalPeer =

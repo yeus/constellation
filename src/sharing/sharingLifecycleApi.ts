@@ -139,7 +139,9 @@ const createInitialize =
     if (ctx.shares.size > 0 || ctx.endedShares.size > 0) {
       const restoredShares = [...ctx.shares.values(), ...ctx.endedShares.values()]
       if (restoredShares.some((share) => !share.sourcePrivateKey)) await ctx.startPeer()
-      await Promise.all(
+      // An offline source link remains valid and restorable without a relay
+      // reservation. One unreachable source must not abort state restoration.
+      await Promise.allSettled(
         restoredShares
           .filter((share) => share.sourcePrivateKey)
           .map((share) => ctx.startSourcePeer(share)),
@@ -177,15 +179,27 @@ const createRecoverBackgroundSources = (
     pending = (async () => {
       await ctx.prepareState()
       const sources = [...ctx.shares.values()].filter(
-        (share) => share.publication === 'background' && Boolean(share.sourcePrivateKey),
+        (share) =>
+          (share.publication === 'background' || ctx.visible) && Boolean(share.sourcePrivateKey),
       )
-      for (const share of sources) {
-        const shareId = share.capability.shareId
-        if (ctx.runtimeClosed || ctx.shares.get(shareId) !== share) continue
-        await ctx.stopSourcePeer(shareId)
-        if (ctx.runtimeClosed || ctx.shares.get(shareId) !== share) continue
-        await ctx.startSourcePeer(share)
-      }
+      // Recover every private source independently; an unreachable relay for
+      // one link cannot stall the others on an Android network handoff.
+      await Promise.allSettled(
+        sources.map(async (share) => {
+          const shareId = share.capability.shareId
+          if (ctx.runtimeClosed || ctx.shares.get(shareId) !== share) return
+          await ctx.stopSourcePeer(shareId)
+          if (ctx.runtimeClosed || ctx.shares.get(shareId) !== share) return
+          await ctx.startSourcePeer(share)
+        }),
+      )
+      // Previously authorized return-share offers can also be delivered after
+      // connectivity returns. A failed attempt leaves the signed offer queued.
+      await Promise.allSettled(
+        [...ctx.returnOffers.entries()]
+          .filter(([, offer]) => ctx.approvedReturnLinks.has(offer.shareId))
+          .map(([key, offer]) => ctx.acceptPendingReturn(key, offer)),
+      )
     })().finally(() => {
       pending = undefined
     })

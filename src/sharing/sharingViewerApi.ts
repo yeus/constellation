@@ -342,6 +342,7 @@ const openComparisonPort = async (
       ),
     signal,
     COMPARISON_ATTEMPT_TIMEOUT_MS,
+    capability.sourcePeerId,
   )
   try {
     requireComparisonStreamPeer(stream, node.getConnections(), capability.sourcePeerId)
@@ -612,6 +613,9 @@ const openFollowStream = async (node: BrowserLibp2pNode, capability: ShareCapabi
           connection.status === 'open' &&
           connection.remotePeer.toString() === capability.sourcePeerId,
       ),
+    undefined,
+    undefined,
+    capability.sourcePeerId,
   )
   const messagePort = createProtocolMessagePort(stream, parseConstellationMessageV3)
   return {
@@ -984,6 +988,9 @@ const openFollowNameChannel = async (
     state.node
       .getConnections()
       .filter((connection) => connection.remotePeer.toString() === state.capability.sourcePeerId),
+    undefined,
+    undefined,
+    state.capability.sourcePeerId,
   )
   const namesPort = createProtocolMessagePort(names, (value) =>
     peerNamesProtocol.message.parse(value),

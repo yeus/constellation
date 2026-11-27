@@ -3,15 +3,55 @@ import test from 'node:test'
 
 import type { BrowserLibp2pNode } from '@taskyon/p2p-core/browser'
 import type { Connection, Stream } from '@libp2p/interface'
+import { generateKeyPair } from '@libp2p/crypto/keys'
+import { peerIdFromPrivateKey } from '@libp2p/peer-id'
 
 import {
   dialShareStream,
   orderShareAddresses,
+  offlineShareAddresses,
   reachableRelayAddresses,
   retryUnreachablePeerStart,
   UnreachablePeerError,
   requireReachablePeer,
 } from './browserPeer.ts'
+
+test('offline invitations predict circuit addresses without a live reservation', () => {
+  const relay = '/dns4/relay.example/tcp/443/wss/p2p/relay-identity'
+  const expected = `${relay}/p2p-circuit/p2p/source-identity`
+  assert.deepEqual(offlineShareAddresses('source-identity', [relay]), [expected])
+  assert.deepEqual(offlineShareAddresses('source-identity', [relay, relay + '/p2p-circuit']), [
+    expected,
+  ])
+  assert.deepEqual(offlineShareAddresses('source-identity', ['/ip4/127.0.0.1/tcp/9111/ws']), [
+    '/ip4/127.0.0.1/tcp/9111/ws',
+  ])
+})
+
+test('resolves offline relay hints to authenticated source circuits at dial time', async () => {
+  const source = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString()
+  const relay = peerIdFromPrivateKey(await generateKeyPair('Ed25519')).toString()
+  const hint = '/ip4/127.0.0.1/tcp/9111/ws'
+  const connected = `${hint}/p2p/${relay}`
+  const target = `${connected}/p2p-circuit/p2p/${source}`
+  const stream = {} as Stream
+  let address = ''
+  const node = {
+    dial: async () => ({
+      remoteAddr: { toString: () => connected },
+      remotePeer: { toString: () => relay },
+    }),
+    dialProtocol: async (remote: { toString: () => string }) => {
+      address = remote.toString()
+      return stream
+    },
+  } as unknown as BrowserLibp2pNode
+  assert.equal(
+    await dialShareStream(node, [hint], '/constellation/test/1.0.0', [], undefined, 5_000, source),
+    stream,
+  )
+  assert.equal(address, target)
+})
 
 test('finds a reserved relay address using the connected address form', () => {
   const connected = '/ip4/192.0.2.10/tcp/443/wss/p2p/relay'

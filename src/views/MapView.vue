@@ -607,6 +607,8 @@
         !behaviorReviewRequired &&
         !deviceLocationOff
       "
+      :busy="creatingShare"
+      :error="shareSheetOpen ? localError : ''"
       :runtime-note="
         deviceLocationOff
           ? 'Device location is off. Turn on Location in Android Settings to create a new share; your other settings are still available.'
@@ -730,6 +732,9 @@
       :url="readyShare.url"
       :show-qr="!readyShareIsReturn"
       :return-share="readyShareIsReturn"
+      :source-online="
+        (backgroundSharing ? backgroundStatus?.peerStatus : runtimeState.peerStatus) === 'online'
+      "
       @close="closeShareReady"
     />
 
@@ -1539,8 +1544,27 @@ const logComparisonStateChanges = (
 }
 
 const unsubscribe = runtime.subscribe((next) => {
-  if (runtimeState.value.peerStatus !== next.peerStatus) {
-    sessionLog.record({ level: 'info', event: 'sharing.peer.status', state: next.peerStatus })
+  if (
+    runtimeState.value.peerStatus !== next.peerStatus ||
+    (next.peerStatus === 'error' && runtimeState.value.message !== next.message)
+  ) {
+    const failure =
+      next.peerStatus === 'error' && next.message
+        ? describeDiagnosticError(new Error(next.message))
+        : undefined
+    sessionLog.record({
+      level: failure ? 'warning' : 'info',
+      event: 'sharing.peer.status',
+      state: next.peerStatus,
+      ...(failure
+        ? {
+            category: /p2p|relay|reachable|connect|dial/i.test(failure.message)
+              ? ('network' as const)
+              : failure.category,
+            message: failure.message,
+          }
+        : {}),
+    })
   }
   for (const follow of next.following) {
     const previous = runtimeState.value.following.find((entry) => entry.shareId === follow.shareId)
@@ -1591,11 +1615,31 @@ const logBackgroundStatusChanges = (
   previous: AndroidBackgroundStatus | undefined,
   next: AndroidBackgroundStatus,
 ): void => {
-  if (previous?.state !== next.state) {
-    sessionLog.record({ level: 'info', event: 'sharing.background.status', state: next.state })
+  if (
+    previous?.state !== next.state ||
+    (next.state === 'error' && previous?.message !== next.message)
+  ) {
+    const failure =
+      next.state === 'error' && next.message
+        ? describeDiagnosticError(new Error(next.message))
+        : undefined
+    sessionLog.record({
+      level: failure ? 'warning' : 'info',
+      event: 'sharing.background.status',
+      state: next.state,
+      ...(failure ? { message: failure.message, category: failure.category } : {}),
+    })
   }
   if (next.peerStatus && previous?.peerStatus !== next.peerStatus) {
-    sessionLog.record({ level: 'info', event: 'sharing.background.peer', state: next.peerStatus })
+    const failed = next.peerStatus === 'error'
+    sessionLog.record({
+      level: failed ? 'warning' : 'info',
+      event: 'sharing.background.peer',
+      state: next.peerStatus,
+      ...(failed && next.message
+        ? { message: describeDiagnosticError(new Error(next.message)).message }
+        : {}),
+    })
   }
   const previousViewers =
     previous?.shares.reduce((count, share) => count + share.viewerCount, 0) ?? 0
@@ -2675,7 +2719,16 @@ const createShare = async (): Promise<void> => {
     completeShareCreation(context)
   } catch (error) {
     if (context.shareBackTarget) pendingShareBack.value = undefined
-    sessionLog.record({ level: 'error', event: 'sharing.share.create.failed' })
+    const failure = describeDiagnosticError(error)
+    sessionLog.record({
+      level: 'error',
+      event: 'sharing.share.create.failed',
+      category: /p2p|relay|reachable|connect|dial/i.test(failure.message)
+        ? 'network'
+        : failure.category,
+      state: 'error',
+      message: failure.message,
+    })
     localError.value = error instanceof Error ? error.message : 'Could not create the share.'
   } finally {
     creatingShare.value = false
@@ -3154,6 +3207,11 @@ const recordConnectivity = (): void => {
     event: 'app.connectivity',
     state: navigator.onLine ? 'online' : 'offline',
   })
+  // A browser-created share may be saved offline. A network restoration
+  // restarts its original private source identity without changing its URL.
+  if (navigator.onLine && !backgroundSharing && runtimeState.value.shares.length) {
+    void runtime.recoverBackgroundSources().catch(() => undefined)
+  }
 }
 const updateVisibility = (): void => {
   if (document.visibilityState === 'visible') void refreshDeviceLocationReadiness()

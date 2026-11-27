@@ -731,7 +731,11 @@ const start = (): void => {
   window.setInterval(() => {
     const now = Date.now()
     if (!state.networkOnline) return
-    if (hasStalledDelivery(state.latestState?.shares ?? [], now)) {
+    if (
+      hasStalledDelivery(state.latestState?.shares ?? [], now) ||
+      (state.latestState?.peerStatus === 'error' &&
+        state.latestState.shares.some((share) => share.publication === 'background'))
+    ) {
       enqueueCommand(
         state,
         JSON.stringify({ type: 'recover-background-sources', online: true, stalled: true }),

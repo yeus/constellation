@@ -25,13 +25,29 @@ export const createProtocolMessagePort = <Message>(
   )
 
 const configuredRelays = (): string[] => {
-  const value = import.meta.env.VITE_CONSTELLATION_RELAY_ADDRS
+  const value = import.meta.env?.VITE_CONSTELLATION_RELAY_ADDRS
   const addresses = value
     ?.split(',')
     .map((address: string) => address.trim())
     .filter(Boolean)
   return addresses?.length ? addresses : [PRIMARY_RELAY_WS_MULTIADDR]
 }
+
+/**
+ * A share link names the source's stable private peer ID and predictable
+ * circuit addresses, not a transient reservation or currently connected socket.
+ * Reachability is verified asynchronously after the link has been persisted.
+ */
+export const offlineShareAddresses = (
+  sourcePeerId: string,
+  relays: readonly string[] = configuredRelays(),
+): string[] =>
+  relays
+    .filter((relay) => !relay.includes('/p2p-circuit'))
+    .map((relay) =>
+      /\/p2p\/[^/]+$/.test(relay) ? `${relay}/p2p-circuit/p2p/${sourcePeerId}` : relay,
+    )
+    .slice(0, 4)
 
 export const reachableRelayAddresses = (
   addresses: readonly string[],
@@ -157,12 +173,13 @@ const runDialAttempt = async (
 }
 
 export const dialShareStream = async (
-  node: Pick<BrowserLibp2pNode, 'dialProtocol'>,
+  node: Pick<BrowserLibp2pNode, 'dialProtocol'> & Partial<Pick<BrowserLibp2pNode, 'dial'>>,
   addresses: readonly string[],
   protocol: string | string[],
   connections: readonly Connection[] = [],
   signal?: AbortSignal,
   attemptTimeoutMs?: number,
+  expectedSourcePeerId?: string,
 ): Promise<Stream> => {
   const ordered = orderShareAddresses(addresses)
   let lastError: unknown
@@ -187,11 +204,30 @@ export const dialShareStream = async (
   for (const address of ordered) {
     try {
       return await runDialAttempt(
-        (attemptSignal) =>
-          node.dialProtocol(multiaddr(address), protocol, {
+        async (attemptSignal) => {
+          let target = address
+          // Offline-created links may contain a relay dial hint without its
+          // peer ID. Resolve that identity at connection time, never at link creation.
+          if (
+            expectedSourcePeerId &&
+            !address.includes('/p2p/') &&
+            !address.includes('/p2p-circuit')
+          ) {
+            if (!node.dial) throw new Error('Relay dialing is unavailable.')
+            const relay = await node.dial(multiaddr(address), {
+              ...(attemptSignal ? { signal: attemptSignal } : {}),
+            })
+            const connected = relay.remoteAddr.toString()
+            const relayAddress = /\/p2p\/[^/]+$/.test(connected)
+              ? connected
+              : `${connected}/p2p/${relay.remotePeer.toString()}`
+            target = `${relayAddress}/p2p-circuit/p2p/${expectedSourcePeerId}`
+          }
+          return node.dialProtocol(multiaddr(target), protocol, {
             runOnLimitedConnection: true,
             ...(attemptSignal ? { signal: attemptSignal } : {}),
-          }),
+          })
+        },
         signal,
         attemptTimeoutMs,
       )

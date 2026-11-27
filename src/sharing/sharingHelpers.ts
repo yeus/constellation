@@ -1096,14 +1096,7 @@ const handleOfferReturn = async (
   ctx.returnOffers.set(key, offer)
   await ctx.persist()
   if (ctx.approvedReturnLinks.has(share.capability.shareId)) {
-    try {
-      if (await ctx.acceptPendingReturn(key, offer)) {
-        ctx.publish({ message: 'A viewer shared back and was accepted automatically.' })
-        return
-      }
-    } catch {
-      // Preserve the queued offer for an explicit retry.
-    }
+    void acceptApprovedReturnWithRetries(ctx, key, offer)
   }
   ctx.publish()
 }
@@ -1516,6 +1509,39 @@ export const acceptPendingReturn =
     return true
   }
 
+/**
+ * Approved return offers may precede their source's relay reservation. Retry
+ * within a short window; retain the saved offer if connectivity is still absent.
+ * No retry is permitted after consent revocation, source expiry or shutdown.
+ */
+export const acceptApprovedReturnWithRetries = async (
+  ctx: SharingContext,
+  key: string,
+  offer: SharingRuntimeState['returnOffers'][number],
+): Promise<void> => {
+  for (const delay of [0, 2_000, 5_000, 10_000]) {
+    if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay))
+    if (
+      ctx.runtimeClosed ||
+      !ctx.shares.has(offer.shareId) ||
+      !ctx.approvedReturnLinks.has(offer.shareId) ||
+      ctx.returnOffers.get(key) !== offer
+    )
+      return
+    try {
+      if (await ctx.acceptPendingReturn(key, offer)) {
+        ctx.publish({ message: 'An approved return location is connected.' })
+        return
+      }
+    } catch {
+      // Do not lose the authenticated queued offer on temporary relay failures.
+    }
+  }
+  ctx.publish({
+    message: 'Permission saved. A return location is still pending; retry when connected.',
+  })
+}
+
 export const ensurePeer = (ctx: SharingContext) => async () => {
   await ctx.prepareState()
   return ctx.startPeer()
@@ -1618,6 +1644,9 @@ const deliverStopNotice = async (ctx: SharingContext, pending: PendingStopNotice
         (connection) =>
           connection.status === 'open' && connection.remotePeer.toString() === pending.sourcePeerId,
       ),
+    undefined,
+    undefined,
+    pending.sourcePeerId,
   )
   const port = createProtocolMessagePort(stream, parseConstellationMessage)
   try {

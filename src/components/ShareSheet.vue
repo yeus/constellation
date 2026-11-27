@@ -190,8 +190,9 @@
 
       <p class="runtime-note">{{ runtimeNote }}</p>
       <button class="primary-action" type="button" :disabled="!canSubmit" @click="emit('submit')">
-        Create location link
+        {{ busy ? 'Creating link…' : 'Create location link' }}
       </button>
+      <p v-if="error" class="warning" role="alert">{{ error }}</p>
       <p class="share-privacy-caption">
         <LockIcon aria-hidden="true" /> End-to-end encrypted. No central location storage.
       </p>
@@ -236,6 +237,8 @@ defineProps<{
   canSubmit: boolean
   runtimeNote?: string
   returnRecipientName?: string
+  busy?: boolean
+  error?: string
 }>()
 
 const emit = defineEmits<{

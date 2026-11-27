@@ -20,7 +20,11 @@
       >
         <img class="share-ready__qr" :src="qrCode" alt="Location share QR code" />
       </button>
-      <p v-if="showQr" class="share-ready__waiting" role="status">
+      <p v-if="!sourceOnline" class="field-help" role="status">
+        Link saved. The P2P connection is not ready yet; recipients can keep the link and connect
+        when this device comes online. No location is transmitted until then.
+      </p>
+      <p v-if="showQr && sourceOnline" class="share-ready__waiting" role="status">
         Waiting for a viewer to connect… Leave this screen open if you like; it closes automatically
         when a new viewer connects. You can also close it yourself.
       </p>
@@ -65,8 +69,8 @@ import { computed, onMounted, ref } from 'vue'
 import CloseIcon from './icons/CloseIcon.vue'
 
 const props = withDefaults(
-  defineProps<{ url: string; showQr?: boolean; returnShare?: boolean }>(),
-  { showQr: true, returnShare: false },
+  defineProps<{ url: string; showQr?: boolean; returnShare?: boolean; sourceOnline?: boolean }>(),
+  { showQr: true, returnShare: false, sourceOnline: true },
 )
 const emit = defineEmits<{ close: [] }>()
 const qrCode = ref('')

@@ -120,6 +120,32 @@ test('precision options keep their order and explain each choice without losing 
   await expect(options.nth(1)).toHaveAttribute('aria-pressed', 'true')
 })
 
+test('creates and preserves a copyable encrypted link without relay connectivity', async ({
+  page,
+  context,
+}) => {
+  await page.goto('/')
+  await openShareCreator(page)
+  const form = page.getByRole('dialog', { name: 'Share your location' })
+  await context.setOffline(true)
+  try {
+    await form.getByRole('button', { name: 'Create location link' }).click()
+    const ready = page.getByRole('dialog', { name: 'Share this QR code' })
+    await expect(ready).toBeVisible({ timeout: 15_000 })
+    const link = await ready.getByRole('textbox', { name: 'Share link' }).inputValue()
+    expect(link).toContain('#share=')
+    await expect(ready).toContainText('Link saved')
+    await expect(form).toHaveCount(0)
+  } finally {
+    await context.setOffline(false)
+  }
+  // Once connectivity returns, this exact saved URL becomes reachable.
+  await expect(page.getByRole('dialog', { name: 'Share this QR code' })).not.toContainText(
+    'Link saved',
+    { timeout: 60_000 },
+  )
+})
+
 test('browser retains the requested background mode but safely applies a foreground fallback', async ({
   page,
 }) => {
