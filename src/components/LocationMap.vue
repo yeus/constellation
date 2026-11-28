@@ -82,60 +82,22 @@
         <MapPeerAvatar :location="ownMarker.location" :now="displayNow" />
       </button>
       <aside
-        v-if="offscreenPeers.length && maxOffscreenItems > 0"
-        class="location-map__offscreen-peers"
-        aria-label="Following peers outside the map"
+        ref="railElement"
+        class="location-map__peer-rail"
+        aria-label="Peers outside or larger than the visible map"
+        :aria-hidden="visibleRailPeers.length === 0"
       >
         <button
-          v-for="location in visibleOffscreenPeers"
+          v-for="location in visibleRailPeers"
           :key="location.id"
           type="button"
-          :title="`Center map on ${location.label || 'shared location'}`"
-          :aria-label="offscreenMarkerLabel(location)"
-          @click.stop="centerOn(location)"
-        >
-          <MapPeerAvatar :location="location" :now="displayNow" />
-        </button>
-        <button
-          v-if="offscreenPeers.length > maxOffscreenItems && maxOffscreenItems > 1"
-          type="button"
-          :aria-label="`Show all ${offscreenPeers.length} off-screen peers`"
+          :title="railPeerLabel(location)"
+          :aria-label="railPeerLabel(location)"
           @click.stop="
-            emit(
-              'areaOverflow',
-              offscreenPeers.map(({ id }) => id),
-            )
+            oversizedPeerIds.has(location.id) ? emit('select', location.id) : centerOn(location)
           "
         >
-          +{{ offscreenPeers.length - visibleOffscreenPeers.length }}
-        </button>
-      </aside>
-      <aside
-        v-if="presentation.largePeers.length"
-        class="location-map__large-peers"
-        aria-label="Peers around this area"
-      >
-        <button
-          v-for="location in visibleLargePeers"
-          :key="location.id"
-          type="button"
-          :aria-label="peerMarkerLabel(location)"
-          @click.stop="emit('select', location.id)"
-        >
           <MapPeerAvatar :location="location" :now="displayNow" />
-        </button>
-        <button
-          v-if="presentation.largePeers.length > maxStackItems"
-          type="button"
-          aria-label="Show all peers in this area"
-          @click.stop="
-            emit(
-              'areaOverflow',
-              presentation.largePeers.map(({ id }) => id),
-            )
-          "
-        >
-          …
         </button>
       </aside>
     </div>
@@ -171,12 +133,7 @@ import {
   type MapDeclutteringPreferences,
   type MapPresentation,
 } from '../location/mapPresentation.ts'
-import {
-  OFFSCREEN_RAIL_GAP_PX,
-  OFFSCREEN_RAIL_ITEM_PX,
-  offscreenRailCapacity,
-  rankOffscreenPeers,
-} from '../location/offscreenPeers.ts'
+import { offscreenRailCapacity, rankOffscreenPeers } from '../location/offscreenPeers.ts'
 import {
   createPmtilesRuntime,
   createWorldStyle,
@@ -216,7 +173,6 @@ const emit = defineEmits<{
   selectOwn: []
   selectGroup: [shareIds: string[]]
   ownAreaHidden: [hidden: boolean]
-  areaOverflow: [shareIds: string[]]
   diagnostic: [entry: SessionLogInput]
   cameraChange: [camera: MapCamera]
   userPan: []
@@ -233,35 +189,18 @@ const presentation = ref<MapPresentation>({
   largePeers: [],
   ownAreaHidden: false,
 })
-const offscreenPeers = ref<readonly MapLocation[]>([])
-const maxStackItems = computed(() => {
-  const height = presentation.value.height
-  const previousLimit = Math.max(1, Math.floor(Math.max(0, height - 160) / 49))
-  // Reserve the top half for off-screen peers if both left-hand stacks exist.
-  return offscreenPeers.value.length
-    ? Math.min(previousLimit, Math.max(1, Math.floor((height * 0.35) / 49)))
-    : previousLimit
-})
-const visibleLargePeers = computed(() =>
-  presentation.value.largePeers.slice(
-    0,
-    presentation.value.largePeers.length > maxStackItems.value
-      ? maxStackItems.value - 1
-      : maxStackItems.value,
-  ),
+const railElement = ref<HTMLElement | null>(null)
+const railHeight = ref(0)
+const railPeers = ref<readonly MapLocation[]>([])
+const oversizedPeerIds = computed(() => new Set(presentation.value.largePeers.map(({ id }) => id)))
+const railPeerLabel = (location: MapLocation): string =>
+  oversizedPeerIds.value.has(location.id)
+    ? peerMarkerLabel(location)
+    : offscreenMarkerLabel(location)
+const visibleRailPeers = computed(() =>
+  railPeers.value.slice(0, offscreenRailCapacity(railHeight.value)),
 )
-const bottomStackHeight = computed(() => {
-  const count = Math.min(presentation.value.largePeers.length, maxStackItems.value)
-  return 20 + count * OFFSCREEN_RAIL_ITEM_PX + Math.max(0, count - 1) * OFFSCREEN_RAIL_GAP_PX
-})
-const maxOffscreenItems = computed(() =>
-  offscreenRailCapacity(presentation.value.height, bottomStackHeight.value),
-)
-const visibleOffscreenPeers = computed(() => {
-  const limit = maxOffscreenItems.value
-  const shown = offscreenPeers.value.length > limit && limit > 1 ? limit - 1 : limit
-  return offscreenPeers.value.slice(0, shown)
-})
+let railResizeObserver: ResizeObserver | undefined
 const individualAvatars = ref<{ location: MapLocation; x: number; y: number }[]>([])
 const ownMarker = ref<{ location: MapLocation; x: number; y: number }>()
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)')
@@ -435,18 +374,18 @@ const updatePresentation = (): void => {
   if (next.ownAreaHidden !== presentation.value.ownAreaHidden)
     emit('ownAreaHidden', next.ownAreaHidden)
   presentation.value = next
-  const represented = new Set([
-    ...next.largePeers.map(({ id }) => id),
-    ...next.groups
+  const represented = new Set(
+    next.groups
       .filter(({ x, y }) => x >= 0 && x <= clientWidth && y >= 0 && y <= clientHeight)
       .flatMap(({ members }) => members.map(({ id }) => id)),
-  ])
+  )
   const mapCenter = map.getCenter()
-  offscreenPeers.value = rankOffscreenPeers(
+  railPeers.value = rankOffscreenPeers(
     projectedLocations,
     { width: clientWidth, height: clientHeight },
     { latitude: mapCenter.lat, longitude: mapCenter.lng },
     represented,
+    new Set(next.largePeers.map(({ id }) => id)),
   )
   const visible = new Set(next.mapLocations.map(({ id }) => id))
   const ownPosition = projectedLocations.find(
@@ -548,10 +487,15 @@ watch(
 )
 onMounted(() => {
   darkScheme.addEventListener('change', updateTheme)
+  railResizeObserver = new ResizeObserver(([entry]) => {
+    railHeight.value = entry?.contentRect.height ?? 0
+  })
+  if (railElement.value) railResizeObserver.observe(railElement.value)
   ageClock = window.setInterval(() => (displayNow.value = Date.now()), 60_000)
   initialize()
 })
 onBeforeUnmount(() => {
+  railResizeObserver?.disconnect()
   darkScheme.removeEventListener('change', updateTheme)
   if (ageClock !== undefined) window.clearInterval(ageClock)
   if (presentationFrame !== undefined) window.cancelAnimationFrame(presentationFrame)
@@ -667,27 +611,21 @@ onBeforeUnmount(() => {
   font-size: 0.65rem;
 }
 
-.location-map__large-peers,
-.location-map__offscreen-peers {
+.location-map__peer-rail {
   position: absolute;
   left: 0.75rem;
+  top: max(6rem, calc(env(safe-area-inset-top) + 4.5rem));
+  bottom: 1.25rem;
   display: grid;
+  grid-auto-rows: 2.6rem;
+  align-content: end;
   width: 2.6rem;
   gap: 0.45rem;
+  overflow: hidden;
+  pointer-events: none;
+}
+.location-map__peer-rail button {
   pointer-events: auto;
-}
-.location-map__large-peers {
-  bottom: 1.25rem;
-  max-height: calc(100% - 9rem);
-  align-content: end;
-}
-.location-map__offscreen-peers {
-  top: 6rem;
-  max-height: 50%;
-  align-content: start;
-}
-.location-map__large-peers button,
-.location-map__offscreen-peers button {
   display: grid;
   width: 2.6rem;
   height: 2.6rem;
@@ -700,8 +638,7 @@ onBeforeUnmount(() => {
   font-size: 1.2rem;
   cursor: pointer;
 }
-.location-map__large-peers :deep(.peer-avatar),
-.location-map__offscreen-peers :deep(.peer-avatar) {
+.location-map__peer-rail :deep(.peer-avatar) {
   width: 2.5rem;
   height: 2.5rem;
 }

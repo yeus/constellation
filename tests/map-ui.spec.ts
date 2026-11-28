@@ -466,7 +466,7 @@ test('keeps map credit visible and persists the selected basemap family', async 
   await expect(page.getByText('© OpenStreetMap contributors')).toBeVisible()
 })
 
-test('shows oversized uncertainty avatars and reports every overflow peer', async ({
+test('shows oversized uncertainty avatars in the unified rail and preserves peer selection', async ({
   page,
   browser,
   baseURL,
@@ -507,7 +507,6 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       zIndex: '9999',
     })
     document.body.append(container)
-    const overflowIds: string[][] = []
     const selections: string[] = []
     const app = createApp({
       render: () =>
@@ -520,7 +519,6 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
             uncertaintyOverlapThreshold: 0.45,
             markerCollisionDistancePx: 48,
           },
-          onAreaOverflow: (ids: string[]) => overflowIds.push(ids),
           onSelect: (id: string) => selections.push(id),
         }),
     })
@@ -529,26 +527,30 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
       areaStackTest?: {
         app: { unmount: () => void }
         container: HTMLElement
-        overflowIds: string[][]
         selections: string[]
       }
     }
     testWindow.areaStackTest = {
       app,
       container,
-      overflowIds,
       selections,
     }
   })
 
   const mapRoot = page.locator('#area-stack-test')
-  const stack = mapRoot.locator('.location-map__large-peers')
-  await expect(stack).toBeVisible({ timeout: 30_000 })
+  const stack = mapRoot.locator('.location-map__peer-rail')
+  await expect(stack.getByRole('button')).toHaveCount(5, { timeout: 30_000 })
+  await expect(mapRoot.locator('.location-map__large-peers')).toHaveCount(0)
   await expect(stack).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   await expect(stack).toHaveCSS('border-width', '0px')
   await expect(stack.locator('h1, h2, h3, h4, p')).toHaveCount(0)
-  await expect(stack.getByRole('button')).toHaveCount(4)
-  expect(await stack.locator('.peer-avatar').allTextContents()).toEqual(['AN', 'BS', 'CE'])
+  expect(await stack.locator('.peer-avatar').allTextContents()).toEqual([
+    'AN',
+    'BS',
+    'CE',
+    'DW',
+    'EC',
+  ])
 
   const stackBounds = await stack.boundingBox()
   const mapBounds = await mapRoot.boundingBox()
@@ -557,45 +559,30 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
   expect(stackBounds.x + stackBounds.width).toBeLessThanOrEqual(mapBounds.x + mapBounds.width)
   expect(stackBounds.y + stackBounds.height).toBeLessThanOrEqual(mapBounds.y + mapBounds.height)
   expect(stackBounds.x - mapBounds.x).toBeLessThanOrEqual(16)
-  expect(mapBounds.y + mapBounds.height - stackBounds.y - stackBounds.height).toBeLessThanOrEqual(
-    24,
-  )
+  expect(mapBounds.y + mapBounds.height - stackBounds.y - stackBounds.height).toBeCloseTo(20, 0)
   for (const control of [
     mapRoot.locator('.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-group'),
     mapRoot.locator('.maplibregl-ctrl-attrib'),
   ]) {
     const controlBounds = await control.boundingBox()
     if (!controlBounds) throw new Error('Expected map controls and attribution to be laid out.')
-    const overlaps =
-      stackBounds.x < controlBounds.x + controlBounds.width &&
-      stackBounds.x + stackBounds.width > controlBounds.x &&
-      stackBounds.y < controlBounds.y + controlBounds.height &&
-      stackBounds.y + stackBounds.height > controlBounds.y
-    expect(overlaps).toBe(false)
+    for (const button of await stack.getByRole('button').all()) {
+      const avatarBounds = await button.boundingBox()
+      if (!avatarBounds) throw new Error('Expected peer avatar to be laid out.')
+      const overlaps =
+        avatarBounds.x < controlBounds.x + controlBounds.width &&
+        avatarBounds.x + avatarBounds.width > controlBounds.x &&
+        avatarBounds.y < controlBounds.y + controlBounds.height &&
+        avatarBounds.y + avatarBounds.height > controlBounds.y
+      expect(
+        overlaps,
+        `Avatar ${JSON.stringify(avatarBounds)} vs control ${JSON.stringify(controlBounds)}`,
+      ).toBe(false)
+    }
   }
 
-  await stack.getByRole('button', { name: 'Show all peers in this area' }).click()
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as typeof window & {
-              areaStackTest: { overflowIds: string[][] }
-            }
-          ).areaStackTest.overflowIds,
-      ),
-    )
-    .toEqual([
-      [
-        'synthetic-peer-0',
-        'synthetic-peer-1',
-        'synthetic-peer-2',
-        'synthetic-peer-3',
-        'synthetic-peer-4',
-        'synthetic-peer-5',
-      ],
-    ])
+  await expect(stack.getByRole('button', { name: 'Show Faye Coast details' })).toHaveCount(0)
+  // The hidden, lowest-ranked peer remains available from the normal peer list.
 
   await stack.getByRole('button', { name: 'Show Ada North details' }).click()
   expect(
@@ -645,13 +632,8 @@ test('shows oversized uncertainty avatars and reports every overflow peer', asyn
         element.style.height = '250px'
         element.style.bottom = 'auto'
       })
-      const overflow = viewer.getByRole('button', { name: 'Show all peers in this area' })
-      await expect(overflow).toBeVisible({ timeout: 30_000 })
-      await overflow.click()
-      const areaPeers = viewer.locator('.peer-list')
-      await expect(areaPeers.locator('details.peer-list__item')).toHaveCount(2)
-      await expect(areaPeers.locator('.peer-list__summary-name')).toHaveText(['Forest', 'River'])
-      await areaPeers.getByRole('button', { name: 'Close' }).click()
+      const rail = viewer.locator('.location-map__peer-rail')
+      await expect(rail.getByRole('button')).toHaveCount(2, { timeout: 30_000 })
       const restored = await openPeerList(viewer)
       await expect(restored.locator('details.peer-list__item')).toHaveCount(3)
       await restored.locator('.peer-list__filter-menu > summary').click()

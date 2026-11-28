@@ -14,7 +14,6 @@
         :map-family="mapFamily"
         :cache-max-bytes="mapCacheMaxBytes"
         @select="openFollowDetails"
-        @area-overflow="openAreaPeers"
         @select-own="openSettings"
         @select-group="openGroupPeers"
         @own-area-hidden="ownAreaHidden = $event"
@@ -2344,13 +2343,6 @@ const openPeerList = (): void => {
   peerListFilter.value = 'all'
   peerListOpen.value = true
   menuOpen.value = false
-}
-const openAreaPeers = (ids: string[]): void => {
-  areaPeerIds.value = ids
-  groupScope.value = true
-  peerListFilter.value = 'all'
-  selectedFollowId.value = undefined
-  peerListOpen.value = true
 }
 const openGroupPeers = (ids: string[]): void => {
   areaPeerIds.value = ids

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('off-screen peer rail prioritizes position plus uncertainty and fits the left half-height', async ({
+test('unified peer rail prioritizes uncertainty-aware proximity and fits between menu and footer', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 760 })
@@ -41,7 +41,7 @@ test('off-screen peer rail prioritizes position plus uncertainty and fits the le
       zIndex: '9999',
     })
     document.body.append(container)
-    const overflow: string[][] = []
+    const selections: string[] = []
     const camera: { longitude: number; latitude: number; zoom: number }[] = []
     const app = createApp({
       render: () =>
@@ -55,19 +55,21 @@ test('off-screen peer rail prioritizes position plus uncertainty and fits the le
             uncertaintyOverlapThreshold: 0.45,
             markerCollisionDistancePx: 48,
           },
-          onAreaOverflow: (ids: string[]) => overflow.push(ids),
+          onSelect: (id: string) => selections.push(id),
           onCameraChange: (position: { longitude: number; latitude: number; zoom: number }) =>
             camera.push(position),
         }),
     })
     app.mount(container)
-    Object.assign(window, { offscreenRailTest: { app, container, overflow, camera } })
+    Object.assign(window, { offscreenRailTest: { app, container, selections, camera } })
   })
 
   const fixture = page.locator('#offscreen-rail-test')
-  const rail = fixture.getByRole('complementary', { name: 'Following peers outside the map' })
+  const rail = fixture.getByRole('complementary', {
+    name: 'Peers outside or larger than the visible map',
+  })
   await expect(rail).toBeVisible({ timeout: 30_000 })
-  await expect(rail.getByRole('button')).toHaveCount(3)
+  await expect(rail.getByRole('button')).toHaveCount(5)
   await expect(rail.getByRole('button').nth(0)).toHaveAttribute(
     'aria-label',
     'Center map on Close Exact',
@@ -76,32 +78,32 @@ test('off-screen peer rail prioritizes position plus uncertainty and fits the le
     'aria-label',
     'Center map on Far Exact',
   )
-  const all = rail.getByRole('button', { name: 'Show all 7 off-screen peers' })
-  await expect(all).toHaveText('+5')
-  const bottomStack = fixture.locator('.location-map__large-peers')
-  await expect(bottomStack).toBeVisible()
-  await expect(
-    bottomStack.getByRole('button', { name: 'Show On screen area details' }),
-  ).toHaveCount(1)
+  await expect(rail.getByRole('button').last()).toHaveAttribute(
+    'aria-label',
+    'Center map on Thirteen',
+  )
+  await expect(fixture.locator('.location-map__large-peers')).toHaveCount(0)
+  await expect(rail.getByRole('button', { name: /^Show all / })).toHaveCount(0)
   const bounds = await rail.boundingBox()
   const map = await fixture.boundingBox()
   if (!bounds || !map) throw new Error('Missing off-screen rail or map bounds.')
-  expect(bounds.height).toBeLessThanOrEqual(map.height / 2 + 1)
-  expect(bounds.y).toBeGreaterThanOrEqual(map.y + 90)
+  expect(bounds.y).toBeGreaterThanOrEqual(map.y + 95)
   expect(bounds.x).toBeGreaterThanOrEqual(map.x)
   expect(bounds.x - map.x).toBeLessThan(16)
-  const bottomBounds = await bottomStack.boundingBox()
-  if (!bottomBounds) throw new Error('Missing bottom-left oversized-area stack.')
-  expect(bounds.y + bounds.height + 8).toBeLessThanOrEqual(bottomBounds.y)
-
-  await all.click()
+  expect(map.y + map.height - bounds.y - bounds.height).toBeCloseTo(20, 0)
+  // More height makes the oversized area available in the same rail, not a second stack.
+  await fixture.evaluate((element) => {
+    element.style.height = '640px'
+  })
+  await expect(rail.getByRole('button')).toHaveCount(8)
+  await rail.getByRole('button', { name: 'Show On screen area details' }).click()
   expect(
     await page.evaluate(
       () =>
-        (window as typeof window & { offscreenRailTest: { overflow: string[][] } })
-          .offscreenRailTest.overflow,
+        (window as typeof window & { offscreenRailTest: { selections: string[] } })
+          .offscreenRailTest.selections,
     ),
-  ).toEqual([['close', 'far', 'eleven', 'twelve', 'thirteen', 'uncertain', 'fourteen']])
+  ).toEqual(['on-screen-area'])
 
   await rail.getByRole('button', { name: 'Center map on Close Exact' }).click()
   await expect

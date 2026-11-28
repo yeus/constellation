@@ -90,10 +90,29 @@ test('missing uncertainty sorts after measured peers, never as an exact zero-rad
   assert.equal(offscreenPeerRank(center, unknown), Infinity)
 })
 
-test('rail capacity obeys 50% map height, avatar size, top controls and bottom stack', () => {
-  assert.equal(offscreenRailCapacity(640, 20), 6)
-  assert.equal(offscreenRailCapacity(360, 20), 3)
-  assert.equal(offscreenRailCapacity(360, 160), 2)
-  assert.equal(offscreenRailCapacity(150, 20), 0)
-  assert.equal(offscreenRailCapacity(640, 310), 4)
+test('unified rail capacity fits available vertical space without an overflow slot', () => {
+  assert.equal(offscreenRailCapacity(0), 0)
+  assert.equal(offscreenRailCapacity(41), 0)
+  assert.equal(offscreenRailCapacity(42), 1)
+  assert.equal(offscreenRailCapacity(90), 1)
+  assert.equal(offscreenRailCapacity(91.2), 2)
+  assert.equal(offscreenRailCapacity(360), 7)
+})
+
+test('oversized and offscreen peers share one priority-ranked, deduplicated rail', () => {
+  const large = peer('large', 0.04, 400_000)
+  const near = peer('near', 0.1, 5)
+  const far = peer('far', 0.8, 5)
+  const displayed = peer('displayed', 0.2, 5)
+  const list = rankOffscreenPeers(
+    [projected(large, 50), projected(near, -2), projected(far, 250), projected(displayed, 50)],
+    viewport,
+    center,
+    new Set(['displayed']),
+    new Set(['large']),
+  )
+  assert.deepEqual(
+    list.map(({ id }) => id),
+    ['near', 'far', 'large'],
+  )
 })
