@@ -645,7 +645,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .location-map__own-marker:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--own-position-color);
   outline-offset: 7px;
   border-radius: 50%;
 }

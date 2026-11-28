@@ -22,16 +22,18 @@
   box-sizing: border-box;
   border: 3px solid #fff;
   border-radius: 50%;
-  background: #2563eb;
+  background: var(--own-position-color);
+  background: color-mix(in srgb, var(--own-position-color) 88%, transparent);
+  box-shadow: 0 1px 5px rgba(15, 35, 65, 0.35);
   box-shadow:
-    0 0 0 0.4rem rgba(37, 99, 235, 0.17),
+    0 0 0 0.4rem color-mix(in srgb, var(--own-position-color) 17%, transparent),
     0 1px 5px rgba(15, 35, 65, 0.35);
 }
 .own-position-marker__dot > span {
   width: 0.7rem;
   height: 0.7rem;
   border-radius: 50%;
-  background: #fff;
+  background: var(--own-position-ink);
 }
 .own-position-marker__label {
   position: absolute;
@@ -41,8 +43,9 @@
   padding: 0.13rem 0.55rem;
   border: 2px solid #fff;
   border-radius: 1rem;
-  background: #1e40af;
-  color: #fff;
+  background: var(--own-position-color);
+  background: color-mix(in srgb, var(--own-position-color) 92%, transparent);
+  color: var(--own-position-ink);
   font-size: 0.78rem;
   font-weight: 700;
   line-height: 1.25;

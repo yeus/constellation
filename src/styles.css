@@ -21,6 +21,8 @@
   --muted: #647184;
   --primary: #2a3548;
   --accent: #f78f3b;
+  --own-position-color: var(--primary);
+  --own-position-ink: var(--accent);
   --map-background: #edf1f4;
   --map-grid: rgba(42, 53, 72, 0.055);
   --map-placeholder: #39475a;
@@ -61,6 +63,8 @@
     --map-navigation-surface: rgba(22, 29, 39, 0.65);
     --border: rgba(255, 255, 255, 0.12);
     --muted: #9aa6b5;
+    --own-position-color: var(--accent);
+    --own-position-ink: var(--primary);
     --map-background: #0e1116;
     --map-grid: rgba(255, 255, 255, 0.025);
     --map-placeholder: #d7dce3;

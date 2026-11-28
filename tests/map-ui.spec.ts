@@ -759,9 +759,10 @@ test('indicates an oversized own area and restores it through recentering', asyn
   await expect(recenter).toHaveAttribute('aria-label', /Last known location/)
 })
 
-test('selects self and peers independently in a group and paints only own point dots', async ({
+test('selects self and peers independently and themes the own-location marker', async ({
   page,
 }) => {
+  await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
   await page.evaluate(async () => {
     const resources = performance.getEntriesByType('resource')
@@ -836,10 +837,18 @@ test('selects self and peers independently in a group and paints only own point 
   const self = root.getByRole('button', { name: 'Open settings for my location' })
   await expect(self).toBeVisible()
   await expect(self).toHaveText('me')
-  await expect(self.locator('.own-position-marker__dot')).toHaveCSS(
-    'background-color',
-    'rgb(37, 99, 235)',
-  )
+  const marker = self.locator('.own-position-marker')
+  const dot = marker.locator('.own-position-marker__dot')
+  const label = marker.locator('.own-position-marker__label')
+  await expect(marker).toHaveCSS('--own-position-color', '#2a3548')
+  await expect(dot).toHaveCSS('background-color', /0\.88/)
+  await expect(label).toHaveCSS('background-color', /0\.92/)
+  await expect(label).toHaveCSS('color', 'rgb(247, 143, 59)')
+  await expect(dot.locator('span')).toHaveCSS('background-color', 'rgb(247, 143, 59)')
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect(marker).toHaveCSS('--own-position-color', '#f78f3b')
+  await expect(label).toHaveCSS('color', 'rgb(42, 53, 72)')
+  await expect(dot.locator('span')).toHaveCSS('background-color', 'rgb(42, 53, 72)')
   await self.click()
   await root.getByRole('button', { name: 'Show River details' }).click()
   expect(
