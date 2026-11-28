@@ -1486,14 +1486,20 @@ test('blocking one viewer device preserves the other and survives source reload'
     await expect(shares).toContainText('2 connected', { timeout: 30_000 })
     const firstPeer = shares.locator('.peer-list__item').filter({ hasText: 'First device' })
     await source.setViewportSize({ width: 360, height: 640 })
+    await expect(
+      firstPeer.locator('.peer-list__summary').getByRole('button', {
+        name: 'Revoke peer First device',
+      }),
+    ).toHaveCount(0)
+    await expandPeerDetails(firstPeer)
     const revokeAction = firstPeer.getByRole('button', { name: 'Revoke peer First device' })
+    await expect(revokeAction).toBeVisible()
+    await expect(revokeAction).toContainText('Revoke peer')
     const rowBounds = await firstPeer.locator('.peer-list__summary').boundingBox()
     const actionBounds = await revokeAction.boundingBox()
     expect(rowBounds).not.toBeNull()
     expect(actionBounds).not.toBeNull()
-    expect(actionBounds!.x + actionBounds!.width).toBeLessThanOrEqual(
-      rowBounds!.x + rowBounds!.width + 1,
-    )
+    expect(actionBounds!.y).toBeGreaterThan(rowBounds!.y + rowBounds!.height)
     await revokeAction.click()
     await expect(shares).toContainText('1 connected', { timeout: 30_000 })
     await expect(first.locator('.toast')).toContainText('sender revoked your access', {

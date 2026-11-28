@@ -140,17 +140,6 @@
           >
             <MapPin aria-hidden="true" />
           </button>
-          <button
-            v-if="hasPeerRevokeTargets(peer)"
-            class="peer-list__revoke-peer"
-            type="button"
-            :disabled="revokePeerBusy"
-            :aria-label="`Revoke peer ${peer.name}`"
-            title="Stop following this peer and block their access on shared links"
-            @click.stop.prevent="emit('revokePeer', peerRevokeTargets(peer))"
-          >
-            <UserX aria-hidden="true" /> <span>Revoke</span>
-          </button>
         </summary>
 
         <div class="peer-list__details">
@@ -610,6 +599,17 @@
               </div>
             </div>
           </details>
+          <button
+            v-if="hasPeerRevokeTargets(peer)"
+            class="peer-list__revoke-peer"
+            type="button"
+            :disabled="revokePeerBusy"
+            :aria-label="`Revoke peer ${peer.name}`"
+            title="Stop following this peer and block their access on shared links"
+            @click="emit('revokePeer', peerRevokeTargets(peer))"
+          >
+            <UserX aria-hidden="true" /> <span>Revoke peer</span>
+          </button>
         </div>
       </details>
     </section>
@@ -1761,6 +1761,8 @@ const remaining = (timestamp: number): string => {
   background: var(--control-fill);
   color: var(--text);
   cursor: pointer;
+  justify-self: start;
+  margin-top: 0.5rem;
 }
 .peer-list__revoke-peer svg {
   width: 1.1rem;
@@ -1769,11 +1771,6 @@ const remaining = (timestamp: number): string => {
 .peer-list__revoke-peer:disabled {
   opacity: 0.5;
   cursor: wait;
-}
-@media (max-width: 430px) {
-  .peer-list__revoke-peer span {
-    display: none;
-  }
 }
 .peer-list__map-action {
   display: grid;
@@ -1818,8 +1815,8 @@ const remaining = (timestamp: number): string => {
 
 .peer-list__summary {
   display: grid;
-  grid-template-columns: 2.4rem minmax(0, 1fr) auto auto;
-  grid-template-areas: 'avatar name map revoke' 'avatar status map revoke';
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  grid-template-areas: 'avatar name map' 'avatar status map';
   align-items: center;
   column-gap: 0.7rem;
   row-gap: 0.15rem;
@@ -1828,12 +1825,8 @@ const remaining = (timestamp: number): string => {
   list-style-position: outside;
 }
 .peer-list__summary:not(:has(.peer-list__map-action)) {
-  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
-  grid-template-areas: 'avatar name revoke' 'avatar status revoke';
-}
-.peer-list__summary:not(:has(.peer-list__revoke-peer)) {
-  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
-  grid-template-areas: 'avatar name map' 'avatar status map';
+  grid-template-columns: 2.4rem minmax(0, 1fr);
+  grid-template-areas: 'avatar name' 'avatar status';
 }
 
 .peer-list__summary > .peer-avatar {
@@ -1844,9 +1837,6 @@ const remaining = (timestamp: number): string => {
 }
 .peer-list__summary > .peer-list__map-action {
   grid-area: map;
-}
-.peer-list__summary > .peer-list__revoke-peer {
-  grid-area: revoke;
 }
 .peer-list__summary-name {
   grid-area: name;
